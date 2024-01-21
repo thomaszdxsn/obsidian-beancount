@@ -1,0 +1,10 @@
+{
+	"id": "beancount-obsidian",
+	"name": "Beancount",
+	"version": "0.0.1-alpha",
+	"minAppVersion": "0.15.0",
+	"description": "Integrate Beancount into Obsidian",
+	"author": "thomaszdxsn",
+	"authorUrl": "https://github.com/thomaszdxsn",
+	"isDesktopOnly": true
+}
