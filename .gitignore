@@ -22,10 +22,13 @@ coverage
 .vercel
 
 # Build Outputs
-.next/
 out/
 build
 dist
+main.js
+
+# Nested sibling clone (local workspace only)
+beancount-parser/
 
 
 # Debug
