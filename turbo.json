@@ -6,9 +6,6 @@
       "dependsOn": ["^build"],
       "outputs": ["main.js"]
     },
-    "lint": {
-      "dependsOn": ["^lint"]
-    },
     "test": {
       "dependsOn": ["^test"],
       "outputs": ["coverage/**"]

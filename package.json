@@ -4,7 +4,6 @@
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
-    "lint": "turbo lint",
     "test": "turbo test",
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
@@ -12,10 +11,10 @@
     "@repo/eslint-config": "workspace:*",
     "@repo/typescript-config": "workspace:*",
     "prettier": "^3.1.1",
-    "turbo": "latest"
+    "turbo": "2.11.5"
   },
   "packageManager": "pnpm@9.15.6",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.12.0"
   }
 }
