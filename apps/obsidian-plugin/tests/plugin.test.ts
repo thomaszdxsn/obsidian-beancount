@@ -14,6 +14,7 @@ const host = globalThis as { CodeMirror?: unknown };
 interface FakeRegistry {
 	modes: Record<string, unknown>;
 	defineMode(name: string, mode: unknown): void;
+	getMode(spec: string): unknown;
 }
 
 function fakeRegistry(): FakeRegistry {
@@ -22,6 +23,13 @@ function fakeRegistry(): FakeRegistry {
 		modes,
 		defineMode(name: string, mode: unknown) {
 			modes[name] = mode;
+		},
+		// Mirrors CodeMirror.getMode: it calls the registered value as a
+		// factory — registering a bare mode object must fail here.
+		getMode(spec: string) {
+			const factory = modes[spec];
+			if (typeof factory !== 'function') throw new TypeError('mfactory is not a function');
+			return factory();
 		},
 	};
 }
@@ -71,8 +79,9 @@ describe('BeancountPlugin', () => {
 
 		loadPlugin();
 
-		expect(registry.modes.beancount).toBe(beancountMode);
-		expect(registry.modes.bean).toBe(beancountMode);
+		// getMode throws unless the registered value is a callable factory.
+		expect(registry.getMode('beancount')).toBe(beancountMode);
+		expect(registry.getMode('bean')).toBe(beancountMode);
 	});
 
 	it('removes the registered modes on unload', () => {
@@ -85,6 +94,19 @@ describe('BeancountPlugin', () => {
 
 		expect(registry.modes.beancount).toBeUndefined();
 		expect(registry.modes.bean).toBeUndefined();
+	});
+
+	it('leaves mode names re-registered by others alone on unload', () => {
+		const registry = fakeRegistry();
+		host.CodeMirror = registry;
+
+		const plugin = loadPlugin();
+		const otherFactory = () => ({});
+		registry.modes.bean = otherFactory;
+		for (const cleanup of plugin.registrations.cleanups) cleanup();
+
+		expect(registry.modes.bean).toBe(otherFactory);
+		expect(registry.modes.beancount).toBeUndefined();
 	});
 
 	it('tolerates a registry without a modes map', () => {

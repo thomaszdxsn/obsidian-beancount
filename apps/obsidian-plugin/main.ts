@@ -21,13 +21,20 @@ const host = globalThis as { CodeMirror?: CmModeRegistry };
 
 const MODE_NAMES = ['beancount', 'bean'];
 
+// The bundled CodeMirror's `getMode` calls the registered value as a factory
+// (`mfactory(options, spec)`), so register a factory — not the bare mode
+// object — and keep its identity to recognize our own entries on unload.
+const beancountModeFactory = () => beancountMode;
+
 function installBeancountModes(registry: CmModeRegistry | undefined): (() => void) | null {
 	if (!registry || typeof registry.defineMode !== 'function') return null;
-	for (const name of MODE_NAMES) registry.defineMode(name, beancountMode);
+	for (const name of MODE_NAMES) registry.defineMode(name, beancountModeFactory);
 	return () => {
 		const modes = registry.modes;
 		if (!modes) return;
-		for (const name of MODE_NAMES) delete modes[name];
+		// Only remove entries we still own; another plugin may have
+		// re-registered the name in the meantime.
+		for (const name of MODE_NAMES) if (modes[name] === beancountModeFactory) delete modes[name];
 	};
 }
 

@@ -8,30 +8,31 @@
  * consumes the very same spec through the CM5 mode registry it bridges into
  * its editor (`window.CodeMirror.defineMode`, see `main.ts`).
  *
- * Token names are `@lezer/highlight` tag names, resolved by `StreamLanguage`'s
- * default token table. Mapping from the TextMate scopes of the original
- * grammar:
+ * Token names are CodeMirror 5 legacy style names. Obsidian's editor bridge
+ * renders each token word directly as a `cm-<token>` class (only the legacy
+ * names are styled in its app.css), and `StreamLanguage`'s default token
+ * table maps the same legacy names to `@lezer/highlight` tags — so one name
+ * set serves both consumers. Mapping from the TextMate scopes of the
+ * original grammar:
  *
- * | TextMate scope                          | token name             |
- * |-----------------------------------------|------------------------|
- * | comment.line / comment.block.bql        | lineComment/blockComment |
- * | string.quoted.double(.bql)              | string                 |
- * | constant.character.escape               | escape                 |
- * | constant.numeric.* (dates, amounts)     | number                 |
- * | punctuation.*                           | punctuation            |
- * | keyword.operator.* (markers, signs)     | operator               |
- * | keyword.other (posting flag)            | keyword                |
- * | support.function* (directives, txn fl.) | variableName.function  |
- * | variable.language (account root)        | variableName.special   |
- * | variable.other.account                  | variableName           |
- * | entity.name.type.commodity              | typeName               |
- * | entity.name.tag                         | tagName                |
- * | markup.underline.link                   | link                   |
- * | keyword.operator.directive (meta keys)  | propertyName           |
- * | constant.language.bool                  | bool                   |
- * | keyword.control.bql                     | controlKeyword         |
- * | variable.other.column.bql               | variableName           |
- * | invalid.illegal.unrecognized            | invalid                |
+ * | TextMate scope                          | token name  |
+ * |-----------------------------------------|-------------|
+ * | comment.line / comment.block.bql        | comment     |
+ * | string.quoted.double(.bql)              | string      |
+ * | constant.character.escape               | string-2    |
+ * | constant.numeric.* (dates, amounts)     | number      |
+ * | punctuation.*                           | punctuation |
+ * | keyword.operator.* (markers, signs)     | operator    |
+ * | keyword.other (posting flag)            | keyword     |
+ * | keyword.control.bql / constant.language.bool | keyword |
+ * | support.function* (directives, txn fl., BQL fns) | builtin |
+ * | variable.language (account root)        | variable-2  |
+ * | variable.other.account / .column.bql    | variable    |
+ * | entity.name.type.commodity              | type        |
+ * | entity.name.tag                         | tag         |
+ * | markup.underline.link                   | link        |
+ * | keyword.operator.directive (meta keys)  | property    |
+ * | invalid.illegal.unrecognized            | error       |
  *
  * Two TextMate semantics are kept verbatim for VS Code parity: a region's
  * `end` pattern is matched before its nested patterns, so a query's BQL
@@ -85,12 +86,12 @@ const DATE_PARTS: readonly PendingToken[] = [
 	{ re: /^[-/]/, style: 'punctuation' },
 	{ re: /^[0-9]{2}/, style: 'number' },
 ];
-const ACCOUNT_RE = /^[A-Z][a-z]+(?::[A-Za-z0-9\-_]+)+/;
+const ACCOUNT_RE = /^[A-Z][a-z]+(?::[^\s:]+)+/;
 const TAG_RE = /^#[A-Za-z0-9\-_/.]+/;
 const LINK_RE = /^\^[A-Za-z0-9\-_/.]+/;
 const TAG_PARTS: readonly PendingToken[] = [
 	{ re: /^#/, style: 'operator' },
-	{ re: /^[A-Za-z0-9\-_/.]+/, style: 'tagName' },
+	{ re: /^[A-Za-z0-9\-_/.]+/, style: 'tag' },
 ];
 const LINK_PARTS: readonly PendingToken[] = [
 	{ re: /^\^/, style: 'operator' },
@@ -102,15 +103,15 @@ const BOOL_RE = /^(?:TRUE|FALSE)\b/;
 const COMMODITY_RE = /^[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]/;
 const FLAG_CHARS = '*!&#?%PSTCURM';
 const FLAG_RE = /^[*!&#?%PSTCURM](?=[ \t])/;
-const DATED_ENTRY_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]+(txn|open|close|pad|custom|event|commodity|note|document|query|price|balance|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
+const DATED_ENTRY_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}(?:[ \t]*(txn|[*!&#?%PSTCURM])|[ \t]+(open|close|pad|custom|event|commodity|note|document|query|price|balance))(?![A-Za-z0-9])/;
 const DIRECTIVE_RE = /^[ \t]*(pushtag|poptag|include|option|plugin)(?![A-Za-z0-9])/;
 const META_RE = /^[ \t]+[a-z][A-Za-z0-9\-_]+:/;
 
-const BQL_KEYWORD_RE = /^(?:SELECT|FROM|WHERE|GROUP|ORDER|HAVING|LIMIT|PIVOT|AND|OR|NOT|IN|IS|BETWEEN|AS|DISTINCT|ASC|DESC|TRUE|FALSE|NULL|CREATE|TABLE|USING|INSERT|INTO|BALANCES|JOURNAL|PRINT|BY)\b/i;
+const BQL_KEYWORD_RE = /^(?:SELECT|FROM|WHERE|GROUP|ORDER|HAVING|LIMIT|PIVOT|AND|OR|NOT|IN|IS|BETWEEN|AS|DISTINCT|ASC|DESC|TRUE|FALSE|NULL|CREATE|TABLE|USING|INSERT|INTO|BALANCES|JOURNAL|PRINT|BY)(?![A-Za-z0-9_])/i;
 const BQL_FUNCTION_RE = /^(?:abs|bool|int|decimal|str|date|year|month|day|yearmonth|quarter|weekday|today|root|parent|leaf|grep|grepn|subst|upper|lower|maxwidth|substr|splitcomp|length|repr|round|safediv|neg|open_date|close_date|open_meta|meta|entry_meta|any_meta|currency_meta|commodity_meta|account_sortkey|has_account|units|cost|value|getprice|number|currency|commodity|findfirst|joinstr|only|empty|filter_currency|convert|parse_date|date_diff|date_add|date_trunc|date_part|interval|date_bin|getitem|possign|sum|count|first|last|min|max)(?=\s*\()/i;
-const BQL_COLUMN_RE = /^(?:id|type|filename|lineno|location|date|year|month|day|flag|payee|narration|description|tags|links|meta|accounts|account|other_accounts|posting_flag|number|currency|cost_number|cost_currency|cost_date|cost_label|position|price|weight|balance|entry)\b/i;
-const BQL_DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}\b/;
-const BQL_NUMBER_RE = /^[0-9]+(?:\.[0-9]+)?\b/;
+const BQL_COLUMN_RE = /^(?:id|type|filename|lineno|location|date|year|month|day|flag|payee|narration|description|tags|links|meta|accounts|account|other_accounts|posting_flag|number|currency|cost_number|cost_currency|cost_date|cost_label|position|price|weight|balance|entry)(?![A-Za-z0-9_])/i;
+const BQL_DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![A-Za-z0-9_])/;
+const BQL_NUMBER_RE = /^[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_])/;
 const BQL_COMPARE_RE = /^(?:<=|>=|!=|<|>|=|\?~|!~|~)/;
 const BQL_ARITH_RE = /^[+\-*/%]/;
 
@@ -121,11 +122,11 @@ function takePending(stream: StringStream, state: BeancountState): string | null
 }
 
 function accountPieces(account: string): PendingToken[] {
-	const pieces: PendingToken[] = [{ re: /^[A-Z][a-z]+/, style: 'variableName.special' }];
+	const pieces: PendingToken[] = [{ re: /^[A-Z][a-z]+/, style: 'variable-2' }];
 	const components = account.split(':').length - 1;
 	for (let i = 0; i < components; i++) {
 		pieces.push({ re: /^:/, style: 'punctuation' });
-		pieces.push({ re: /^[A-Za-z0-9\-_]+/, style: 'variableName' });
+		pieces.push({ re: /^[^:\s]+/, style: 'variable' });
 	}
 	return pieces;
 }
@@ -136,7 +137,7 @@ function stringToken(stream: StringStream, state: BeancountState): string {
 		state.inString = true;
 		return 'string';
 	}
-	if (stream.match(/^\\./)) return 'escape';
+	if (stream.match(/^\\./)) return 'string-2';
 	if (stream.eat('"')) {
 		state.inString = false;
 		return 'string';
@@ -164,14 +165,14 @@ function classifyLine(stream: StringStream, state: BeancountState): boolean {
 	if (META_RE.test(line)) {
 		state.pending = [
 			{ re: /^[ \t]+/, style: null },
-			{ re: /^[a-z][A-Za-z0-9\-_]+/, style: 'propertyName' },
+			{ re: /^[a-z][A-Za-z0-9\-_]+/, style: 'property' },
 			{ re: /^:/, style: 'punctuation' },
 		];
 		return true;
 	}
 	const dated = DATED_ENTRY_RE.exec(line);
 	if (dated) {
-		const keyword = dated[1];
+		const keyword = dated[1] || dated[2];
 		if (keyword === 'query') state.entry = 'query';
 		else if (keyword === 'txn' || FLAG_CHARS.indexOf(keyword) >= 0) state.entry = 'txn';
 		else state.entry = 'directive';
@@ -195,7 +196,7 @@ function bqlToken(stream: StringStream, state: BeancountState): string | null {
 	if (state.bqlComment) {
 		if (stream.match(/^\*\//)) state.bqlComment = false;
 		else if (!stream.match(/^[^*]+/)) stream.next();
-		return 'blockComment';
+		return 'comment';
 	}
 	if (state.bqlString) {
 		if (stream.eat("'")) state.bqlString = false;
@@ -205,11 +206,11 @@ function bqlToken(stream: StringStream, state: BeancountState): string | null {
 	if (stream.eatSpace()) return null;
 	if (stream.peek() === ';') {
 		stream.skipToEnd();
-		return 'lineComment';
+		return 'comment';
 	}
 	if (stream.match(/^\/\*/)) {
 		state.bqlComment = true;
-		return 'blockComment';
+		return 'comment';
 	}
 	const ch = stream.peek();
 	if (ch === '"') {
@@ -225,23 +226,26 @@ function bqlToken(stream: StringStream, state: BeancountState): string | null {
 		return 'string';
 	}
 	const rest = stream.string.slice(stream.pos);
-	if (BQL_DATE_RE.test(rest)) {
+	// Upstream's BQL patterns are `\b`-anchored: identifier suffixes must not
+	// restart a keyword/column/number match (`fooSELECT`, `total_number`).
+	const atWordStart = stream.pos === 0 || !/[A-Za-z0-9_]/.test(stream.string.charAt(stream.pos - 1));
+	if (atWordStart && BQL_DATE_RE.test(rest)) {
 		stream.match(BQL_DATE_RE);
 		return 'number';
 	}
-	if (BQL_KEYWORD_RE.test(rest)) {
+	if (atWordStart && BQL_KEYWORD_RE.test(rest)) {
 		stream.match(BQL_KEYWORD_RE);
-		return 'controlKeyword';
+		return 'keyword';
 	}
-	if (BQL_FUNCTION_RE.test(rest)) {
+	if (atWordStart && BQL_FUNCTION_RE.test(rest)) {
 		stream.match(BQL_FUNCTION_RE);
-		return 'variableName.function';
+		return 'builtin';
 	}
-	if (BQL_COLUMN_RE.test(rest)) {
+	if (atWordStart && BQL_COLUMN_RE.test(rest)) {
 		stream.match(BQL_COLUMN_RE);
-		return 'variableName';
+		return 'variable';
 	}
-	if (BQL_NUMBER_RE.test(rest)) {
+	if (atWordStart && BQL_NUMBER_RE.test(rest)) {
 		stream.match(BQL_NUMBER_RE);
 		return 'number';
 	}
@@ -250,8 +254,10 @@ function bqlToken(stream: StringStream, state: BeancountState): string | null {
 		return 'operator';
 	}
 	if (stream.match(/^[(),]/)) return 'punctuation';
+	// The upstream query region has no illegal rule: unknown BQL text is
+	// left unscoped instead of being marked invalid.
 	stream.next();
-	return 'invalid';
+	return null;
 }
 
 function blankLine(state: BeancountState): void {
@@ -269,7 +275,7 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	const rest = stream.string.slice(stream.pos);
 	if (stream.peek() === ';') {
 		stream.skipToEnd();
-		return 'lineComment';
+		return 'comment';
 	}
 	if (stream.peek() === '"') {
 		if (state.entry === 'query') {
@@ -290,7 +296,7 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	}
 	if (state.directiveWord) {
 		state.directiveWord = false;
-		if (stream.match(/^[A-Za-z]+/) || stream.match(/^[*!&#?%PSTCURM]/)) return 'variableName.function';
+		if (stream.match(/^[A-Za-z]+/) || stream.match(/^[*!&#?%PSTCURM]/)) return 'builtin';
 	}
 	if (TAG_RE.test(rest)) {
 		state.pending = TAG_PARTS.slice();
@@ -313,7 +319,7 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	}
 	if (BOOL_RE.test(rest)) {
 		stream.match(BOOL_RE);
-		return 'bool';
+		return 'keyword';
 	}
 	if (NUMBER_RE.test(rest)) {
 		stream.match(NUMBER_RE);
@@ -325,11 +331,11 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	}
 	if (COMMODITY_RE.test(rest)) {
 		stream.match(COMMODITY_RE);
-		return 'typeName';
+		return 'type';
 	}
 	if (stream.eat(',')) return 'punctuation';
 	stream.next();
-	return 'invalid';
+	return 'error';
 }
 
 export const beancountMode = {

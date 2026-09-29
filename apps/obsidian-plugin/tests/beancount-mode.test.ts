@@ -38,6 +38,9 @@ function tokenize(text: string): Token[] {
 function pairs(text: string): Array<[string, string | null]> {
 	const spans: Token[] = [];
 	for (const token of tokenize(text)) {
+		// Unstyled whitespace is noise: drop it before merging so it cannot
+		// bridge two spans (positions still gate merges).
+		if (token.style === null && token.text.trim().length === 0) continue;
 		const prev = spans.length > 0 ? spans[spans.length - 1] : undefined;
 		if (prev && prev.style === token.style && prev.end === token.start) {
 			prev.text += token.text;
@@ -48,7 +51,7 @@ function pairs(text: string): Array<[string, string | null]> {
 	}
 	const result: Array<[string, string | null]> = [];
 	for (const span of spans) {
-		if (span.text.trim().length > 0) result.push([span.text, span.style]);
+		result.push([span.text, span.style]);
 	}
 	return result;
 }
@@ -67,7 +70,7 @@ function tail(text: string, from: number): Array<[string, string | null]> {
 
 describe('beancountMode tokens', () => {
 	it('styles comments, including indented ones inside entries', () => {
-		expect(pairs('; just a note')).toEqual([['; just a note', 'lineComment']]);
+		expect(pairs('; just a note')).toEqual([['; just a note', 'comment']]);
 		expect(
 			pairs('2024-03-15 * "Coffee Shop" "flat white" #food ^trip\n  Expenses:Food:Drink  -4.50 USD\n  Assets:Cash\n  ; inner note')
 		).toEqual([
@@ -76,53 +79,53 @@ describe('beancountMode tokens', () => {
 			['03', 'number'],
 			['-', 'punctuation'],
 			['15', 'number'],
-			['*', 'variableName.function'],
+			['*', 'builtin'],
 			['"Coffee Shop"', 'string'],
 			['"flat white"', 'string'],
 			['#', 'operator'],
-			['food', 'tagName'],
+			['food', 'tag'],
 			['^', 'operator'],
 			['trip', 'link'],
-			['Expenses', 'variableName.special'],
+			['Expenses', 'variable-2'],
 			[':', 'punctuation'],
-			['Food', 'variableName'],
+			['Food', 'variable'],
 			[':', 'punctuation'],
-			['Drink', 'variableName'],
+			['Drink', 'variable'],
 			['-', 'operator'],
 			['4.50', 'number'],
-			['USD', 'typeName'],
-			['Assets', 'variableName.special'],
+			['USD', 'type'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
-			['; inner note', 'lineComment'],
+			['Cash', 'variable'],
+			['; inner note', 'comment'],
 		]);
 	});
 
 	it('styles tag directives', () => {
 		expect(pairs('pushtag #trip')).toEqual([
-			['pushtag', 'variableName.function'],
+			['pushtag', 'builtin'],
 			['#', 'operator'],
-			['trip', 'tagName'],
+			['trip', 'tag'],
 		]);
 		expect(pairs('poptag #trip')).toEqual([
-			['poptag', 'variableName.function'],
+			['poptag', 'builtin'],
 			['#', 'operator'],
-			['trip', 'tagName'],
+			['trip', 'tag'],
 		]);
 	});
 
 	it('styles include, option and plugin directives', () => {
 		expect(pairs('include "ledger/main.bean"')).toEqual([
-			['include', 'variableName.function'],
+			['include', 'builtin'],
 			['"ledger/main.bean"', 'string'],
 		]);
 		expect(pairs('option "title" "My Ledger"')).toEqual([
-			['option', 'variableName.function'],
+			['option', 'builtin'],
 			['"title"', 'string'],
 			['"My Ledger"', 'string'],
 		]);
 		expect(pairs('plugin "beancount.plugins.auto" "cfg"')).toEqual([
-			['plugin', 'variableName.function'],
+			['plugin', 'builtin'],
 			['"beancount.plugins.auto"', 'string'],
 			['"cfg"', 'string'],
 		]);
@@ -131,23 +134,23 @@ describe('beancountMode tokens', () => {
 	it('styles dated open/close/pad entries', () => {
 		expect(pairs('2024-01-01 open Assets:Cash USD, EUR')).toEqual([
 			...DATE,
-			['open', 'variableName.function'],
-			['Assets', 'variableName.special'],
+			['open', 'builtin'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
-			['USD', 'typeName'],
+			['Cash', 'variable'],
+			['USD', 'type'],
 			[',', 'punctuation'],
-			['EUR', 'typeName'],
+			['EUR', 'type'],
 		]);
 		expect(pairs('2024-01-01 pad Assets:Cash Equity:Opening-Balances')).toEqual([
 			...DATE,
-			['pad', 'variableName.function'],
-			['Assets', 'variableName.special'],
+			['pad', 'builtin'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
-			['Equity', 'variableName.special'],
+			['Cash', 'variable'],
+			['Equity', 'variable-2'],
 			[':', 'punctuation'],
-			['Opening-Balances', 'variableName'],
+			['Opening-Balances', 'variable'],
 		]);
 		expect(pairs('2024/01/01 open Assets:Cash USD')).toEqual([
 			['2024', 'number'],
@@ -155,21 +158,21 @@ describe('beancountMode tokens', () => {
 			['01', 'number'],
 			['/', 'punctuation'],
 			['01', 'number'],
-			['open', 'variableName.function'],
-			['Assets', 'variableName.special'],
+			['open', 'builtin'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
-			['USD', 'typeName'],
+			['Cash', 'variable'],
+			['USD', 'type'],
 		]);
 	});
 
 	it('styles custom entries with strings, bools and numbers', () => {
 		expect(pairs('2024-01-01 custom "budget" "Food budget" TRUE 1,000.50')).toEqual([
 			...DATE,
-			['custom', 'variableName.function'],
+			['custom', 'builtin'],
 			['"budget"', 'string'],
 			['"Food budget"', 'string'],
-			['TRUE', 'bool'],
+			['TRUE', 'keyword'],
 			['1,000.50', 'number'],
 		]);
 	});
@@ -177,29 +180,29 @@ describe('beancountMode tokens', () => {
 	it('styles event, commodity, note and document entries', () => {
 		expect(pairs('2024-01-01 event "location" "Beijing"')).toEqual([
 			...DATE,
-			['event', 'variableName.function'],
+			['event', 'builtin'],
 			['"location"', 'string'],
 			['"Beijing"', 'string'],
 		]);
 		expect(pairs('2024-01-01 commodity USD')).toEqual([
 			...DATE,
-			['commodity', 'variableName.function'],
-			['USD', 'typeName'],
+			['commodity', 'builtin'],
+			['USD', 'type'],
 		]);
 		expect(pairs('2024-01-01 note Assets:Cash "bought coffee"')).toEqual([
 			...DATE,
-			['note', 'variableName.function'],
-			['Assets', 'variableName.special'],
+			['note', 'builtin'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
+			['Cash', 'variable'],
 			['"bought coffee"', 'string'],
 		]);
 		expect(pairs('2024-01-01 document Assets:Cash "receipt.pdf"')).toEqual([
 			...DATE,
-			['document', 'variableName.function'],
-			['Assets', 'variableName.special'],
+			['document', 'builtin'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
+			['Cash', 'variable'],
 			['"receipt.pdf"', 'string'],
 		]);
 	});
@@ -207,45 +210,45 @@ describe('beancountMode tokens', () => {
 	it('styles price and balance entries', () => {
 		expect(pairs('2024-01-01 price USD 11.00 CNY')).toEqual([
 			...DATE,
-			['price', 'variableName.function'],
-			['USD', 'typeName'],
+			['price', 'builtin'],
+			['USD', 'type'],
 			['11.00', 'number'],
-			['CNY', 'typeName'],
+			['CNY', 'type'],
 		]);
 		expect(pairs('2024-01-01 balance Assets:Cash 100.00 USD')).toEqual([
 			...DATE,
-			['balance', 'variableName.function'],
-			['Assets', 'variableName.special'],
+			['balance', 'builtin'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
+			['Cash', 'variable'],
 			['100.00', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 		]);
 	});
 
 	it('styles transaction flags and strings', () => {
 		expect(pairs('2024-01-01 txn "Store" "Groceries"')).toEqual([
 			...DATE,
-			['txn', 'variableName.function'],
+			['txn', 'builtin'],
 			['"Store"', 'string'],
 			['"Groceries"', 'string'],
 		]);
 		for (const flag of ['*', '!', 'P']) {
 			expect(pairs(`2024-01-01 ${flag} "Store" "Groceries"`)).toContainEqual([
 				flag,
-				'variableName.function',
+				'builtin',
 			]);
 		}
 	});
 
 	it('styles posting flags, amounts, costs and price annotations', () => {
 		expect(pairs('  Expenses:Food  -100.00 USD {2024-01-01, 100 USD} @ 7.00 CNY')).toEqual([
-			['Expenses', 'variableName.special'],
+			['Expenses', 'variable-2'],
 			[':', 'punctuation'],
-			['Food', 'variableName'],
+			['Food', 'variable'],
 			['-', 'operator'],
 			['100.00', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 			['{', 'operator'],
 			['2024', 'number'],
 			['-', 'punctuation'],
@@ -254,64 +257,64 @@ describe('beancountMode tokens', () => {
 			['01', 'number'],
 			[',', 'punctuation'],
 			['100', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 			['}', 'operator'],
 			['@', 'operator'],
 			['7.00', 'number'],
-			['CNY', 'typeName'],
+			['CNY', 'type'],
 		]);
 		expect(pairs('  Expenses:Food  100.00 USD {{50.00 USD}}')).toEqual([
-			['Expenses', 'variableName.special'],
+			['Expenses', 'variable-2'],
 			[':', 'punctuation'],
-			['Food', 'variableName'],
+			['Food', 'variable'],
 			['100.00', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 			['{{', 'operator'],
 			['50.00', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 			['}}', 'operator'],
 		]);
 		expect(pairs('  ! Assets:Gift  +1.00 USD')).toEqual([
 			['!', 'keyword'],
-			['Assets', 'variableName.special'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Gift', 'variableName'],
+			['Gift', 'variable'],
 			['+', 'operator'],
 			['1.00', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 		]);
 		expect(tail('  Assets:Cash  1.00 USD @@ 2.00 USD', 5)).toEqual([
 			['@@', 'operator'],
 			['2.00', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 		]);
 	});
 
 	it('styles metadata keys and their values', () => {
 		expect(pairs('  location: "Beijing"')).toEqual([
-			['location', 'propertyName'],
+			['location', 'property'],
 			[':', 'punctuation'],
 			['"Beijing"', 'string'],
 		]);
 		expect(pairs('  account: Assets:Cash')).toEqual([
-			['account', 'propertyName'],
+			['account', 'property'],
 			[':', 'punctuation'],
-			['Assets', 'variableName.special'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
+			['Cash', 'variable'],
 		]);
 		expect(pairs('  flag: TRUE')).toEqual([
-			['flag', 'propertyName'],
+			['flag', 'property'],
 			[':', 'punctuation'],
-			['TRUE', 'bool'],
+			['TRUE', 'keyword'],
 		]);
 		expect(pairs('  flag: FALSE')).toEqual([
-			['flag', 'propertyName'],
+			['flag', 'property'],
 			[':', 'punctuation'],
-			['FALSE', 'bool'],
+			['FALSE', 'keyword'],
 		]);
 		expect(pairs('  due: 2024-01-01')).toEqual([
-			['due', 'propertyName'],
+			['due', 'property'],
 			[':', 'punctuation'],
 			['2024', 'number'],
 			['-', 'punctuation'],
@@ -320,7 +323,7 @@ describe('beancountMode tokens', () => {
 			['01', 'number'],
 		]);
 		expect(pairs('  max: 1,234.56')).toEqual([
-			['max', 'propertyName'],
+			['max', 'property'],
 			[':', 'punctuation'],
 			['1,234.56', 'number'],
 		]);
@@ -328,17 +331,17 @@ describe('beancountMode tokens', () => {
 
 	it('styles string escapes and keeps strings open across lines', () => {
 		expect(pairs('  note: "coffee \\"special\\""')).toEqual([
-			['note', 'propertyName'],
+			['note', 'property'],
 			[':', 'punctuation'],
 			['"coffee ', 'string'],
-			['\\"', 'escape'],
+			['\\"', 'string-2'],
 			['special', 'string'],
-			['\\"', 'escape'],
+			['\\"', 'string-2'],
 			['"', 'string'],
 		]);
 		expect(pairs('2024-01-01 * "Store\nmore" "narration"')).toEqual([
 			...DATE,
-			['*', 'variableName.function'],
+			['*', 'builtin'],
 			['"Store', 'string'],
 			['more"', 'string'],
 			['"narration"', 'string'],
@@ -350,40 +353,40 @@ describe('beancountMode tokens', () => {
 			pairs('2024-01-01 query "monthly" "SELECT account, sum(number) WHERE date >= 2024-01-01 /* c */ GROUP BY account"')
 		).toEqual([
 			...DATE,
-			['query', 'variableName.function'],
+			['query', 'builtin'],
 			['"monthly"', 'string'],
 			['"', 'punctuation'],
-			['SELECT', 'controlKeyword'],
-			['account', 'variableName'],
+			['SELECT', 'keyword'],
+			['account', 'variable'],
 			[',', 'punctuation'],
-			['sum', 'variableName.function'],
+			['sum', 'builtin'],
 			['(', 'punctuation'],
-			['number', 'variableName'],
+			['number', 'variable'],
 			[')', 'punctuation'],
-			['WHERE', 'controlKeyword'],
-			['date', 'variableName'],
+			['WHERE', 'keyword'],
+			['date', 'variable'],
 			['>=', 'operator'],
 			['2024-01-01', 'number'],
-			['/* c */', 'blockComment'],
-			['GROUP', 'controlKeyword'],
-			['BY', 'controlKeyword'],
-			['account', 'variableName'],
+			['/* c */', 'comment'],
+			['GROUP', 'keyword'],
+			['BY', 'keyword'],
+			['account', 'variable'],
 			['"', 'punctuation'],
 		]);
 		expect(
 			pairs("2024-01-01 query \"q\" \"SELECT account WHERE payee = 'It''s' LIMIT 1 + 2 <= 3\"")
 		).toEqual([
 			...DATE,
-			['query', 'variableName.function'],
+			['query', 'builtin'],
 			['"q"', 'string'],
 			['"', 'punctuation'],
-			['SELECT', 'controlKeyword'],
-			['account', 'variableName'],
-			['WHERE', 'controlKeyword'],
-			['payee', 'variableName'],
+			['SELECT', 'keyword'],
+			['account', 'variable'],
+			['WHERE', 'keyword'],
+			['payee', 'variable'],
 			['=', 'operator'],
 			["'It''s'", 'string'],
-			['LIMIT', 'controlKeyword'],
+			['LIMIT', 'keyword'],
 			['1', 'number'],
 			['+', 'operator'],
 			['2', 'number'],
@@ -394,29 +397,52 @@ describe('beancountMode tokens', () => {
 	});
 
 	it('keeps BQL quirks of the original grammar', () => {
-		// `;` swallows the rest of the line, closing quote included.
+		// `;` swallows the rest of the line, closing quote included; the
+		// upstream query region has no illegal rule, so unrecognized BQL
+		// characters are left unscoped instead of being marked invalid.
 		expect(tail('2024-01-01 query "q" "SELECT account ; note"', 9)).toEqual([
-			['account', 'variableName'],
-			['; note"', 'lineComment'],
+			['account', 'variable'],
+			['; note"', 'comment'],
 		]);
 		// A bare `*` inside a block comment is a one-char token.
 		expect(tail('2024-01-01 query "q" "SELECT /* *x */ x"', 9)).toEqual([
-			['/* *x */', 'blockComment'],
-			['x', 'invalid'],
+			['/* *x */', 'comment'],
+			['x', null],
 			['"', 'punctuation'],
 		]);
-		// Unrecognized characters inside BQL are invalid.
 		expect(tail('2024-01-01 query "q" "SELECT #"', 9)).toEqual([
-			['#', 'invalid'],
+			['#', null],
+			['"', 'punctuation'],
+		]);
+	});
+
+	it('accepts a transaction flag adjacent to the date (upstream \\s*)', () => {
+		expect(pairs('2024-01-01* "Store" "x"')).toEqual([
+			...DATE,
+			['*', 'builtin'],
+			['"Store"', 'string'],
+			['"x"', 'string'],
+		]);
+		expect(pairs('2024-01-01txn "Store" "x"')).toContainEqual(['txn', 'builtin']);
+		// Other dated keywords still require whitespace.
+		expect(pairs('2024-01-01open Assets:Cash USD')[5]).toEqual(['open', 'error']);
+	});
+
+	it('does not restart BQL patterns inside identifiers', () => {
+		expect(tail('2024-01-01 query "q" "SELECT total_number FROM fooSELECT"', 8)).toEqual([
+			['SELECT', 'keyword'],
+			['total_number', null],
+			['FROM', 'keyword'],
+			['fooSELECT', null],
 			['"', 'punctuation'],
 		]);
 	});
 
 	it('marks unrecognized characters as invalid', () => {
-		expect(pairs('~~')).toEqual([['~~', 'invalid']]);
-		expect(pairs('!')).toEqual([['!', 'invalid']]);
+		expect(pairs('~~')).toEqual([['~~', 'error']]);
+		expect(pairs('!')).toEqual([['!', 'error']]);
 		expect(pairs('  note: "abc\\')).toEqual([
-			['note', 'propertyName'],
+			['note', 'property'],
 			[':', 'punctuation'],
 			['"abc\\', 'string'],
 		]);
@@ -426,27 +452,44 @@ describe('beancountMode tokens', () => {
 		// Upstream `[\-|/]`/`[\-\|\+]` accidentally accept `|`; beancount
 		// dates are `YYYY-MM-DD` and signs are `+`/`-` only.
 		const badDate = pairs('2024|01|01 open Assets:Cash USD');
-		expect(badDate).toContainEqual(['|', 'invalid']);
-		expect(badDate).not.toContainEqual(['open', 'variableName.function']);
+		expect(badDate).toContainEqual(['|', 'error']);
+		expect(badDate).not.toContainEqual(['open', 'builtin']);
 		expect(pairs('  Assets:Cash  |5 USD')).toEqual([
-			['Assets', 'variableName.special'],
+			['Assets', 'variable-2'],
 			[':', 'punctuation'],
-			['Cash', 'variableName'],
-			['|', 'invalid'],
+			['Cash', 'variable'],
+			['|', 'error'],
 			['5', 'number'],
-			['USD', 'typeName'],
+			['USD', 'type'],
 		]);
+	});
+
+	it('styles non-ASCII account components', () => {
+		expect(pairs('  Expenses:餐饮  -30.00 CNY')).toEqual([
+			['Expenses', 'variable-2'],
+			[':', 'punctuation'],
+			['餐饮', 'variable'],
+			['-', 'operator'],
+			['30.00', 'number'],
+			['CNY', 'type'],
+		]);
+		expect(pairs('2024-01-01 open Assets:Café:Checking CNY')[6]).toEqual(['Assets', 'variable-2']);
+		expect(pairs('2024-01-01 open Assets:Café:Checking CNY')[8]).toEqual(['Café', 'variable']);
 	});
 
 	it('ends an entry at blank lines and column 0 comments', () => {
 		const withComment = pairs('; note\n  Assets:Cash 1 USD');
-		expect(withComment[0]).toEqual(['; note', 'lineComment']);
-		expect(withComment).toContainEqual(['Assets', 'variableName.special']);
+		expect(withComment[0]).toEqual(['; note', 'comment']);
+		expect(withComment).toContainEqual(['Assets', 'variable-2']);
 		const withBlank = pairs('2024-01-01 * "S" "n"\n\n  Assets:Cash 1 USD');
-		expect(withBlank).toContainEqual(['Assets', 'variableName.special']);
+		expect(withBlank).toContainEqual(['Assets', 'variable-2']);
 		expect(withBlank).toContainEqual(['1', 'number']);
 		const withBlankSpaces = pairs('2024-01-01 * "S" "n"\n   \n  Assets:Cash 1 USD');
-		expect(withBlankSpaces).toContainEqual(['Assets', 'variableName.special']);
+		expect(withBlankSpaces).toContainEqual(['Assets', 'variable-2']);
+		// A column-0 comment ends a query entry: without the reset the next
+		// line's quote would open a BQL region instead of a plain string.
+		const afterQueryComment = pairs('2024-01-01 query "q"\n; separator\n  note: "hello world"');
+		expect(afterQueryComment).toContainEqual(['"hello world"', 'string']);
 	});
 });
 
