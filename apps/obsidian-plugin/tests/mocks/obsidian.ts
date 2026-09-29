@@ -11,6 +11,7 @@ export interface Registrations {
 	settingTabs: number;
 	domEvents: number[];
 	intervals: number[];
+	cleanups: Array<() => void>;
 }
 
 export class Plugin {
@@ -21,6 +22,7 @@ export class Plugin {
 		settingTabs: 0,
 		domEvents: [],
 		intervals: [],
+		cleanups: [],
 	};
 
 	constructor(
@@ -44,6 +46,10 @@ export class Plugin {
 
 	addSettingTab(): void {
 		this.registrations.settingTabs += 1;
+	}
+
+	register(callback: () => void): void {
+		this.registrations.cleanups.push(callback);
 	}
 
 	registerDomEvent(): void {

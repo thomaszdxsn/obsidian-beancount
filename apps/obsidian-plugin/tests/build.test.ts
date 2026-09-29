@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,9 +27,16 @@ describe('esbuild production bundle', () => {
 
 			const bundle = readFileSync(outFile, 'utf8');
 			const moduleShim = { exports: {} as { default?: unknown } };
+			// Modules from the esbuild `external` list are provided by Obsidian
+			// at runtime (`obsidian` plus the CodeMirror/Lezer packages it
+			// bundles); everything else must be bundled into main.js.
+			const nodeRequire = createRequire(import.meta.url);
 			const requireShim = (id: string): unknown => {
 				if (id === 'obsidian') {
 					return obsidian;
+				}
+				if (id === '@codemirror/language' || id === '@codemirror/state' || id === '@lezer/highlight') {
+					return nodeRequire(id);
 				}
 				throw new Error(`bundle must not require external module "${id}"`);
 			};
@@ -56,6 +64,7 @@ describe('esbuild production bundle', () => {
 				settingTabs: 0,
 				domEvents: [],
 				intervals: [],
+				cleanups: [],
 			});
 			await instance.onunload();
 		} finally {
