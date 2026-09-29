@@ -22,9 +22,12 @@ const host = globalThis as { CodeMirror?: CmModeRegistry };
 const MODE_NAMES = ['beancount', 'bean'];
 
 // The bundled CodeMirror's `getMode` calls the registered value as a factory
-// (`mfactory(options, spec)`), so register a factory — not the bare mode
-// object — and keep its identity to recognize our own entries on unload.
-const beancountModeFactory = () => beancountMode;
+// (`mfactory(options, spec)`) and then writes `modeObj.name = spec.name`, so
+// the factory returns a fresh spec object per call — a shared one would let
+// the `beancount`/`bean` aliases clobber each other's `name`, and the write
+// would leak into the object `StreamLanguage.define` holds. Its identity is
+// kept to recognize our own entries on unload.
+const beancountModeFactory = () => ({ ...beancountMode });
 
 function installBeancountModes(registry: CmModeRegistry | undefined): (() => void) | null {
 	if (!registry || typeof registry.defineMode !== 'function') return null;

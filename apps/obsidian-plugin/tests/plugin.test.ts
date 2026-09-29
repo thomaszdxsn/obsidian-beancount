@@ -14,7 +14,7 @@ const host = globalThis as { CodeMirror?: unknown };
 interface FakeRegistry {
 	modes: Record<string, unknown>;
 	defineMode(name: string, mode: unknown): void;
-	getMode(spec: string): unknown;
+	getMode(spec: string): typeof beancountMode;
 }
 
 function fakeRegistry(): FakeRegistry {
@@ -25,11 +25,14 @@ function fakeRegistry(): FakeRegistry {
 			modes[name] = mode;
 		},
 		// Mirrors CodeMirror.getMode: it calls the registered value as a
-		// factory — registering a bare mode object must fail here.
-		getMode(spec: string) {
+		// factory (a bare mode object must fail here) and writes the mode's
+		// `name` back.
+		getMode(spec: string): typeof beancountMode {
 			const factory = modes[spec];
 			if (typeof factory !== 'function') throw new TypeError('mfactory is not a function');
-			return factory();
+			const mode = factory() as typeof beancountMode;
+			mode.name = spec;
+			return mode;
 		},
 	};
 }
@@ -79,9 +82,18 @@ describe('BeancountPlugin', () => {
 
 		loadPlugin();
 
-		// getMode throws unless the registered value is a callable factory.
-		expect(registry.getMode('beancount')).toBe(beancountMode);
-		expect(registry.getMode('bean')).toBe(beancountMode);
+		// getMode throws unless the registered value is a callable factory;
+		// each call must return a fresh spec because getMode writes `name`
+		// back — aliases must not clobber each other or the shared spec.
+		const beancount = registry.getMode('beancount');
+		const bean = registry.getMode('bean');
+		expect(beancount).not.toBe(beancountMode);
+		expect(bean).not.toBe(beancountMode);
+		expect(beancount).not.toBe(bean);
+		expect(beancount.name).toBe('beancount');
+		expect(bean.name).toBe('bean');
+		expect(beancount.token).toBe(beancountMode.token);
+		expect(beancountMode.name).toBe('beancount');
 	});
 
 	it('removes the registered modes on unload', () => {
