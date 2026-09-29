@@ -22,10 +22,19 @@ import { AccountIndex, ACCOUNT_PREFIX_RE } from './account-index';
 /** File extensions whose text is scanned for account names. */
 const INDEXED_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
 
-function isIndexable(file: TAbstractFile): file is TFile {
-	// `TAbstractFile` can be a folder; only `TFile` carries an extension.
-	const extension = (file as TFile).extension;
-	return typeof extension === 'string' && extension in INDEXED_EXTENSIONS;
+/** The shape `isIndexable` needs: a folder has no `extension`. */
+interface VaultEntry {
+	path: string;
+	extension?: string;
+}
+
+function isIndexable(file: VaultEntry): file is TFile {
+	// Own-property check: `in` would treat `constructor`/`toString` file
+	// extensions as indexed via the prototype chain.
+	return (
+		typeof file.extension === 'string' &&
+		Object.prototype.hasOwnProperty.call(INDEXED_EXTENSIONS, file.extension)
+	);
 }
 
 export class AccountSuggest extends EditorSuggest<string> {
@@ -44,17 +53,19 @@ export class AccountSuggest extends EditorSuggest<string> {
 		if (after !== '' && /[A-Za-z0-9\-_:]/.test(after)) return null;
 		const match = ACCOUNT_PREFIX_RE.exec(line.slice(0, cursor.ch));
 		if (!match) return null;
+		const query = match[1];
+		// Stay quiet unless the word prefixes a cached account; a bare `USD`
+		// or the just-typed token itself has nothing to offer.
+		if (this.candidates(query).length === 0) return null;
 		return {
-			start: { line: cursor.line, ch: cursor.ch - match[1].length },
+			start: { line: cursor.line, ch: cursor.ch - query.length },
 			end: cursor,
-			query: match[1],
+			query,
 		};
 	}
 
 	getSuggestions(context: EditorSuggestContext): string[] {
-		// The typed token itself is in the live buffer and therefore in the
-		// index; offering it back would make Enter a no-op.
-		return this.index.match(context.query).filter((account) => account !== context.query);
+		return this.candidates(context.query);
 	}
 
 	renderSuggestion(value: string, el: HTMLElement): void {
@@ -69,6 +80,13 @@ export class AccountSuggest extends EditorSuggest<string> {
 		// open it would re-trigger on the replacement and reuse the stale
 		// range on a second pick. `close()` nulls `context`, hence the copy.
 		this.close();
+	}
+
+	/** Completions for `query`, never the typed token itself. */
+	private candidates(query: string): string[] {
+		// The typed token is in the live buffer and therefore in the index;
+		// offering it back would make Enter accept a no-op.
+		return this.index.match(query).filter((account) => account !== query);
 	}
 }
 
@@ -115,12 +133,35 @@ export function registerAccountSuggest(plugin: Plugin): AccountIndex {
 		index.removeFile(file.path);
 	}));
 	plugin.registerEvent(vault.on('rename', (file, oldPath) => {
-		const readInFlight = revisions.delete(oldPath);
+		const oldPrefix = oldPath + '/';
+		// Reads in flight for the old path or its children are stale once the
+		// rename lands; drop their tokens so they cannot write back under old
+		// paths, and remember where they were headed so they can be replaced.
+		const dropped: string[] = [];
+		if (revisions.delete(oldPath)) dropped.push(file.path);
+		for (const path of [...revisions.keys()]) {
+			if (!path.startsWith(oldPrefix)) continue;
+			revisions.delete(path);
+			dropped.push(file.path + path.slice(oldPath.length));
+		}
 		const moved = index.renameFile(oldPath, file.path);
-		if (!isIndexable(file)) index.removeFile(file.path);
-		// An in-flight read of the old path is dropped above, so it must be
-		// replaced; an untracked destination (`.txt` → `.md`) needs a first read.
-		else if (readInFlight || !moved) refresh(file);
+		if (isIndexable(file)) {
+			// A dropped in-flight read must be replaced; an untracked
+			// destination (`.txt` → `.md`, or a file edited to account-less
+			// prose) needs a first read.
+			if (dropped.length > 0 || !moved) refresh(file);
+		} else {
+			index.removeFile(file.path);
+			// Folder rename: the re-keyed children keep their cached content,
+			// so re-read only the ones whose in-flight reads were dropped.
+			if (dropped.length > 0) {
+				const filesByPath = new Map(vault.getFiles().map((entry) => [entry.path, entry]));
+				for (const path of dropped) {
+					const child = filesByPath.get(path);
+					if (child) refresh(child);
+				}
+			}
+		}
 	}));
 
 	plugin.registerEditorSuggest(new AccountSuggest(plugin.app, index));

@@ -36,7 +36,12 @@ export class AccountIndex {
 	private sorted: readonly string[] | null = null;
 
 	setFileContent(path: string, content: string): void {
-		this.accountsByPath.set(path, extractAccounts(content));
+		const accounts = extractAccounts(content);
+		// Only account-carrying files are tracked: `renameFile`'s "tracked"
+		// answer then means "re-keyed cached names", which is exactly when a
+		// rename can skip its re-read. An account-less file stays untracked.
+		if (accounts.size === 0) this.accountsByPath.delete(path);
+		else this.accountsByPath.set(path, accounts);
 		this.sorted = null;
 	}
 

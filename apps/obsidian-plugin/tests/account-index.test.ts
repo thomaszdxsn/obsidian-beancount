@@ -78,6 +78,15 @@ describe('AccountIndex', () => {
 		expect(index.accounts()).toEqual(['Assets:New']);
 	});
 
+	it('tracks nothing for content without accounts', () => {
+		const index = new AccountIndex();
+		index.setFileContent('a.md', 'Assets:Cash');
+		index.setFileContent('a.md', 'just prose, no names');
+		expect(index.accounts()).toEqual([]);
+		// Account-less files are untracked: a rename needs a fresh read.
+		expect(index.renameFile('a.md', 'b.md')).toBe(false);
+	});
+
 	it('drops a file’s accounts on removal', () => {
 		const index = new AccountIndex();
 		index.setFileContent('a.md', 'Assets:Cash');
