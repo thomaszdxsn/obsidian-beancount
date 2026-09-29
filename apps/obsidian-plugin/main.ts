@@ -1,5 +1,6 @@
 import { Plugin } from 'obsidian';
 import { beancountMode } from './beancount-mode';
+import { registerAccountSuggest } from './account-suggest';
 
 /**
  * Obsidian highlights fenced code blocks through its bundled CodeMirror 5
@@ -45,6 +46,7 @@ export default class BeancountPlugin extends Plugin {
 	onload() {
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
+		registerAccountSuggest(this);
 	}
 
 	onunload() {}

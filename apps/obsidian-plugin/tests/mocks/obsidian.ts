@@ -11,6 +11,8 @@ export interface Registrations {
 	settingTabs: number;
 	domEvents: number[];
 	intervals: number[];
+	events: unknown[];
+	editorSuggests: unknown[];
 	cleanups: Array<() => void>;
 }
 
@@ -22,6 +24,8 @@ export class Plugin {
 		settingTabs: 0,
 		domEvents: [],
 		intervals: [],
+		events: [],
+		editorSuggests: [],
 		cleanups: [],
 	};
 
@@ -61,6 +65,14 @@ export class Plugin {
 		return id;
 	}
 
+	registerEvent(eventRef: unknown): void {
+		this.registrations.events.push(eventRef);
+	}
+
+	registerEditorSuggest(editorSuggest: unknown): void {
+		this.registrations.editorSuggests.push(editorSuggest);
+	}
+
 	async loadData(): Promise<unknown> {
 		return null;
 	}
@@ -75,3 +87,19 @@ export class PluginSettingTab {}
 export class Notice {}
 export class MarkdownView {}
 export class Editor {}
+
+/**
+ * Base class double for `EditorSuggest`; the plugin subclass overrides the
+ * suggestion methods, so only the constructor and the `context`/`limit`
+ * state need to exist at runtime.
+ */
+export class EditorSuggest<T> {
+	context: unknown = null;
+	limit = 50;
+
+	constructor(public app: unknown) {}
+
+	open(): void {}
+
+	close(): void {}
+}
