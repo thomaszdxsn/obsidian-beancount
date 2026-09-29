@@ -52,7 +52,9 @@ export class AccountSuggest extends EditorSuggest<string> {
 	}
 
 	getSuggestions(context: EditorSuggestContext): string[] {
-		return this.index.match(context.query);
+		// The typed token itself is in the live buffer and therefore in the
+		// index; offering it back would make Enter a no-op.
+		return this.index.match(context.query).filter((account) => account !== context.query);
 	}
 
 	renderSuggestion(value: string, el: HTMLElement): void {

@@ -120,6 +120,15 @@ describe('AccountSuggest suggestions', () => {
 		expect(suggest.getSuggestions(contextFor('zzz'))).toEqual([]);
 	});
 
+	it('never suggests the exact token being typed', async () => {
+		// The live buffer feeds the index, so the typed token is a "known"
+		// account; offering it back would make Enter accept a no-op.
+		const { suggest } = setup({ 'a.md': '  Assets:Cash' });
+		await flush();
+		expect(suggest.getSuggestions(contextFor('Assets:Cash'))).toEqual([]);
+		expect(suggest.getSuggestions(contextFor('Assets:Ca'))).toEqual(['Assets:Cash']);
+	});
+
 	it('renders a suggestion as its account text', () => {
 		const { suggest } = setup();
 		let rendered: string | DocumentFragment | null = null;
