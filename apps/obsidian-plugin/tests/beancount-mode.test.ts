@@ -491,6 +491,46 @@ describe('beancountMode tokens', () => {
 		const afterQueryComment = pairs('2024-01-01 query "q"\n; separator\n  note: "hello world"');
 		expect(afterQueryComment).toContainEqual(['"hello world"', 'string']);
 	});
+
+	it('emits only style names Obsidian themes style (cm-* whitelist)', () => {
+		// Obsidian renders raw token words as `cm-<token>` classes; its
+		// app.css only styles the CM5 legacy names. Any other name silently
+		// renders as plain text — lock the contract to the whitelist.
+		const OBSIDIAN_STYLED_STYLES: Record<string, true> = {
+			comment: true, string: true, 'string-2': true, number: true, keyword: true,
+			variable: true, 'variable-2': true, type: true, property: true, builtin: true,
+			tag: true, operator: true, punctuation: true, link: true, meta: true, error: true,
+		};
+		const ledger = [
+			'option "title" "T"',
+			'pushtag #trip',
+			'2024-01-01 open Assets:Cash CNY',
+			'2024-01-01 custom "budget" "b" TRUE 1,000.50',
+			'2024-03-15 * "Shop" "flat" #food ^trip',
+			'  Expenses:餐饮  -4.50 CNY {2024-01-01, 4.50 CNY} @ 7.10 CNY',
+			'  Assets:Café:Checking',
+			'  location: "Beijing"',
+			'  note: "a \\"b\\""',
+			'2024-03-16 balance Assets:Cash 100.00 CNY',
+			'2024-03-17 query "q" "SELECT account, sum(number) >= 1 WHERE payee = \'x\' /* c */"',
+			'; comment',
+			'~~',
+		].join('\n');
+		const styles = new Set<string>();
+		for (const token of tokenize(ledger)) {
+			if (token.style !== null) styles.add(token.style);
+		}
+		for (const style of styles) {
+			expect(OBSIDIAN_STYLED_STYLES[style], `token style "${style}" has no cm-* rule in Obsidian`).toBe(true);
+		}
+		// Sanity: the corpus really exercised every category we style.
+		for (const expected of [
+			'comment', 'string', 'string-2', 'number', 'keyword', 'variable', 'variable-2',
+			'type', 'property', 'builtin', 'tag', 'link', 'operator', 'punctuation', 'error',
+		]) {
+			expect(styles).toContain(expected);
+		}
+	});
 });
 
 describe('beancountStreamLanguage', () => {
