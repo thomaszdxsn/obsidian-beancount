@@ -8,6 +8,9 @@ import { createEditor, FakeVault, flush } from './fakes';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
 
+/** A vault with completable accounts, for trigger expectations. */
+const ACCOUNTS = { 'a.md': 'Assets:Cash:Wallet Expenses:Food' };
+
 function trigger(suggest: AccountSuggest, line: string, ch = line.length) {
 	const editor = createEditor([line]);
 	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, null);
@@ -33,8 +36,9 @@ function setup(files: Record<string, string> = {}): Fixture {
 }
 
 describe('AccountSuggest.onTrigger', () => {
-	it('triggers on a complete account ending at the cursor', () => {
-		const { suggest } = setup();
+	it('triggers on a complete account ending at the cursor', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		expect(trigger(suggest, 'Assets:Cash')).toEqual({
 			start: { line: 0, ch: 0 },
 			end: { line: 0, ch: 11 },
@@ -42,8 +46,9 @@ describe('AccountSuggest.onTrigger', () => {
 		});
 	});
 
-	it('triggers on a partial segment and reports its start', () => {
-		const { suggest } = setup();
+	it('triggers on a partial segment and reports its start', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		const info = trigger(suggest, '  Assets:Ca');
 		expect(info).toEqual({
 			start: { line: 0, ch: 2 },
@@ -52,37 +57,40 @@ describe('AccountSuggest.onTrigger', () => {
 		});
 	});
 
-	it('triggers right after a trailing colon', () => {
-		const { suggest } = setup();
+	it('triggers right after a trailing colon', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		expect(trigger(suggest, 'Assets:')).toMatchObject({ query: 'Assets:' });
 	});
 
-	it('triggers after any non-word boundary character', () => {
-		const { suggest } = setup();
+	it('triggers after any non-word boundary character', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		expect(trigger(suggest, '* (Assets:Ca')).toMatchObject({ query: 'Assets:Ca', start: { line: 0, ch: 3 } });
 	});
 
-	it('keeps the query anchored to the cursor, not the line end', () => {
-		const { suggest } = setup();
+	it('keeps the query anchored to the cursor, not the line end', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		const info = trigger(suggest, '  Assets:Ca 10.00 USD', 11);
 		expect(info).toMatchObject({ query: 'Assets:Ca', start: { line: 0, ch: 2 }, end: { line: 0, ch: 11 } });
 	});
 
 	it('stays quiet when editing inside a token', () => {
-		const { suggest } = setup();
+		const { suggest } = setup(ACCOUNTS);
 		expect(trigger(suggest, 'Assets:Cash', 3)).toBeNull();
 		expect(trigger(suggest, 'Assets:CashUSD', 11)).toBeNull();
 	});
 
 	it('stays quiet on lowercase prose, dates and amounts', () => {
-		const { suggest } = setup();
+		const { suggest } = setup(ACCOUNTS);
 		expect(trigger(suggest, 'see assets here')).toBeNull();
 		expect(trigger(suggest, '2026-09-30')).toBeNull();
 		expect(trigger(suggest, 'paid 100.00')).toBeNull();
 	});
 
 	it('stays quiet when the tail is not a whole token', () => {
-		const { suggest } = setup();
+		const { suggest } = setup(ACCOUNTS);
 		// The tail `Assets:Ca` sits after a colon, dash or slash inside a
 		// longer token or URL path.
 		expect(trigger(suggest, 'x:Assets:Ca')).toBeNull();
@@ -100,10 +108,10 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(trigger(suggest, 'Assets')).toMatchObject({ query: 'Assets' });
 	});
 
-	it('matches nothing for capitalized words without an account prefix hit', async () => {
+	it('stays quiet on capitalized words that prefix no cached account', async () => {
 		const { suggest } = setup({ 'a.md': 'Assets:Cash' });
 		await flush();
-		expect(trigger(suggest, '100.00 USD')).toMatchObject({ query: 'USD' });
+		expect(trigger(suggest, '100.00 USD')).toBeNull();
 		expect(suggest.getSuggestions(contextFor('USD'))).toEqual([]);
 	});
 });
@@ -127,6 +135,7 @@ describe('AccountSuggest suggestions', () => {
 		await flush();
 		expect(suggest.getSuggestions(contextFor('Assets:Cash'))).toEqual([]);
 		expect(suggest.getSuggestions(contextFor('Assets:Ca'))).toEqual(['Assets:Cash']);
+		expect(trigger(suggest, 'Assets:Cash')).toBeNull();
 	});
 
 	it('renders a suggestion as its account text', () => {
@@ -294,6 +303,86 @@ describe('registerAccountSuggest', () => {
 		expect(index.accounts()).toEqual(['Assets:Fresh']);
 		await delay(100);
 		expect(index.accounts()).toEqual(['Assets:Fresh']);
+	});
+
+	it('skips prototype-named extensions in the scan', async () => {
+		const vault = new FakeVault();
+		vault.write('a.md', 'Assets:Cash');
+		vault.write('trap.constructor', 'Expenses:Trap');
+		vault.write('trap.toString', 'Expenses:Trap');
+		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
+		const index = registerAccountSuggest(plugin as unknown as Plugin);
+		await flush();
+		expect(index.accounts()).toEqual(['Assets:Cash']);
+		expect(vault.reads).toEqual(['a.md']);
+	});
+
+	it('replaces dropped in-flight child reads on a folder rename', async () => {
+		const { vault, index } = setup({ 'dir/a.md': 'Assets:Old', 'other.md': 'Expenses:Food' });
+		await flush();
+		vault.delays.set('dir/a.md', [50]);
+		const file = vault.write('dir/a.md', 'Assets:Fresh');
+		await vault.emit('modify', file);
+		const renamed = vault.rename('dir', 'moved');
+		await vault.emit('rename', renamed, 'dir');
+		await delay(100);
+		// The dropped read may only land under the new path, never back under
+		// the old one.
+		expect(index.accounts()).toEqual(['Assets:Fresh', 'Expenses:Food']);
+		index.removeFile('moved/a.md');
+		expect(index.accounts()).toEqual(['Expenses:Food']);
+	});
+
+	it('discards an in-flight read when the rename makes the file unindexable', async () => {
+		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		await flush();
+		vault.delays.set('a.md', [50]);
+		const file = vault.write('a.md', 'Assets:Fresh');
+		await vault.emit('modify', file);
+		const renamed = vault.rename('a.md', 'a.txt');
+		await vault.emit('rename', renamed, 'a.md');
+		await delay(100);
+		expect(index.accounts()).toEqual([]);
+	});
+
+	it('discards an in-flight read when the file is deleted', async () => {
+		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		await flush();
+		vault.delays.set('a.md', [50]);
+		const file = vault.write('a.md', 'Assets:Fresh');
+		await vault.emit('modify', file);
+		await vault.emit('delete', vault.delete('a.md'));
+		await delay(100);
+		expect(index.accounts()).toEqual([]);
+	});
+
+	it('leaves unrelated in-flight reads alone on rename', async () => {
+		const { vault, index } = setup({ 'a.md': 'Assets:Old', 'other.md': 'Expenses:Food' });
+		await flush();
+		vault.delays.set('other.md', [20]);
+		const other = vault.write('other.md', 'Expenses:Fresh');
+		await vault.emit('modify', other);
+		const renamed = vault.rename('a.md', 'b.md');
+		await vault.emit('rename', renamed, 'a.md');
+		expect(index.accounts()).toEqual(['Assets:Old', 'Expenses:Food']);
+		await delay(60);
+		expect(index.accounts()).toEqual(['Assets:Old', 'Expenses:Fresh']);
+	});
+
+	it('ignores dropped children that vanished from the file listing', async () => {
+		const { vault, index } = setup({ 'dir/a.md': 'Assets:Old' });
+		await flush();
+		vault.delays.set('dir/a.md', [50]);
+		const file = vault.write('dir/a.md', 'Assets:Fresh');
+		await vault.emit('modify', file);
+		const renamed = vault.rename('dir', 'moved');
+		// The host's listing can lag the rename event: the child is gone by
+		// the time the dropped read would be replaced. Must not throw, and the
+		// re-keyed entry survives.
+		vault.files.delete('moved/a.md');
+		await vault.emit('rename', renamed, 'dir');
+		await delay(100);
+		expect(index.accounts()).toEqual(['Assets:Old']);
 	});
 
 	it('drops stale out-of-order reads instead of applying them', async () => {
