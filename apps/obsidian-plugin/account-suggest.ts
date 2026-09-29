@@ -63,6 +63,10 @@ export class AccountSuggest extends EditorSuggest<string> {
 		const context = this.context;
 		if (!context) return;
 		context.editor.replaceRange(value, context.start, context.end);
+		// The suggestion chooser does not dismiss the popover itself; left
+		// open it would re-trigger on the replacement and reuse the stale
+		// range on a second pick. `close()` nulls `context`, hence the copy.
+		this.close();
 	}
 }
 
@@ -79,16 +83,23 @@ export function registerAccountSuggest(plugin: Plugin): AccountIndex {
 	const { vault } = plugin.app;
 
 	const revisions = new Map<string, number>();
+	let revision = 0;
 	const refresh = (file: TAbstractFile): void => {
 		if (!isIndexable(file)) return;
 		const path = file.path;
-		const revision = (revisions.get(path) ?? 0) + 1;
-		revisions.set(path, revision);
+		// Monotonic token: invalidation deletes the entry, so a read from a
+		// previous life of the path can never match again — a per-path counter
+		// would restart at 1 and let a stale read overwrite a recreated file.
+		// The entry also marks the path as read-in-flight, so it is removed
+		// once the read lands.
+		const current = ++revision;
+		revisions.set(path, current);
 		vault
 			.cachedRead(file)
 			.then((content) => {
-				if (revisions.get(path) !== revision) return;
+				if (revisions.get(path) !== current) return;
 				index.setFileContent(path, content);
+				revisions.delete(path);
 			})
 			.catch(() => undefined);
 	};
@@ -102,10 +113,12 @@ export function registerAccountSuggest(plugin: Plugin): AccountIndex {
 		index.removeFile(file.path);
 	}));
 	plugin.registerEvent(vault.on('rename', (file, oldPath) => {
-		revisions.delete(oldPath);
+		const readInFlight = revisions.delete(oldPath);
 		const moved = index.renameFile(oldPath, file.path);
 		if (!isIndexable(file)) index.removeFile(file.path);
-		else if (!moved) refresh(file);
+		// An in-flight read of the old path is dropped above, so it must be
+		// replaced; an untracked destination (`.txt` → `.md`) needs a first read.
+		else if (readInFlight || !moved) refresh(file);
 	}));
 
 	plugin.registerEditorSuggest(new AccountSuggest(plugin.app, index));

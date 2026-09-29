@@ -14,12 +14,14 @@
  * digits, `-` and `_`), so anything the editor treats as an account is also
  * completable — and prose words, dates (`2026-09-30`), times (`12:30`) and
  * URLs never leak in because they lack the capitalized-root-plus-colon
- * shape. A trailing empty segment (`Meeting:`) is not a name.
+ * shape. A trailing empty segment (`Meeting:`) is not a name. The lookbehind
+ * keeps a name from leaking out of a longer token or URL path
+ * (`pre-Assets:Cash`, `github.com/User:Repo`), mirroring the prefix regex.
  */
-const ACCOUNT_RE = /\b[A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+\b/g;
+const ACCOUNT_RE = /(?<![A-Za-z0-9\-_:/])[A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+\b/g;
 
 /** The same shape while typing, where the last segment may be partial. */
-export const ACCOUNT_PREFIX_RE = /(?:^|[^A-Za-z0-9\-_:])([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]*)*)$/;
+export const ACCOUNT_PREFIX_RE = /(?:^|[^A-Za-z0-9\-_:/])([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]*)*)$/;
 
 export function extractAccounts(content: string): ReadonlySet<string> {
 	const accounts = new Set<string>();

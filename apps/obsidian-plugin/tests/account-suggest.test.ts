@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
 import { AccountIndex } from '../account-index';
@@ -83,12 +83,24 @@ describe('AccountSuggest.onTrigger', () => {
 
 	it('stays quiet when the tail is not a whole token', () => {
 		const { suggest } = setup();
-		// The tail `Assets:Ca` sits after a colon inside a longer token.
+		// The tail `Assets:Ca` sits after a colon, dash or slash inside a
+		// longer token or URL path.
 		expect(trigger(suggest, 'x:Assets:Ca')).toBeNull();
 		expect(trigger(suggest, 'sAssets:Ca')).toBeNull();
+		expect(trigger(suggest, 'pre-Assets:Ca')).toBeNull();
+		expect(trigger(suggest, 'https://github.com/User:Re')).toBeNull();
 	});
 
-	it('triggers on bare capitalized words, which then match nothing', async () => {
+	it('triggers on bare capitalized words as completion queries', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet' });
+		await flush();
+		// Root-only and single-letter queries complete against real accounts.
+		expect(suggest.getSuggestions(contextFor('Assets'))).toEqual(['Assets:Cash:Wallet']);
+		expect(suggest.getSuggestions(contextFor('A'))).toEqual(['Assets:Cash:Wallet']);
+		expect(trigger(suggest, 'Assets')).toMatchObject({ query: 'Assets' });
+	});
+
+	it('matches nothing for capitalized words without an account prefix hit', async () => {
 		const { suggest } = setup({ 'a.md': 'Assets:Cash' });
 		await flush();
 		expect(trigger(suggest, '100.00 USD')).toMatchObject({ query: 'USD' });
@@ -118,7 +130,7 @@ describe('AccountSuggest suggestions', () => {
 		expect(rendered).toBe('Assets:Cash');
 	});
 
-	it('replaces the trigger range with the selected account', () => {
+	it('replaces the trigger range with the selected account and closes', () => {
 		const { suggest } = setup();
 		const editor = createEditor(['  Assets:Ca']);
 		suggest.context = {
@@ -128,18 +140,24 @@ describe('AccountSuggest suggestions', () => {
 			editor: editor as unknown as Editor,
 			file: {} as TFile,
 		} as EditorSuggestContext;
+		const close = vi.spyOn(suggest, 'close');
 		suggest.selectSuggestion('Assets:Cash:Wallet', {} as MouseEvent);
 		expect(editor.replacements).toEqual([
 			{ replacement: 'Assets:Cash:Wallet', from: { line: 0, ch: 2 }, to: { line: 0, ch: 11 } },
 		]);
+		// The chooser leaves the popover open; without close() a second pick
+		// would reuse the stale range over the replacement.
+		expect(close).toHaveBeenCalledOnce();
 	});
 
 	it('does nothing when no context is active', () => {
 		const { suggest } = setup();
 		const editor = createEditor(['  Assets:Ca']);
 		suggest.context = null;
+		const close = vi.spyOn(suggest, 'close');
 		suggest.selectSuggestion('Assets:Cash', {} as MouseEvent);
 		expect(editor.replacements).toEqual([]);
+		expect(close).not.toHaveBeenCalled();
 	});
 });
 
@@ -234,6 +252,39 @@ describe('registerAccountSuggest', () => {
 		const renamed = vault.rename('a.md', 'a.txt');
 		await vault.emit('rename', renamed, 'a.md');
 		expect(index.accounts()).toEqual([]);
+	});
+
+	it('replaces a dropped in-flight read after rename', async () => {
+		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		await flush();
+		// A modify read is in flight when the rename arrives; the rename drops
+		// it, so a read of the new path must take over.
+		vault.delays.set('a.md', [50]);
+		const file = vault.write('a.md', 'Assets:Fresh');
+		await vault.emit('modify', file);
+		const renamed = vault.rename('a.md', 'b.md');
+		await vault.emit('rename', renamed, 'a.md');
+		expect(index.accounts()).toEqual(['Assets:Fresh']);
+		await delay(100);
+		expect(index.accounts()).toEqual(['Assets:Fresh']);
+		index.removeFile('b.md');
+		expect(index.accounts()).toEqual([]);
+	});
+
+	it('does not let a stale read overwrite a recreated file', async () => {
+		const vault = new FakeVault();
+		vault.delays.set('a.md', [50]);
+		vault.write('a.md', 'Assets:Stale');
+		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
+		const index = registerAccountSuggest(plugin as unknown as Plugin);
+		// Delete and recreate while the first read is still on disk; the path's
+		// first-life read must not clobber the recreated content.
+		await vault.emit('delete', vault.delete('a.md'));
+		const recreated = vault.write('a.md', 'Assets:Fresh');
+		await vault.emit('create', recreated);
+		expect(index.accounts()).toEqual(['Assets:Fresh']);
+		await delay(100);
+		expect(index.accounts()).toEqual(['Assets:Fresh']);
 	});
 
 	it('drops stale out-of-order reads instead of applying them', async () => {

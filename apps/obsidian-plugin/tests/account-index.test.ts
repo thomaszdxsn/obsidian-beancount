@@ -44,6 +44,15 @@ describe('extractAccounts', () => {
 		expect([...extractAccounts(content)]).toEqual([]);
 	});
 
+	it('does not leak names out of longer tokens or URL paths', () => {
+		const content = 'pre-Assets:Cash 2024-Assets:Cash https://github.com/User:Repo https://en.wikipedia.org/wiki/World:History';
+		expect([...extractAccounts(content)]).toEqual([]);
+	});
+
+	it('keeps a name that follows a boundary character', () => {
+		expect([...extractAccounts('(Assets:Cash) "Assets:Broker" #note')]).toEqual(['Assets:Cash', 'Assets:Broker']);
+	});
+
 	it('requires a capitalized root and non-empty segments', () => {
 		expect([...extractAccounts('assets:cash Assets: Meeting:Notes')]).toEqual(['Meeting:Notes']);
 	});

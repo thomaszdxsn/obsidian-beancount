@@ -90,16 +90,14 @@ export class Editor {}
 
 /**
  * Base class double for `EditorSuggest`; the plugin subclass overrides the
- * suggestion methods, so only the constructor and the `context`/`limit`
- * state need to exist at runtime.
+ * suggestion methods, so only the constructor, `close` and the
+ * `context`/`limit` state need to exist at runtime.
  */
 export class EditorSuggest<T> {
 	context: unknown = null;
 	limit = 50;
 
 	constructor(public app: unknown) {}
-
-	open(): void {}
 
 	close(): void {}
 }
