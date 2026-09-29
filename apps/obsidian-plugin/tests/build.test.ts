@@ -8,13 +8,14 @@ import * as obsidian from 'obsidian';
 import { describe, expect, it } from 'vitest';
 import type { App, PluginManifest } from 'obsidian';
 import type { Plugin as RecordingPlugin } from './mocks/obsidian';
+import { FakeVault } from './fakes';
 
 type PluginConstructor = new (app: App, manifest: PluginManifest) => obsidian.Plugin;
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url));
 
 describe('esbuild production bundle', () => {
-	it('emits a bundle that evaluates as CommonJS and loads without registering anything', async () => {
+	it('emits a bundle that evaluates as CommonJS and loads with only the expected registrations', async () => {
 		// Build to a temp file so tests never clobber the dev/build main.js artifact.
 		const outDir = mkdtempSync(join(tmpdir(), 'esbuild-bundle-'));
 		const outFile = join(outDir, 'main.js');
@@ -54,9 +55,14 @@ describe('esbuild production bundle', () => {
 			expect(LoadedPlugin).toBeTypeOf('function');
 			expect(LoadedPlugin.prototype).toBeInstanceOf(obsidian.Plugin);
 
-			const instance = new LoadedPlugin({} as App, { id: 'beancount-obsidian' } as PluginManifest);
+			const instance = new LoadedPlugin({ vault: new FakeVault().api } as unknown as App, {
+				id: 'beancount-obsidian',
+			} as PluginManifest);
 			await instance.onload();
-			const registrations = (instance as unknown as RecordingPlugin).registrations;
+			const { events, editorSuggests, ...registrations } = (instance as unknown as RecordingPlugin).registrations;
+			// No sample UI: no commands, ribbon, status bar, settings or stray
+			// listeners. The vault events and editor suggest belong to account
+			// completion.
 			expect(registrations).toEqual({
 				commands: [],
 				ribbonIcons: [],
@@ -66,6 +72,8 @@ describe('esbuild production bundle', () => {
 				intervals: [],
 				cleanups: [],
 			});
+			expect(events).toHaveLength(4);
+			expect(editorSuggests).toHaveLength(1);
 			await instance.onunload();
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });

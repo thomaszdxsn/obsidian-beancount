@@ -2,6 +2,7 @@ import type { App, PluginManifest } from 'obsidian';
 import { Plugin } from 'obsidian';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Plugin as RecordingPlugin } from './mocks/obsidian';
+import { FakeVault, flush } from './fakes';
 import { beancountMode } from '../beancount-mode';
 import BeancountPlugin from '../main';
 
@@ -37,7 +38,7 @@ function fakeRegistry(): FakeRegistry {
 	};
 }
 
-function emptyRegistrations(): RecordingPlugin['registrations'] {
+function emptyRegistrations(): Omit<RecordingPlugin['registrations'], 'events' | 'editorSuggests'> {
 	return {
 		commands: [],
 		ribbonIcons: [],
@@ -49,10 +50,11 @@ function emptyRegistrations(): RecordingPlugin['registrations'] {
 	};
 }
 
-function loadPlugin(): BeancountPlugin & RecordingPlugin {
-	const plugin = new BeancountPlugin({} as App, manifest) as BeancountPlugin & RecordingPlugin;
+function loadPlugin(vault: FakeVault = new FakeVault()): { plugin: BeancountPlugin & RecordingPlugin; vault: FakeVault } {
+	const plugin = new BeancountPlugin({ vault: vault.api } as unknown as App, manifest) as BeancountPlugin &
+		RecordingPlugin;
 	plugin.onload();
-	return plugin;
+	return { plugin, vault };
 }
 
 afterEach(() => {
@@ -67,13 +69,30 @@ describe('BeancountPlugin', () => {
 	});
 
 	// Phase 0 acceptance: no sample UI — no ribbon, no commands, no status bar
-	// text, no settings tab, no stray listeners.
+	// text, no settings tab, no stray listeners. Account completion wires
+	// vault events and one editor suggest, which are not UI.
 	it('registers no sample UI when loaded and unloaded', async () => {
-		const plugin = loadPlugin();
-		expect(plugin.registrations).toEqual(emptyRegistrations());
+		const { plugin } = loadPlugin();
+		const { events, editorSuggests, ...sampleUi } = plugin.registrations;
+		expect(sampleUi).toEqual(emptyRegistrations());
+		expect(events).toHaveLength(4);
+		expect(editorSuggests).toHaveLength(1);
 
 		await plugin.onunload();
-		expect(plugin.registrations).toEqual(emptyRegistrations());
+		expect(plugin.registrations).toEqual({ ...sampleUi, events, editorSuggests });
+	});
+
+	it('wires account completion to the vault on load', async () => {
+		const vault = new FakeVault();
+		vault.write('ledger.bean', '2026-09-30 open Assets:Cash:Wallet');
+
+		const { plugin } = loadPlugin(vault);
+		await flush();
+
+		const suggest = plugin.registrations.editorSuggests[0] as {
+			getSuggestions(context: { query: string }): string[];
+		};
+		expect(suggest.getSuggestions({ query: 'Assets:Cash' })).toEqual(['Assets:Cash:Wallet']);
 	});
 
 	it('installs the beancount mode and its bean alias into the mode registry', () => {
@@ -100,7 +119,7 @@ describe('BeancountPlugin', () => {
 		const registry = fakeRegistry();
 		host.CodeMirror = registry;
 
-		const plugin = loadPlugin();
+		const { plugin } = loadPlugin();
 		expect(plugin.registrations.cleanups).toHaveLength(1);
 		for (const cleanup of plugin.registrations.cleanups) cleanup();
 
@@ -112,7 +131,7 @@ describe('BeancountPlugin', () => {
 		const registry = fakeRegistry();
 		host.CodeMirror = registry;
 
-		const plugin = loadPlugin();
+		const { plugin } = loadPlugin();
 		const otherFactory = () => ({});
 		registry.modes.bean = otherFactory;
 		for (const cleanup of plugin.registrations.cleanups) cleanup();
@@ -129,7 +148,7 @@ describe('BeancountPlugin', () => {
 			},
 		};
 
-		const plugin = loadPlugin();
+		const { plugin } = loadPlugin();
 		expect(defined).toEqual(['beancount', 'bean']);
 		expect(() => plugin.registrations.cleanups[0]()).not.toThrow();
 	});

@@ -2,6 +2,16 @@
 
 This is a sample plugin for Obsidian (https://obsidian.md).
 
+## Features
+
+- **Beancount syntax highlighting**: `beancount`/`bean` fenced code blocks get
+  highlighting through a CodeMirror stream mode ported from
+  `beancount.tmLanguage`.
+- **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
+  editor suggests every account name found in the vault. Account names are
+  extracted per file with a regex, cached, and invalidated when files are
+  created, modified, deleted or renamed.
+
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.
 
