@@ -88,9 +88,7 @@ describe('beancountMode tokens', () => {
 			['trip', 'link'],
 			['Expenses', 'variable-2'],
 			[':', 'punctuation'],
-			['Food', 'variable'],
-			[':', 'punctuation'],
-			['Drink', 'variable'],
+			['Food:Drink', 'variable'],
 			['-', 'operator'],
 			['4.50', 'number'],
 			['USD', 'type'],
@@ -121,7 +119,7 @@ describe('beancountMode tokens', () => {
 		]);
 		expect(pairs('option "title" "My Ledger"')).toEqual([
 			['option', 'builtin'],
-			['"title"', 'string'],
+			['"title"', 'variable'],
 			['"My Ledger"', 'string'],
 		]);
 		expect(pairs('plugin "beancount.plugins.auto" "cfg"')).toEqual([
@@ -425,7 +423,9 @@ describe('beancountMode tokens', () => {
 		]);
 		expect(pairs('2024-01-01txn "Store" "x"')).toContainEqual(['txn', 'builtin']);
 		// Other dated keywords still require whitespace.
-		expect(pairs('2024-01-01open Assets:Cash USD')[5]).toEqual(['open', 'error']);
+		expect(pairs('2024-01-01open Assets:Cash USD')).toEqual([
+			['2024-01-01open Assets:Cash USD', null],
+		]);
 	});
 
 	it('does not restart BQL patterns inside identifiers', () => {
@@ -438,9 +438,10 @@ describe('beancountMode tokens', () => {
 		]);
 	});
 
-	it('marks unrecognized characters as invalid', () => {
-		expect(pairs('~~')).toEqual([['~~', 'error']]);
-		expect(pairs('!')).toEqual([['!', 'error']]);
+	it('leaves garbage outside entries unscoped and marks it invalid inside', () => {
+		expect(pairs('~~')).toEqual([['~~', null]]);
+		expect(pairs('!')).toEqual([['!', null]]);
+		expect(pairs('2024-01-01 * "s" "n"\n  Assets:Cash  ~ USD')).toContainEqual(['~', 'error']);
 		expect(pairs('  note: "abc\\')).toEqual([
 			['note', 'property'],
 			[':', 'punctuation'],
@@ -452,16 +453,8 @@ describe('beancountMode tokens', () => {
 		// Upstream `[\-|/]`/`[\-\|\+]` accidentally accept `|`; beancount
 		// dates are `YYYY-MM-DD` and signs are `+`/`-` only.
 		const badDate = pairs('2024|01|01 open Assets:Cash USD');
-		expect(badDate).toContainEqual(['|', 'error']);
-		expect(badDate).not.toContainEqual(['open', 'builtin']);
-		expect(pairs('  Assets:Cash  |5 USD')).toEqual([
-			['Assets', 'variable-2'],
-			[':', 'punctuation'],
-			['Cash', 'variable'],
-			['|', 'error'],
-			['5', 'number'],
-			['USD', 'type'],
-		]);
+		expect(badDate).toEqual([['2024|01|01 open Assets:Cash USD', null]]);
+		expect(pairs('2024-01-01 * "s" "n"\n  Assets:Cash  |5 USD')).toContainEqual(['|', 'error']);
 	});
 
 	it('styles non-ASCII account components', () => {
@@ -474,7 +467,7 @@ describe('beancountMode tokens', () => {
 			['CNY', 'type'],
 		]);
 		expect(pairs('2024-01-01 open Assets:Café:Checking CNY')[6]).toEqual(['Assets', 'variable-2']);
-		expect(pairs('2024-01-01 open Assets:Café:Checking CNY')[8]).toEqual(['Café', 'variable']);
+		expect(pairs('2024-01-01 open Assets:Café:Checking CNY')[8]).toEqual(['Café:Checking', 'variable']);
 	});
 
 	it('ends an entry at blank lines and column 0 comments', () => {
@@ -511,10 +504,10 @@ describe('beancountMode tokens', () => {
 			'  Assets:Café:Checking',
 			'  location: "Beijing"',
 			'  note: "a \\"b\\""',
+			'  Assets:Cash  ~',
 			'2024-03-16 balance Assets:Cash 100.00 CNY',
 			'2024-03-17 query "q" "SELECT account, sum(number) >= 1 WHERE payee = \'x\' /* c */"',
 			'; comment',
-			'~~',
 		].join('\n');
 		const styles = new Set<string>();
 		for (const token of tokenize(ledger)) {

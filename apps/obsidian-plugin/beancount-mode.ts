@@ -76,6 +76,10 @@ export interface BeancountState {
 	bqlComment: boolean;
 	/** Inside a double-quoted beancount string (which may span lines). */
 	inString: boolean;
+	/** The current string is an `option` key (scoped support.variable). */
+	optionKey: boolean;
+	/** Column-0 line matching no directive: upstream leaves it fully unscoped. */
+	looseLine: boolean;
 }
 
 const DATE_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}/;
@@ -121,29 +125,33 @@ function takePending(stream: StringStream, state: BeancountState): string | null
 	return item.style;
 }
 
-function accountPieces(account: string): PendingToken[] {
-	const pieces: PendingToken[] = [{ re: /^[A-Z][a-z]+/, style: 'variable-2' }];
-	const components = account.split(':').length - 1;
-	for (let i = 0; i < components; i++) {
-		pieces.push({ re: /^:/, style: 'punctuation' });
-		pieces.push({ re: /^[^:\s]+/, style: 'variable' });
-	}
-	return pieces;
+function accountPieces(): PendingToken[] {
+	// Upstream scopes the root plus its colon, then hands the whole rest of
+	// the account (`US:BofA:Checking`, internal colons included) to a single
+	// variable.other.account span.
+	return [
+		{ re: /^[A-Z][a-z]+/, style: 'variable-2' },
+		{ re: /^:/, style: 'punctuation' },
+		{ re: /^[^\s]+/, style: 'variable' },
+	];
 }
 
 function stringToken(stream: StringStream, state: BeancountState): string {
+	// `option`'s first string is scoped support.variable upstream, not string.
+	const style = state.optionKey ? 'variable' : 'string';
 	if (!state.inString) {
 		stream.next();
 		state.inString = true;
-		return 'string';
+		return style;
 	}
-	if (stream.match(/^\\./)) return 'string-2';
+	if (stream.match(/^\\./)) return state.optionKey ? 'variable' : 'string-2';
 	if (stream.eat('"')) {
 		state.inString = false;
-		return 'string';
+		state.optionKey = false;
+		return style;
 	}
 	if (!stream.match(/^[^"\\]+/)) stream.next();
-	return 'string';
+	return style;
 }
 
 /**
@@ -153,6 +161,7 @@ function stringToken(stream: StringStream, state: BeancountState): string {
 function classifyLine(stream: StringStream, state: BeancountState): boolean {
 	const line = stream.string;
 	state.directiveWord = false;
+	state.looseLine = false;
 	if (/^[ \t]*$/.test(line)) {
 		state.entry = 'none';
 		return false;
@@ -186,9 +195,11 @@ function classifyLine(stream: StringStream, state: BeancountState): boolean {
 		return false;
 	}
 	// Indented lines continue the current entry; anything else at column 0
-	// starts no entry.
+	// (org headings, stray prose) matches no upstream pattern and is left
+	// unscoped for the whole line.
 	if (/^[ \t]/.test(line)) return false;
 	state.entry = 'none';
+	state.looseLine = true;
 	return false;
 }
 
@@ -271,6 +282,11 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	if (state.bql) return bqlToken(stream, state);
 	if (state.inString) return stringToken(stream, state);
 	if (stream.sol() && classifyLine(stream, state)) return takePending(stream, state);
+	if (state.looseLine) {
+		// No upstream pattern matches this line; leave it entirely unscoped.
+		stream.skipToEnd();
+		return null;
+	}
 	if (stream.eatSpace()) return null;
 	const rest = stream.string.slice(stream.pos);
 	if (stream.peek() === ';') {
@@ -296,7 +312,10 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	}
 	if (state.directiveWord) {
 		state.directiveWord = false;
-		if (stream.match(/^[A-Za-z]+/) || stream.match(/^[*!&#?%PSTCURM]/)) return 'builtin';
+		if (stream.match(/^[A-Za-z]+/) || stream.match(/^[*!&#?%PSTCURM]/)) {
+			state.optionKey = state.entry === 'directive' && stream.current() === 'option';
+			return 'builtin';
+		}
 	}
 	if (TAG_RE.test(rest)) {
 		state.pending = TAG_PARTS.slice();
@@ -312,9 +331,8 @@ function token(stream: StringStream, state: BeancountState): string | null {
 		stream.match(SIGN_RE);
 		return 'operator';
 	}
-	const account = ACCOUNT_RE.exec(rest);
-	if (account) {
-		state.pending = accountPieces(account[0]);
+	if (ACCOUNT_RE.test(rest)) {
+		state.pending = accountPieces();
 		return takePending(stream, state);
 	}
 	if (BOOL_RE.test(rest)) {
@@ -335,7 +353,9 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	}
 	if (stream.eat(',')) return 'punctuation';
 	stream.next();
-	return 'error';
+	// Outside entries (e.g. org headings in ledger files) upstream leaves
+	// text unscoped; inside entries its `#illegal` rule marks it invalid.
+	return state.entry === 'none' ? null : 'error';
 }
 
 export const beancountMode = {
@@ -349,6 +369,8 @@ export const beancountMode = {
 		bqlString: false,
 		bqlComment: false,
 		inString: false,
+		optionKey: false,
+		looseLine: false,
 	}),
 	blankLine,
 	token,
