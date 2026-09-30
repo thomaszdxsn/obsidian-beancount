@@ -41,7 +41,12 @@ describe('esbuild production bundle', () => {
 				if (id === 'obsidian') {
 					return obsidian;
 				}
-				if (id === '@codemirror/language' || id === '@codemirror/state' || id === '@lezer/highlight') {
+				if (
+					id === '@codemirror/language' ||
+					id === '@codemirror/state' ||
+					id === '@codemirror/view' ||
+					id === '@lezer/highlight'
+				) {
 					return nodeRequire(id);
 				}
 				throw new Error(`bundle must not require external module "${id}"`);
@@ -64,15 +69,16 @@ describe('esbuild production bundle', () => {
 				id: 'beancount-obsidian',
 			} as PluginManifest);
 			await instance.onload();
-			const { events, editorSuggests, commands, settingTabs, cleanups, ...registrations } = (
+			const { events, editorSuggests, editorExtensions, commands, settingTabs, cleanups, ...registrations } = (
 				instance as unknown as RecordingPlugin
 			).registrations;
 			// The plugin's whole surface, in bundle form: one command, one
 			// settings tab, the vault events behind completion and on-save
-			// alignment, the two editor suggests, and the cleanup for pending
-			// on-save work. Nothing else.
+			// alignment, the two editor suggests, the posting-indent Enter
+			// binding, and the cleanup for pending on-save work. Nothing else.
 			expect(commands.map((command) => command.id)).toEqual(['align-decimal-points']);
 			expect(settingTabs).toBe(1);
+			expect(editorExtensions).toHaveLength(1);
 			expect(registrations).toEqual({
 				ribbonIcons: [],
 				statusBarItems: 0,

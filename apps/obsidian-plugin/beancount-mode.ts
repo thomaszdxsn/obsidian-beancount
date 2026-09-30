@@ -107,7 +107,8 @@ const BOOL_RE = /^(?:TRUE|FALSE)\b/;
 const COMMODITY_RE = /^[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]/;
 const FLAG_CHARS = '*!&#?%PSTCURM';
 const FLAG_RE = /^[*!&#?%PSTCURM](?=[ \t])/;
-const DATED_ENTRY_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}(?:[ \t]*(txn|[*!&#?%PSTCURM])|[ \t]+(open|close|pad|custom|event|commodity|note|document|query|price|balance))(?![A-Za-z0-9])/;
+/** A dated entry header — what opens an entry whose lines are indented. */
+export const DATED_ENTRY_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}(?:[ \t]*(txn|[*!&#?%PSTCURM])|[ \t]+(open|close|pad|custom|event|commodity|note|document|query|price|balance))(?![A-Za-z0-9])/;
 const DIRECTIVE_RE = /^[ \t]*(pushtag|poptag|include|option|plugin)(?![A-Za-z0-9])/;
 const META_RE = /^[ \t]+[a-z][A-Za-z0-9\-_]+:/;
 
