@@ -113,6 +113,42 @@ describe('postingIndentPlan', () => {
 		});
 	});
 
+	it('shifts later carets past a replaced selection, not into its deleted span', () => {
+		const text = '2026-01-01 * "A"\n  Assets:Cash';
+		// `"Assets"` selected (6 chars) and a caret at the end of the line.
+		// The deletion shortens the document by 3, so the later caret lands
+		// at 30 = end of the new text — not 33, past its end.
+		expect(
+			postingIndentPlan(text, [
+				{ anchor: 19, head: 25 },
+				{ anchor: 30, head: 30 },
+			])
+		).toEqual({
+			changes: [
+				{ from: 19, to: 25, insert: '\n  ' },
+				{ from: 30, to: 30, insert: '\n  ' },
+			],
+			carets: [22, 30],
+		});
+	});
+
+	it('lets the line the edit starts on decide the indent', () => {
+		const text = '2026-10-01 * "S"\n  Assets:Cash\nprose';
+		// From inside the entry to the end of the prose below: the newline
+		// splits the posting line, so the entry continues — in either
+		// selection direction.
+		const forward = postingIndentPlan(text, [{ anchor: 25, head: 36 }]);
+		expect(forward).toEqual({
+			changes: [{ from: 25, to: 36, insert: '\n  ' }],
+			carets: [28],
+		});
+		expect(postingIndentPlan(text, [{ anchor: 36, head: 25 }])).toEqual(forward);
+		// From the prose above into the entry: the edit starts outside, so
+		// Enter stays the editor's own.
+		const outside = 'prose\n2026-10-01 * "S"\n  Assets:Cash';
+		expect(postingIndentPlan(outside, [{ anchor: 2, head: 30 }])).toBeNull();
+	});
+
 	it('has nothing to say outside entries and falls through', () => {
 		// Every caret on plain text or a blank line: the editor's own Enter
 		// handling does the work.

@@ -87,7 +87,10 @@ export function postingIndentPlan(text: string, carets: readonly Caret[]): Inden
 	for (const caret of ordered) {
 		const from = Math.min(caret.anchor, caret.head);
 		const to = Math.max(caret.anchor, caret.head);
-		const insert = wantsIndent(lines, lineAt(caret.head)) ? ENTRY_INDENT : '\n';
+		// The line holding the start of the edit decides: that is the line
+		// the newline splits, collapsed carets and single-line selections
+		// included.
+		const insert = wantsIndent(lines, lineAt(from)) ? ENTRY_INDENT : '\n';
 		if (insert === ENTRY_INDENT) indented = true;
 		// The caret lands at the end of its insert — after the indent — and
 		// everything after this change shifts by what the earlier ones did.
