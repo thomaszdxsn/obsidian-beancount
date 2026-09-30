@@ -44,10 +44,14 @@ function fakeRegistry(): FakeRegistry {
 async function loadPlugin(
 	vault: FakeVault = new FakeVault(),
 	loadedData: unknown = null,
-	leaves: FakeLeaf[] = []
+	leaves: FakeLeaf[] = [],
+	activeEditor: FakeLeaf['view'] | null = null
 ): Promise<{ plugin: BeancountPlugin & RecordingPlugin; vault: FakeVault }> {
 	const plugin = new BeancountPlugin(
-		{ vault: vault.api, workspace: { getLeavesOfType: () => leaves } } as unknown as App,
+		{
+			vault: vault.api,
+			workspace: { getLeavesOfType: () => leaves, activeEditor },
+		} as unknown as App,
 		manifest
 	) as BeancountPlugin & RecordingPlugin;
 	plugin.loadedData = loadedData;
@@ -195,7 +199,7 @@ describe('BeancountPlugin', () => {
 		expect(() => plugin.registrations.cleanups[0]()).not.toThrow();
 	});
 
-	it('aligns the active file from the command', async () => {
+	it('aligns the transaction block at the cursor from the command', async () => {
 		const { plugin } = await loadPlugin();
 		const editor = createEditor([
 			'2026-10-01 * "Store"',
@@ -211,6 +215,60 @@ describe('BeancountPlugin', () => {
 			'  Assets:Cash  -12.5 USD',
 		]);
 		expect(editor.transactions).toHaveLength(1);
+	});
+
+	it('aligns only the transaction block at the cursor', async () => {
+		const { plugin } = await loadPlugin();
+		const editor = createEditor([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash -1234.5 CNY',
+		]);
+		editor.setCursor({ line: 6, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor);
+
+		// The first transaction is outside the cursor's block and stays as
+		// written — including its own unaligned-looking gap.
+		expect(editor.lines).toEqual([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash       -1234.5 CNY',
+		]);
+	});
+
+	it('aligns the selection when there is one', async () => {
+		const { plugin } = await loadPlugin();
+		const editor = createEditor([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash -1234.5 CNY',
+		]);
+		editor.selections = [{ anchor: { line: 1, ch: 0 }, head: { line: 2, ch: 0 } }];
+
+		plugin.registrations.commands[0].editorCallback?.(editor);
+
+		expect(editor.lines).toEqual([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash  -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash -1234.5 CNY',
+		]);
 	});
 
 	it('leaves an already aligned file untouched from the command', async () => {
@@ -272,18 +330,30 @@ describe('BeancountPlugin', () => {
 		]);
 	});
 
+	it('keeps a caret at the gap start with the account', async () => {
+		const { plugin } = await loadPlugin();
+		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		// Exactly where the account ends and the gap begins on the line whose
+		// gap widens; the account side keeps the caret.
+		editor.setCursor({ line: 1, ch: 13 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor);
+
+		expect(editor.getCursor()).toEqual({ line: 1, ch: 13 });
+	});
+
 	it('keeps a range selection from collapsing', async () => {
 		const { plugin } = await loadPlugin();
 		const editor = createEditor(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY']);
 		// An amount selected end-to-end, as it would be before retyping it.
-		editor.selections = [{ anchor: { line: 0, ch: 15 }, head: { line: 0, ch: 19 } }];
+		editor.selections = [{ anchor: { line: 0, ch: 15 }, head: { line: 1, ch: 23 } }];
 
 		plugin.registrations.commands[0].editorCallback?.(editor);
 
 		expect(editor.lines[0]).toBe('  Assets:Cash       12.5 CNY');
 		// Forcing a caret here would make the next keystroke insert instead
 		// of replacing the selection.
-		expect(editor.selections).toEqual([{ anchor: { line: 0, ch: 15 }, head: { line: 0, ch: 19 } }]);
+		expect(editor.selections).toEqual([{ anchor: { line: 0, ch: 15 }, head: { line: 1, ch: 23 } }]);
 	});
 
 	it('skips on-save alignment while the setting is off', async () => {
@@ -355,6 +425,38 @@ describe('BeancountPlugin', () => {
 		await vault.emit('modify', file);
 		await delay(600);
 		expect(editor.transactions).toHaveLength(1);
+	});
+
+	it('finds the file in a background leaf when another file is active', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const otherFile = vault.write('other.bean', '');
+		const otherView = { file: otherFile, editor: createEditor(['']) };
+		await loadPlugin(
+			vault,
+			{ alignOnSave: true },
+			[{ view: otherView }, { view: { file, editor } }],
+			otherView
+		);
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(vault.writes).toEqual([]);
+	});
+
+	it('skips the pending align when the setting is turned off meanwhile', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		const { plugin } = await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', file);
+		plugin.settings.alignOnSave = false;
+		await delay(600);
+
+		expect(vault.writes).toEqual([]);
 	});
 
 	it('drops pending on-save work on unload', async () => {
