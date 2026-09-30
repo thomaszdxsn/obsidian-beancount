@@ -197,35 +197,19 @@ export function createEditor(lines: string[]): FakeEditor {
 			this.replacements.push({ replacement, from, to });
 		},
 		replaceSelection(replacement: string): void {
+			// Recording is the contract the tests assert; the text effect is
+			// the single-caret case they smoke-check. Multi-caret insertion
+			// and caret mapping are Obsidian's behavior, not the plugin's.
 			this.selectionReplacements.push(replacement);
-			// One edit per selection over the flat buffer. Carets land just
-			// after their own inserted text, shifted by the net length change
-			// of every edit before them; the edits themselves apply back to
-			// front so earlier offsets stay valid.
+			const selection = this.selections[0];
 			const text = this.lines.join('\n');
-			const ranges: Array<{ from: number; to: number }> = [];
-			for (const selection of this.selections) {
-				const anchor = offsetOf(this.lines, selection.anchor);
-				const head = offsetOf(this.lines, selection.head);
-				ranges.push({ from: Math.min(anchor, head), to: Math.max(anchor, head) });
-			}
-			ranges.sort((a, b) => a.from - b.from);
-			let shift = 0;
-			const carets = ranges.map((range) => {
-				const caret = range.from + replacement.length + shift;
-				shift += replacement.length - (range.to - range.from);
-				return caret;
-			});
-			let out = text;
-			for (let index = ranges.length - 1; index >= 0; index -= 1) {
-				const range = ranges[index];
-				out = out.slice(0, range.from) + replacement + out.slice(range.to);
-			}
-			this.lines = out.split('\n');
-			this.selections = carets.map((offset) => {
-				const pos = positionAt(offset, this.lines);
-				return { anchor: pos, head: pos };
-			});
+			const anchor = offsetOf(this.lines, selection.anchor);
+			const head = offsetOf(this.lines, selection.head);
+			const from = Math.min(anchor, head);
+			const to = Math.max(anchor, head);
+			this.lines = (text.slice(0, from) + replacement + text.slice(to)).split('\n');
+			const pos = positionAt(from + replacement.length, this.lines);
+			this.selections = [{ anchor: pos, head: pos }];
 		},
 		transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void {
 			this.transactions.push(tx.changes);

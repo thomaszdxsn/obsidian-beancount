@@ -81,7 +81,7 @@ describe('BeancountPlugin', () => {
 	// settings tab, the vault events behind completion and on-save alignment,
 	// the two editor suggests and the posting-indent Enter binding — no
 	// ribbon, status bar, DOM listeners or intervals.
-	it('registers only the alignment command, settings tab and known listeners', async () => {
+	it('registers only the alignment and date commands, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
 		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, ...rest } =
 			plugin.registrations;

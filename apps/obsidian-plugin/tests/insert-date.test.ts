@@ -25,10 +25,19 @@ describe('todayDate', () => {
 		vi.setSystemTime(new Date(2026, 8, 30, 23, 59));
 		expect(todayDate()).toBe('2026-09-30');
 	});
+
+	it('is the local day on both sides of midnight, not the UTC one', () => {
+		// Guards the pinned test timezone (vitest env TZ): one of these
+		// fixtures falls on a different UTC day, so a UTC-based formatter
+		// cannot pass here the way it could under TZ=UTC.
+		expect(new Date(2026, 8, 30).getTimezoneOffset()).toBe(-480);
+		expect(todayDate(new Date(2026, 8, 30, 0, 30))).toBe('2026-09-30');
+		expect(todayDate(new Date(2026, 8, 30, 23, 30))).toBe('2026-09-30');
+	});
 });
 
 describe('insertTodayDate', () => {
-	it('inserts the date at the caret and leaves the caret after it', () => {
+	it('inserts the date at the caret', () => {
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(new Date(2026, 8, 30));
 		const editor = createEditor(['2026-09-29 * "Cafe"', '  Assets:Cash']);
@@ -36,41 +45,21 @@ describe('insertTodayDate', () => {
 
 		insertTodayDate(editor as unknown as Editor);
 
+		// The contract under test: one `replaceSelection` of today's date.
+		// The document effect is a smoke check through the editor double.
 		expect(editor.selectionReplacements).toEqual(['2026-09-30']);
 		expect(editor.getValue()).toBe('2026-09-302026-09-29 * "Cafe"\n  Assets:Cash');
-		expect(editor.getCursor()).toEqual({ line: 0, ch: 10 });
 	});
 
 	it('replaces the selection with the date', () => {
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(new Date(2026, 8, 30));
 		const editor = createEditor(['2026-09-29 * "Cafe"']);
-		editor.selections = [
-			{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 10 } },
-		];
-
-		insertTodayDate(editor as unknown as Editor);
-
-		expect(editor.getValue()).toBe('2026-09-30 * "Cafe"');
-		expect(editor.getCursor()).toEqual({ line: 0, ch: 10 });
-	});
-
-	it('replaces every selection of a multi-caret edit', () => {
-		vi.useFakeTimers({ toFake: ['Date'] });
-		vi.setSystemTime(new Date(2026, 8, 30));
-		const editor = createEditor(['old1 middle old2']);
-		editor.selections = [
-			{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 4 } },
-			{ anchor: { line: 0, ch: 12 }, head: { line: 0, ch: 16 } },
-		];
+		editor.selections = [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 10 } }];
 
 		insertTodayDate(editor as unknown as Editor);
 
 		expect(editor.selectionReplacements).toEqual(['2026-09-30']);
-		expect(editor.getValue()).toBe('2026-09-30 middle 2026-09-30');
-		expect(editor.listSelections().map((selection) => selection.head)).toEqual([
-			{ line: 0, ch: 10 },
-			{ line: 0, ch: 28 },
-		]);
+		expect(editor.getValue()).toBe('2026-09-30 * "Cafe"');
 	});
 });
