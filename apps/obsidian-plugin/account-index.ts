@@ -1,10 +1,7 @@
 /**
- * Account extraction and cache for the vault.
- *
- * The index is a per-file map of extracted account names plus a cached,
- * sorted union so that suggestion queries never re-scan file contents.
- * File events (create/modify/delete/rename) invalidate exactly the entries
- * they touch; nothing else is re-read.
+ * Account names: what counts as one (`extractAccounts`) and how to recognize
+ * one while typing (`ACCOUNT_PREFIX_RE`). The vault-wide cache lives in
+ * `VaultIndex`, fed by the extractor.
  */
 
 /**
@@ -27,62 +24,4 @@ export function extractAccounts(content: string): ReadonlySet<string> {
 	const accounts = new Set<string>();
 	for (const match of content.matchAll(ACCOUNT_RE)) accounts.add(match[0]);
 	return accounts;
-}
-
-export class AccountIndex {
-	/** Account names by vault path; folders may hold re-keyed children on rename. */
-	private readonly accountsByPath = new Map<string, ReadonlySet<string>>();
-	/** Cached sorted union of `accountsByPath`, recomputed after each change. */
-	private sorted: readonly string[] | null = null;
-
-	setFileContent(path: string, content: string): void {
-		const accounts = extractAccounts(content);
-		// Only account-carrying files are tracked: `renameFile`'s "tracked"
-		// answer then means "re-keyed cached names", which is exactly when a
-		// rename can skip its re-read. An account-less file stays untracked.
-		if (accounts.size === 0) this.accountsByPath.delete(path);
-		else this.accountsByPath.set(path, accounts);
-		this.sorted = null;
-	}
-
-	removeFile(path: string): void {
-		if (this.accountsByPath.delete(path)) this.sorted = null;
-	}
-
-	/**
-	 * Re-key entries on rename. A folder rename moves every tracked path
-	 * under `oldPath`, so children are re-keyed by prefix instead of being
-	 * lost — their contents did not change, so no re-read is needed.
-	 * Returns whether anything was tracked, so callers can tell a moved
-	 * entry apart from a rename that needs a fresh read (e.g. `.txt` → `.md`).
-	 */
-	renameFile(oldPath: string, newPath: string): boolean {
-		const oldPrefix = oldPath + '/';
-		let moved = false;
-		for (const [path, accounts] of [...this.accountsByPath]) {
-			if (path !== oldPath && !path.startsWith(oldPrefix)) continue;
-			this.accountsByPath.delete(path);
-			this.accountsByPath.set(newPath + path.slice(oldPath.length), accounts);
-			moved = true;
-			this.sorted = null;
-		}
-		return moved;
-	}
-
-	accounts(): readonly string[] {
-		if (!this.sorted) {
-			const union = new Set<string>();
-			for (const fileAccounts of this.accountsByPath.values()) {
-				for (const account of fileAccounts) union.add(account);
-			}
-			this.sorted = [...union].sort();
-		}
-		return this.sorted;
-	}
-
-	/** Case-insensitive prefix match over every cached account. */
-	match(query: string): string[] {
-		const needle = query.toLowerCase();
-		return this.accounts().filter((account) => account.toLowerCase().startsWith(needle));
-	}
 }

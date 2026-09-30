@@ -61,8 +61,8 @@ describe('esbuild production bundle', () => {
 			await instance.onload();
 			const { events, editorSuggests, ...registrations } = (instance as unknown as RecordingPlugin).registrations;
 			// No sample UI: no commands, ribbon, status bar, settings or stray
-			// listeners. The vault events and editor suggest belong to account
-			// completion.
+			// listeners. The vault events and editor suggests belong to account
+			// and payee completion.
 			expect(registrations).toEqual({
 				commands: [],
 				ribbonIcons: [],
@@ -73,7 +73,7 @@ describe('esbuild production bundle', () => {
 				cleanups: [],
 			});
 			expect(events).toHaveLength(4);
-			expect(editorSuggests).toHaveLength(1);
+			expect(editorSuggests).toHaveLength(2);
 			await instance.onunload();
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });

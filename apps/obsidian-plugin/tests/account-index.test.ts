@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AccountIndex, extractAccounts } from '../account-index';
+import { extractAccounts } from '../account-index';
 
 describe('extractAccounts', () => {
 	it('extracts every account-shaped name in the content', () => {
@@ -59,92 +59,5 @@ describe('extractAccounts', () => {
 
 	it('returns an empty set for empty content', () => {
 		expect([...extractAccounts('')]).toEqual([]);
-	});
-});
-
-describe('AccountIndex', () => {
-	it('caches accounts per file and exposes a sorted union', () => {
-		const index = new AccountIndex();
-		index.setFileContent('b.md', 'Expenses:Food');
-		index.setFileContent('a.md', 'Assets:Cash Expenses:Food');
-		expect(index.accounts()).toEqual(['Assets:Cash', 'Expenses:Food']);
-		expect(index.accounts()).toBe(index.accounts()); // cached between calls
-	});
-
-	it('replaces a file’s accounts when its content changes', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Old');
-		index.setFileContent('a.md', 'Assets:New');
-		expect(index.accounts()).toEqual(['Assets:New']);
-	});
-
-	it('tracks nothing for content without accounts', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash');
-		index.setFileContent('a.md', 'just prose, no names');
-		expect(index.accounts()).toEqual([]);
-		// Account-less files are untracked: a rename needs a fresh read.
-		expect(index.renameFile('a.md', 'b.md')).toBe(false);
-	});
-
-	it('drops a file’s accounts on removal', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash');
-		index.setFileContent('b.md', 'Expenses:Food');
-		index.removeFile('a.md');
-		expect(index.accounts()).toEqual(['Expenses:Food']);
-	});
-
-	it('keeps an account that another file still contains', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash');
-		index.setFileContent('b.md', 'Assets:Cash');
-		index.removeFile('a.md');
-		expect(index.accounts()).toEqual(['Assets:Cash']);
-	});
-
-	it('ignores removal of untracked paths', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash');
-		index.removeFile('missing.md');
-		expect(index.accounts()).toEqual(['Assets:Cash']);
-	});
-
-	it('re-keys a renamed file without re-reading its content', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash');
-		expect(index.renameFile('a.md', 'b.md')).toBe(true);
-		expect(index.accounts()).toEqual(['Assets:Cash']);
-		index.removeFile('a.md');
-		expect(index.accounts()).toEqual(['Assets:Cash']);
-	});
-
-	it('re-keys children on a folder rename', () => {
-		const index = new AccountIndex();
-		index.setFileContent('dir/a.md', 'Assets:Cash');
-		index.setFileContent('other.md', 'Expenses:Food');
-		expect(index.renameFile('dir', 'moved')).toBe(true);
-		expect(index.accounts()).toEqual(['Assets:Cash', 'Expenses:Food']);
-		index.removeFile('moved/a.md');
-		expect(index.accounts()).toEqual(['Expenses:Food']);
-	});
-
-	it('reports nothing moved for unknown rename sources', () => {
-		const index = new AccountIndex();
-		expect(index.renameFile('missing.md', 'b.md')).toBe(false);
-	});
-
-	it('matches prefixes case-insensitively in sorted order', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash:Wallet Assets:Broker:IBKR');
-		expect(index.match('assets:ca')).toEqual(['Assets:Cash:Wallet']);
-		expect(index.match('Assets:')).toEqual(['Assets:Broker:IBKR', 'Assets:Cash:Wallet']);
-	});
-
-	it('returns every account for an empty query and nothing for a miss', () => {
-		const index = new AccountIndex();
-		index.setFileContent('a.md', 'Assets:Cash Expenses:Food');
-		expect(index.match('')).toEqual(['Assets:Cash', 'Expenses:Food']);
-		expect(index.match('Income')).toEqual([]);
 	});
 });

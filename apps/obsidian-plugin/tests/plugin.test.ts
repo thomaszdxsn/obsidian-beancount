@@ -69,30 +69,34 @@ describe('BeancountPlugin', () => {
 	});
 
 	// Phase 0 acceptance: no sample UI — no ribbon, no commands, no status bar
-	// text, no settings tab, no stray listeners. Account completion wires
-	// vault events and one editor suggest, which are not UI.
+	// text, no settings tab, no stray listeners. Account and payee completion
+	// wire vault events and one editor suggest each, which are not UI.
 	it('registers no sample UI when loaded and unloaded', async () => {
 		const { plugin } = loadPlugin();
 		const { events, editorSuggests, ...sampleUi } = plugin.registrations;
 		expect(sampleUi).toEqual(emptyRegistrations());
 		expect(events).toHaveLength(4);
-		expect(editorSuggests).toHaveLength(1);
+		expect(editorSuggests).toHaveLength(2);
 
 		await plugin.onunload();
 		expect(plugin.registrations).toEqual({ ...sampleUi, events, editorSuggests });
 	});
 
-	it('wires account completion to the vault on load', async () => {
+	it('wires account and payee completion to the vault on load', async () => {
 		const vault = new FakeVault();
-		vault.write('ledger.bean', '2026-09-30 open Assets:Cash:Wallet');
+		vault.write(
+			'ledger.bean',
+			['2026-09-30 * "Whole Foods" "Groceries"', '  Expenses:Food  10.00 USD'].join('\n')
+		);
 
 		const { plugin } = loadPlugin(vault);
 		await flush();
 
-		const suggest = plugin.registrations.editorSuggests[0] as {
+		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
 			getSuggestions(context: { query: string }): string[];
-		};
-		expect(suggest.getSuggestions({ query: 'Assets:Cash' })).toEqual(['Assets:Cash:Wallet']);
+		}>;
+		expect(accounts.getSuggestions({ query: 'Expenses' })).toEqual(['Expenses:Food']);
+		expect(payees.getSuggestions({ query: 'Whole' })).toEqual(['Whole Foods']);
 	});
 
 	it('installs the beancount mode and its bean alias into the mode registry', () => {
