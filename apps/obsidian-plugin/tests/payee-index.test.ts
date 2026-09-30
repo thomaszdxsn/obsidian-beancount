@@ -30,6 +30,15 @@ describe('extractPayees', () => {
 		expect([...extractPayees('2026/09/30 *"Payee" "N"')]).toEqual(['Payee']);
 	});
 
+	it('accepts tabs between the date, flag and string', () => {
+		expect([...extractPayees('2026-09-30\t*\t"Payee" "N"')]).toEqual(['Payee']);
+	});
+
+	it('keeps punctuation and spaces inside the payee verbatim', () => {
+		const content = '2026-09-30 * "Joe\'s Cafe, Inc. (24h)" "N"';
+		expect([...extractPayees(content)]).toEqual(["Joe's Cafe, Inc. (24h)"]);
+	});
+
 	it('keeps escapes as written', () => {
 		expect([...extractPayees('2026-09-30 * "Say \\"hi\\"" "N"')]).toEqual(['Say \\"hi\\"']);
 	});
