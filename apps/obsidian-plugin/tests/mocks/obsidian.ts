@@ -100,8 +100,15 @@ export class Plugin {
 	}
 }
 
+/** Every `Notice` message shown, in order; tests clear it between cases. */
+export const notices: string[] = [];
+
+export class Notice {
+	constructor(message: string | DocumentFragment, duration?: number) {
+		notices.push(String(message));
+	}
+}
 export class Modal {}
-export class Notice {}
 export class MarkdownView {}
 export class Editor {}
 
@@ -113,11 +120,22 @@ export interface FakeToggle {
 	onChange(callback: (value: boolean) => unknown): FakeToggle;
 }
 
+/** The text input a `Setting.addText` callback configures. */
+export interface FakeText {
+	value: string;
+	placeholder: string;
+	onChangeHandler: ((value: string) => unknown) | null;
+	setPlaceholder(placeholder: string): FakeText;
+	setValue(value: string): FakeText;
+	onChange(callback: (value: string) => unknown): FakeText;
+}
+
 /** A recorded `Setting`; tests reach it through the tab's container. */
 export interface FakeSetting {
 	name: string;
 	desc: string;
 	toggle: FakeToggle | null;
+	text: FakeText | null;
 }
 
 /** The container a `PluginSettingTab` hands to each `Setting`. */
@@ -149,6 +167,7 @@ export class Setting {
 	name = '';
 	desc = '';
 	toggle: FakeToggle | null = null;
+	text: FakeText | null = null;
 
 	constructor(container: FakeSettingContainer) {
 		container.settings.push(this);
@@ -179,6 +198,29 @@ export class Setting {
 		};
 		this.toggle = toggle;
 		configure(toggle);
+		return this;
+	}
+
+	addText(configure: (text: FakeText) => unknown): this {
+		const text: FakeText = {
+			value: '',
+			placeholder: '',
+			onChangeHandler: null,
+			setPlaceholder(placeholder: string): FakeText {
+				this.placeholder = placeholder;
+				return this;
+			},
+			setValue(value: string): FakeText {
+				this.value = value;
+				return this;
+			},
+			onChange(callback: (value: string) => unknown): FakeText {
+				this.onChangeHandler = callback;
+				return this;
+			},
+		};
+		this.text = text;
+		configure(text);
 		return this;
 	}
 }

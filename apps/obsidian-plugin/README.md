@@ -31,6 +31,14 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
   selection when there is one. It ships with the default hotkey `Mod+Shift+D`;
   a hotkey customized for this command wins over the default.
+- **Save-time validation**: saving a `.bean` or `.beancount` file runs
+  `bean-check` (debounced) and marks every line it complains about — a wavy
+  underline whose tooltip is the message, plus a dot in the gutter. The
+  message is parsed from stderr, which is the whole report: the exit code is
+  not consulted. Settings hold the executable path (empty uses `bean-check`
+  from PATH; a missing one prompts to `pip install beancount`; only a
+  `bean-check` binary is accepted) and an optional
+  entry ledger, whose whole `include` chain is checked in one run.
 
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.

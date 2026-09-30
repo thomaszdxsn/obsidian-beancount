@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { builtinModules, createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,10 +37,14 @@ describe('esbuild production bundle', () => {
 			// at runtime (`obsidian` plus the CodeMirror/Lezer packages it
 			// bundles); everything else must be bundled into main.js.
 			const nodeRequire = createRequire(import.meta.url);
+			// Desktop-only: bean-check is started through Node's own modules,
+			// which esbuild leaves external and Electron provides at runtime.
+			const nodeBuiltins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
 			const requireShim = (id: string): unknown => {
 				if (id === 'obsidian') {
 					return obsidian;
 				}
+				if (nodeBuiltins.has(id)) return nodeRequire(id);
 				if (
 					id === '@codemirror/language' ||
 					id === '@codemirror/state' ||
@@ -79,7 +83,7 @@ describe('esbuild production bundle', () => {
 			// work. Nothing else.
 			expect(commands.map((command) => command.id)).toEqual(['align-decimal-points', 'insert-today-date']);
 			expect(settingTabs).toBe(1);
-			expect(editorExtensions).toHaveLength(1);
+			expect(editorExtensions).toHaveLength(2);
 			expect(registrations).toEqual({
 				ribbonIcons: [],
 				statusBarItems: 0,
