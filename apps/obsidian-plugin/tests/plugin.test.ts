@@ -2,7 +2,7 @@ import type { App, PluginManifest } from 'obsidian';
 import { Plugin } from 'obsidian';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Plugin as RecordingPlugin } from './mocks/obsidian';
-import { FakeVault, flush } from './fakes';
+import { createEditor, FakeVault, flush } from './fakes';
 import { beancountMode } from '../beancount-mode';
 import BeancountPlugin from '../main';
 
@@ -69,30 +69,58 @@ describe('BeancountPlugin', () => {
 	});
 
 	// Phase 0 acceptance: no sample UI — no ribbon, no commands, no status bar
-	// text, no settings tab, no stray listeners. Account completion wires
-	// vault events and one editor suggest, which are not UI.
+	// text, no settings tab, no stray listeners. Account and payee completion
+	// wire vault events and one editor suggest each, which are not UI.
 	it('registers no sample UI when loaded and unloaded', async () => {
 		const { plugin } = loadPlugin();
 		const { events, editorSuggests, ...sampleUi } = plugin.registrations;
 		expect(sampleUi).toEqual(emptyRegistrations());
 		expect(events).toHaveLength(4);
-		expect(editorSuggests).toHaveLength(1);
+		expect(editorSuggests).toHaveLength(2);
 
 		await plugin.onunload();
 		expect(plugin.registrations).toEqual({ ...sampleUi, events, editorSuggests });
 	});
 
-	it('wires account completion to the vault on load', async () => {
+	it('wires account and payee completion to the vault on load', async () => {
 		const vault = new FakeVault();
-		vault.write('ledger.bean', '2026-09-30 open Assets:Cash:Wallet');
+		vault.write(
+			'ledger.bean',
+			['2026-09-30 * "Whole Foods" "Groceries"', '  Expenses:Food  10.00 USD'].join('\n')
+		);
 
 		const { plugin } = loadPlugin(vault);
 		await flush();
 
-		const suggest = plugin.registrations.editorSuggests[0] as {
+		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
 			getSuggestions(context: { query: string }): string[];
-		};
-		expect(suggest.getSuggestions({ query: 'Assets:Cash' })).toEqual(['Assets:Cash:Wallet']);
+		}>;
+		expect(accounts.getSuggestions({ query: 'Expenses' })).toEqual(['Expenses:Food']);
+		expect(payees.getSuggestions({ query: 'Whole' })).toEqual(['Whole Foods']);
+	});
+
+	it('leaves the payee field to the payee suggest', async () => {
+		const vault = new FakeVault();
+		vault.write(
+			'ledger.bean',
+			['2026-09-30 * "Exxon" "Fuel"', '  Expenses:Food  10.00 USD'].join('\n')
+		);
+		const { plugin } = loadPlugin(vault);
+		await flush();
+		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
+			onTrigger: (cursor: { line: number; ch: number }, editor: unknown, file: null) => unknown;
+		}>;
+		// `"Ex` prefixes both the payee `Exxon` and the account
+		// `Expenses:Food`; the payee field must show payees, not accounts.
+		const payeeLine = createEditor(['2026-10-02 * "Ex']);
+		const cursor = { line: 0, ch: payeeLine.lines[0].length };
+		expect(accounts.onTrigger(cursor, payeeLine, null)).toBeNull();
+		expect(payees.onTrigger(cursor, payeeLine, null)).toMatchObject({ query: 'Ex' });
+		// …while account completion still answers on posting lines.
+		const postingLine = createEditor(['  Expenses:Fo']);
+		expect(accounts.onTrigger({ line: 0, ch: 13 }, postingLine, null)).toMatchObject({
+			query: 'Expenses:Fo',
+		});
 	});
 
 	it('installs the beancount mode and its bean alias into the mode registry', () => {

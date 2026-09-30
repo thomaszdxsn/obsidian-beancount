@@ -1,6 +1,10 @@
 import { Plugin } from 'obsidian';
 import { beancountMode } from './beancount-mode';
-import { registerAccountSuggest } from './account-suggest';
+import { extractAccounts } from './account-index';
+import { AccountSuggest } from './account-suggest';
+import { extractPayees } from './payee-index';
+import { PayeeSuggest } from './payee-suggest';
+import { registerVaultIndex, VaultIndex } from './vault-index';
 
 /**
  * Obsidian highlights fenced code blocks through its bundled CodeMirror 5
@@ -46,7 +50,12 @@ export default class BeancountPlugin extends Plugin {
 	onload() {
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
-		registerAccountSuggest(this);
+		// One vault scan feeds both completion indexes.
+		const accounts = new VaultIndex(extractAccounts);
+		const payees = new VaultIndex(extractPayees);
+		registerVaultIndex(this, accounts, payees);
+		this.registerEditorSuggest(new AccountSuggest(this.app, accounts));
+		this.registerEditorSuggest(new PayeeSuggest(this.app, payees));
 	}
 
 	onunload() {}

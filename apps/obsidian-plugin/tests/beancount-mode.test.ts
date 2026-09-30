@@ -122,6 +122,13 @@ describe('beancountMode tokens', () => {
 			['"title"', 'variable'],
 			['"My Ledger"', 'string'],
 		]);
+		// An escape inside the option key keeps the key's scope; escapes only
+		// fall back to string-2 in ordinary strings.
+		expect(pairs('option "ti\\"tle" "T"')).toEqual([
+			['option', 'builtin'],
+			['"ti\\"tle"', 'variable'],
+			['"T"', 'string'],
+		]);
 		expect(pairs('plugin "beancount.plugins.auto" "cfg"')).toEqual([
 			['plugin', 'builtin'],
 			['"beancount.plugins.auto"', 'string'],
@@ -442,6 +449,9 @@ describe('beancountMode tokens', () => {
 		expect(pairs('~~')).toEqual([['~~', null]]);
 		expect(pairs('!')).toEqual([['!', null]]);
 		expect(pairs('2024-01-01 * "s" "n"\n  Assets:Cash  ~ USD')).toContainEqual(['~', 'error']);
+		// The entry, not the indentation, decides: with no entry open (blank
+		// line above) indented garbage is left unscoped like stray prose.
+		expect(pairs('2024-01-01 * "s" "n"\n\n  ~ USD')).toContainEqual(['~', null]);
 		expect(pairs('  note: "abc\\')).toEqual([
 			['note', 'property'],
 			[':', 'punctuation'],

@@ -11,6 +11,10 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   editor suggests every account name found in the vault. Account names are
   extracted per file with a regex, cached, and invalidated when files are
   created, modified, deleted or renamed.
+- **Payee completion**: typing the first quoted field of a transaction line
+  (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
+  of every historical transaction. One vault scan feeds both completion
+  indexes.
 
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.

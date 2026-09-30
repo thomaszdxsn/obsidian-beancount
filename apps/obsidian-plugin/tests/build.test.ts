@@ -27,6 +27,11 @@ describe('esbuild production bundle', () => {
 			});
 
 			const bundle = readFileSync(outFile, 'utf8');
+			// The shipped artifact must contain no dynamic code: `new Function`
+			// below is the test's loader, never the bundle's.
+			expect(bundle).not.toMatch(/\beval\s*\(/);
+			expect(bundle).not.toMatch(/new\s+Function\s*\(/);
+			expect(bundle).not.toMatch(/\bimport\s*\(/);
 			const moduleShim = { exports: {} as { default?: unknown } };
 			// Modules from the esbuild `external` list are provided by Obsidian
 			// at runtime (`obsidian` plus the CodeMirror/Lezer packages it
@@ -61,8 +66,8 @@ describe('esbuild production bundle', () => {
 			await instance.onload();
 			const { events, editorSuggests, ...registrations } = (instance as unknown as RecordingPlugin).registrations;
 			// No sample UI: no commands, ribbon, status bar, settings or stray
-			// listeners. The vault events and editor suggest belong to account
-			// completion.
+			// listeners. The vault events and editor suggests belong to account
+			// and payee completion.
 			expect(registrations).toEqual({
 				commands: [],
 				ribbonIcons: [],
@@ -73,7 +78,7 @@ describe('esbuild production bundle', () => {
 				cleanups: [],
 			});
 			expect(events).toHaveLength(4);
-			expect(editorSuggests).toHaveLength(1);
+			expect(editorSuggests).toHaveLength(2);
 			await instance.onunload();
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
