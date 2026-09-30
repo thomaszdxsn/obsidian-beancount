@@ -7,6 +7,7 @@ import { extractAccounts } from './account-index';
 import { AccountSuggest } from './account-suggest';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
+import { postingIndentExtension } from './posting-indent';
 import { isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
 
@@ -146,8 +147,13 @@ export default class BeancountPlugin extends Plugin {
 		const accounts = new VaultIndex(extractAccounts);
 		const payees = new VaultIndex(extractPayees);
 		registerVaultIndex(this, accounts, payees);
-		this.registerEditorSuggest(new AccountSuggest(this.app, accounts));
-		this.registerEditorSuggest(new PayeeSuggest(this.app, payees));
+		const accountSuggest = new AccountSuggest(this.app, accounts);
+		const payeeSuggest = new PayeeSuggest(this.app, payees);
+		this.registerEditorSuggest(accountSuggest);
+		this.registerEditorSuggest(payeeSuggest);
+		// Enter opens the next line of a beancount entry already indented;
+		// the binding defers to the completion popovers while they are open.
+		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest]));
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',

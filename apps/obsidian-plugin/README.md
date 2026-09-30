@@ -15,6 +15,11 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
   indexes.
+- **Posting auto-indent**: pressing Enter inside a beancount entry opens the
+  next line already indented two spaces — the first posting under a
+  transaction header, or the next posting/metadata line while the entry
+  continues. Enter everywhere else — prose, blank lines, an open completion
+  popover — behaves exactly as before.
 - **Decimal point alignment**: the "Align decimal points" command lines up the
   decimal points of the posting amounts in the transaction block at the cursor
   — or in the selection, when there is one. Each block gets its own column:

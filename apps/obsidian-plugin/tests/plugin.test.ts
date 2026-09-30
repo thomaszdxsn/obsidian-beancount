@@ -3,6 +3,8 @@ import { Plugin } from 'obsidian';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
+import type { MockKeymapExtension, MockView } from './mocks/codemirror';
+import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
 import { beancountMode } from '../beancount-mode';
@@ -76,16 +78,19 @@ describe('BeancountPlugin', () => {
 	});
 
 	// The plugin's whole surface: one command, one settings tab, the vault
-	// events behind completion and on-save alignment, and the two editor
-	// suggests — no ribbon, status bar, DOM listeners or intervals.
+	// events behind completion and on-save alignment, the two editor suggests
+	// and the posting-indent Enter binding — no ribbon, status bar, DOM
+	// listeners or intervals.
 	it('registers only the alignment command, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
-		const { commands, settingTabs, events, editorSuggests, cleanups, ...rest } = plugin.registrations;
+		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, ...rest } =
+			plugin.registrations;
 		expect(commands.map((command) => command.id)).toEqual(['align-decimal-points']);
 		expect(settingTabs).toBe(1);
 		expect(rest).toEqual({ ribbonIcons: [], statusBarItems: 0, domEvents: [], intervals: [] });
 		expect(events).toHaveLength(5);
 		expect(editorSuggests).toHaveLength(2);
+		expect(editorExtensions).toHaveLength(1);
 		// One cleanup: pending on-save alignments. The mode uninstall registers
 		// only when a CodeMirror registry exists.
 		expect(cleanups).toHaveLength(1);
@@ -97,6 +102,7 @@ describe('BeancountPlugin', () => {
 			settingTabs,
 			events,
 			editorSuggests,
+			editorExtensions,
 			cleanups,
 		});
 	});
@@ -197,6 +203,32 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin();
 		expect(defined).toEqual(['beancount', 'bean']);
 		expect(() => plugin.registrations.cleanups[0]()).not.toThrow();
+	});
+
+	it('registers the posting-indent Enter binding', async () => {
+		const { plugin } = await loadPlugin();
+
+		expect(plugin.registrations.editorExtensions).toHaveLength(1);
+		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
+		expect(extension.bindings.map((binding) => binding.key)).toEqual(['Enter']);
+	});
+
+	it('lets the plugin’s own completion popovers keep Enter', async () => {
+		const { plugin } = await loadPlugin();
+		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
+		const run = extension.bindings[0].run as unknown as (view: MockView) => boolean;
+		const suggest = plugin.registrations.editorSuggests[0] as { context: unknown };
+
+		// A popup is open: Enter accepts the suggestion, never indents.
+		suggest.context = {};
+		const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		expect(run(open)).toBe(false);
+		expect(open.dispatched).toEqual([]);
+
+		suggest.context = null;
+		const closed = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		expect(run(closed)).toBe(true);
+		expect(closed.dispatched).toHaveLength(1);
 	});
 
 	it('aligns the transaction block at the cursor from the command', async () => {

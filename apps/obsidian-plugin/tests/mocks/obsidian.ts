@@ -19,6 +19,7 @@ export interface Registrations {
 	intervals: number[];
 	events: unknown[];
 	editorSuggests: unknown[];
+	editorExtensions: unknown[];
 	cleanups: Array<() => void>;
 }
 
@@ -32,6 +33,7 @@ export class Plugin {
 		intervals: [],
 		events: [],
 		editorSuggests: [],
+		editorExtensions: [],
 		cleanups: [],
 	};
 
@@ -81,6 +83,10 @@ export class Plugin {
 
 	registerEditorSuggest(editorSuggest: unknown): void {
 		this.registrations.editorSuggests.push(editorSuggest);
+	}
+
+	registerEditorExtension(extension: unknown): void {
+		this.registrations.editorExtensions.push(extension);
 	}
 
 	async loadData(): Promise<unknown> {
