@@ -1,7 +1,7 @@
 import type { App, PluginManifest } from 'obsidian';
 import { Plugin } from 'obsidian';
 import { setTimeout as delay } from 'node:timers/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import type { MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
@@ -77,15 +77,15 @@ describe('BeancountPlugin', () => {
 		expect(plugin.manifest.id).toBe('beancount-obsidian');
 	});
 
-	// The plugin's whole surface: one command, one settings tab, the vault
-	// events behind completion and on-save alignment, the two editor suggests
-	// and the posting-indent Enter binding — no ribbon, status bar, DOM
-	// listeners or intervals.
+	// The plugin's whole surface: the alignment and date-insert commands, one
+	// settings tab, the vault events behind completion and on-save alignment,
+	// the two editor suggests and the posting-indent Enter binding — no
+	// ribbon, status bar, DOM listeners or intervals.
 	it('registers only the alignment command, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
 		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, ...rest } =
 			plugin.registrations;
-		expect(commands.map((command) => command.id)).toEqual(['align-decimal-points']);
+		expect(commands.map((command) => command.id)).toEqual(['align-decimal-points', 'insert-today-date']);
 		expect(settingTabs).toBe(1);
 		expect(rest).toEqual({ ribbonIcons: [], statusBarItems: 0, domEvents: [], intervals: [] });
 		expect(events).toHaveLength(5);
@@ -247,6 +247,21 @@ describe('BeancountPlugin', () => {
 			'  Assets:Cash  -12.5 USD',
 		]);
 		expect(editor.transactions).toHaveLength(1);
+	});
+
+	it('registers the date command with its default hotkey and inserts today', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date(2026, 8, 30));
+		try {
+			const { plugin } = await loadPlugin();
+			const command = plugin.registrations.commands.find((entry) => entry.id === 'insert-today-date');
+			expect(command?.hotkeys).toEqual([{ modifiers: ['Mod', 'Shift'], key: 'D' }]);
+			const editor = createEditor(['']);
+			command?.editorCallback?.(editor);
+			expect(editor.getValue()).toBe('2026-09-30');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('aligns only the transaction block at the cursor', async () => {

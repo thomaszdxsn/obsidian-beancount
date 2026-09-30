@@ -8,6 +8,8 @@ export interface PluginCommand {
 	id: string;
 	name?: string;
 	editorCallback?: (editor: unknown) => void;
+	/** The command's default hotkeys, as `Command.hotkeys` carries them. */
+	hotkeys?: Array<{ modifiers: string[]; key: string }>;
 }
 
 export interface Registrations {

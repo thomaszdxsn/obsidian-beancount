@@ -144,6 +144,8 @@ export interface FakeSelection {
 export interface FakeEditor {
 	lines: string[];
 	replacements: Array<{ replacement: string; from: FakePosition; to?: FakePosition }>;
+	/** Texts passed to `replaceSelection`, in order — one per call. */
+	selectionReplacements: string[];
 	/** Change batches passed to `transaction`, in order. */
 	transactions: FakeEditorChange[][];
 	/** Editor selections; a caret is a selection whose anchor equals its head. */
@@ -156,6 +158,7 @@ export interface FakeEditor {
 	somethingSelected(): boolean;
 	listSelections(): FakeSelection[];
 	replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void;
+	replaceSelection(replacement: string): void;
 	transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void;
 }
 
@@ -163,6 +166,7 @@ export function createEditor(lines: string[]): FakeEditor {
 	return {
 		lines,
 		replacements: [],
+		selectionReplacements: [],
 		transactions: [],
 		selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
 		getLine(line: number): string {
@@ -192,6 +196,37 @@ export function createEditor(lines: string[]): FakeEditor {
 		replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void {
 			this.replacements.push({ replacement, from, to });
 		},
+		replaceSelection(replacement: string): void {
+			this.selectionReplacements.push(replacement);
+			// One edit per selection over the flat buffer. Carets land just
+			// after their own inserted text, shifted by the net length change
+			// of every edit before them; the edits themselves apply back to
+			// front so earlier offsets stay valid.
+			const text = this.lines.join('\n');
+			const ranges: Array<{ from: number; to: number }> = [];
+			for (const selection of this.selections) {
+				const anchor = offsetOf(this.lines, selection.anchor);
+				const head = offsetOf(this.lines, selection.head);
+				ranges.push({ from: Math.min(anchor, head), to: Math.max(anchor, head) });
+			}
+			ranges.sort((a, b) => a.from - b.from);
+			let shift = 0;
+			const carets = ranges.map((range) => {
+				const caret = range.from + replacement.length + shift;
+				shift += replacement.length - (range.to - range.from);
+				return caret;
+			});
+			let out = text;
+			for (let index = ranges.length - 1; index >= 0; index -= 1) {
+				const range = ranges[index];
+				out = out.slice(0, range.from) + replacement + out.slice(range.to);
+			}
+			this.lines = out.split('\n');
+			this.selections = carets.map((offset) => {
+				const pos = positionAt(offset, this.lines);
+				return { anchor: pos, head: pos };
+			});
+		},
 		transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void {
 			this.transactions.push(tx.changes);
 			for (const change of tx.changes) {
@@ -204,4 +239,22 @@ export function createEditor(lines: string[]): FakeEditor {
 			}
 		},
 	};
+}
+
+/** Flat-buffer offset of `pos`, counting the newline before each line. */
+function offsetOf(lines: readonly string[], pos: FakePosition): number {
+	let offset = 0;
+	for (let line = 0; line < pos.line; line += 1) offset += lines[line].length + 1;
+	return offset + pos.ch;
+}
+
+/** The position of a flat-buffer offset in `lines`, clamped to the buffer. */
+function positionAt(offset: number, lines: readonly string[]): FakePosition {
+	let rest = offset;
+	for (let line = 0; line < lines.length; line += 1) {
+		if (rest <= lines[line].length) return { line, ch: rest };
+		rest -= lines[line].length + 1;
+	}
+	const last = lines.length - 1;
+	return { line: last, ch: lines[last].length };
 }

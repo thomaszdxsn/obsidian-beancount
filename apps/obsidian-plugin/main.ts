@@ -5,6 +5,7 @@ import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
 import { extractAccounts } from './account-index';
 import { AccountSuggest } from './account-suggest';
+import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
 import { postingIndentExtension } from './posting-indent';
@@ -158,6 +159,14 @@ export default class BeancountPlugin extends Plugin {
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
 			editorCallback: alignCommand,
+		});
+		this.addCommand({
+			id: 'insert-today-date',
+			name: 'Insert today\'s date',
+			editorCallback: insertTodayDate,
+			// A default hotkey so the date is one chord away while typing; a
+			// customized binding for this command wins over the default.
+			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'D' }],
 		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
