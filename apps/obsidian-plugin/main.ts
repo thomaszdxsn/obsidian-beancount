@@ -1,6 +1,7 @@
 import { Plugin } from 'obsidian';
 import type { App, Editor, MarkdownView, TAbstractFile, TFile } from 'obsidian';
-import { alignText, computeAlignment } from './align';
+import { alignText, blockRangeAt, computeAlignment } from './align';
+import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
 import { extractAccounts } from './account-index';
 import { AccountSuggest } from './account-suggest';
@@ -65,11 +66,40 @@ function openEditorFor(app: App, file: TFile): Editor | null {
 	return null;
 }
 
-/** Rewrite the gaps of `editor`'s posting lines so the decimal points line up. */
-function alignEditor(editor: Editor): void {
+/** Every line of the editor, in order. */
+function editorLines(editor: Editor): string[] {
 	const lines: string[] = [];
 	for (let line = 0; line < editor.lineCount(); line += 1) lines.push(editor.getLine(line));
-	const edits = computeAlignment(lines);
+	return lines;
+}
+
+/**
+ * What the command aligns: the selected lines when there is a selection,
+ * otherwise the transaction block the cursor sits in.
+ */
+function commandScope(editor: Editor, lines: readonly string[]): LineRange {
+	if (!editor.somethingSelected()) return blockRangeAt(lines, editor.getCursor().line);
+	let from = Number.MAX_SAFE_INTEGER;
+	let to = 0;
+	for (const selection of editor.listSelections()) {
+		const start = Math.min(selection.anchor.line, selection.head.line);
+		const end = Math.max(selection.anchor.line, selection.head.line);
+		const endCh = selection.anchor.line === end ? selection.anchor.ch : selection.head.ch;
+		from = Math.min(from, start);
+		// A selection dragged to the start of the next line holds none of its
+		// characters, so the last selected line is the one before it.
+		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
+	}
+	return { from, to };
+}
+
+/**
+ * Rewrite the gaps in `scope` (the whole buffer when omitted) so the decimal
+ * points of each transaction block line up.
+ */
+function alignInEditor(editor: Editor, scope?: LineRange): void {
+	const lines = editorLines(editor);
+	const edits = computeAlignment(lines, scope);
 	if (edits.length === 0) return;
 	const changes = edits.map((edit) => ({
 		from: { line: edit.line, ch: edit.from },
@@ -79,9 +109,10 @@ function alignEditor(editor: Editor): void {
 	// One transaction: CodeMirror maps the cursor and undo stack through all
 	// gap rewrites at once. Its offset mapping leaves the caret inside a
 	// widened gap, so a lone caret is mapped onto the text it sat on: just
-	// before the amount — and a caret that sat inside the gap lands there too.
-	// A range or several carets are left to the editor's own mapping: forcing
-	// a caret there would collapse what the user has selected.
+	// before the amount — and a caret inside the gap lands there too, while
+	// one exactly at the gap start stays with the account. A range or several
+	// carets are left to the editor's own mapping: forcing a caret there
+	// would collapse what the user has selected.
 	const carets = editor.listSelections();
 	if (carets.length !== 1 || editor.somethingSelected()) {
 		editor.transaction({ changes });
@@ -95,6 +126,11 @@ function alignEditor(editor: Editor): void {
 		else if (ch > edit.from) ch = edit.from + edit.text.length;
 	}
 	editor.transaction({ changes, selection: { from: { line: caret.line, ch } } });
+}
+
+/** The `Align decimal points` command. */
+function alignCommand(editor: Editor): void {
+	alignInEditor(editor, commandScope(editor, editorLines(editor)));
 }
 
 export default class BeancountPlugin extends Plugin {
@@ -115,7 +151,7 @@ export default class BeancountPlugin extends Plugin {
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
-			editorCallback: alignEditor,
+			editorCallback: alignCommand,
 		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
@@ -153,14 +189,24 @@ export default class BeancountPlugin extends Plugin {
 		// in any leaf have no buffer to fight with.
 		const editor = openEditorFor(this.app, file);
 		if (editor) {
-			alignEditor(editor);
+			// The on-save walk aligns every transaction block of the buffer.
+			alignInEditor(editor);
 			return;
 		}
 		const text = await this.app.vault.read(file);
 		const aligned = alignText(text);
+		if (aligned === text) return;
+		// The file may have been opened — or edited — while the read was in
+		// flight. An open one is the editor's business again, and a changed
+		// one is left alone: its own `modify` will bring alignment back here.
 		// Write only on change — `vault.process` would write the unchanged
-		// text back and re-arm the debounce forever. The read-then-modify
-		// race is limited to closed files, which no editor is typing into.
-		if (aligned !== text) await this.app.vault.modify(file, aligned);
+		// text back and re-arm the debounce forever.
+		const live = openEditorFor(this.app, file);
+		if (live) {
+			alignInEditor(live);
+			return;
+		}
+		if ((await this.app.vault.read(file)) !== text) return;
+		await this.app.vault.modify(file, aligned);
 	}
 }
