@@ -14,6 +14,15 @@ export interface FakeFile {
 	extension?: string;
 }
 
+/**
+ * What `editor.cm` offers the plugin: diagnostics publications arrive as
+ * dispatches, exactly as they do on the real `EditorView`.
+ */
+export interface FakeCm {
+	dispatched: Array<{ effects: unknown[] }>;
+	dispatch(spec: { effects: unknown[] }): void;
+}
+
 export interface FakePosition {
 	line: number;
 	ch: number;
@@ -35,6 +44,8 @@ export class FakeVault {
 	readonly delays = new Map<string, number[]>();
 	readonly handlers = new Map<string, Array<(file: FakeFile, oldPath?: string) => void>>();
 
+	constructor(/** The vault's absolute path on disk, as `getBasePath` reports it. */ readonly basePath = '/vault') {}
+
 	readonly api = {
 		getFiles: (): FakeFile[] => [...this.files.values()],
 		cachedRead: (file: FakeFile): Promise<string> => this.read(file),
@@ -49,6 +60,12 @@ export class FakeVault {
 			handlers.push(handler);
 			this.handlers.set(name, handlers);
 			return { name };
+		},
+		// The desktop `FileSystemAdapter` surface the validator needs: paths
+		// on disk for the `bean-check` it runs outside Obsidian.
+		adapter: {
+			getBasePath: (): string => this.basePath,
+			getFullPath: (path: string): string => `${this.basePath}/${path}`,
 		},
 	};
 
@@ -148,6 +165,8 @@ export interface FakeEditor {
 	selectionReplacements: string[];
 	/** Change batches passed to `transaction`, in order. */
 	transactions: FakeEditorChange[][];
+	/** The CodeMirror view behind the editor: effects land in `cm.dispatched`. */
+	cm: FakeCm;
 	/** Editor selections; a caret is a selection whose anchor equals its head. */
 	selections: FakeSelection[];
 	getLine(line: number): string;
@@ -163,11 +182,18 @@ export interface FakeEditor {
 }
 
 export function createEditor(lines: string[]): FakeEditor {
+	const cm: FakeCm = {
+		dispatched: [],
+		dispatch(spec: { effects: unknown[] }): void {
+			this.dispatched.push(spec);
+		},
+	};
 	return {
 		lines,
 		replacements: [],
 		selectionReplacements: [],
 		transactions: [],
+		cm,
 		selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
 		getLine(line: number): string {
 			return this.lines[line] ?? '';

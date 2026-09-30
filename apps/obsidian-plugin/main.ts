@@ -1,15 +1,19 @@
-import { Plugin } from 'obsidian';
-import type { App, Editor, MarkdownView, TAbstractFile, TFile } from 'obsidian';
+import { Notice, Plugin } from 'obsidian';
+import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
+import { join } from 'path';
 import { alignText, blockRangeAt, computeAlignment } from './align';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
 import { extractAccounts } from './account-index';
 import { AccountSuggest } from './account-suggest';
+import type { BeanCheckError, BeanCheckRunner } from './bean-check';
+import { matchesVaultFile, parseBeanCheckErrors, runBeanCheck, toLineDiagnostics } from './bean-check';
+import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
 import { postingIndentExtension } from './posting-indent';
-import { isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
 
 /**
@@ -54,6 +58,9 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 
 /** Delay before on-save alignment, so a burst of edits aligns once. */
 const ALIGN_DEBOUNCE_MS = 500;
+
+/** Delay before on-save validation, so a burst of saves checks once. */
+const VALIDATE_DEBOUNCE_MS = 500;
 
 /** The editor of a leaf showing `file`, if any. */
 function openEditorFor(app: App, file: TFile): Editor | null {
@@ -137,8 +144,16 @@ function alignCommand(editor: Editor): void {
 
 export default class BeancountPlugin extends Plugin {
 	settings: BeancountSettings = { ...DEFAULT_SETTINGS };
+	/** How `bean-check` is started; tests swap in their own runner. */
+	beanCheckRunner: BeanCheckRunner = runBeanCheck;
 	/** Pending on-save alignment per file path. */
 	private readonly alignTimers = new Map<string, NodeJS.Timeout>();
+	/** Pending on-save validation per file path. */
+	private readonly validateTimers = new Map<string, NodeJS.Timeout>();
+	/** Which run (its target path) last marked each vault file, so its next run clears them. */
+	private readonly markOwners = new Map<string, string>();
+	/** Whether the missing-bean-check hint has been shown this session. */
+	private missingWarned = false;
 
 	async onload() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -155,6 +170,9 @@ export default class BeancountPlugin extends Plugin {
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
 		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest]));
+		// The markers on lines bean-check complains about: inline underline
+		// plus a gutter dot, styled by `styles.css`.
+		this.registerEditorExtension(diagnosticsExtension);
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
@@ -173,6 +191,8 @@ export default class BeancountPlugin extends Plugin {
 		this.register(() => {
 			for (const timer of this.alignTimers.values()) clearTimeout(timer);
 			this.alignTimers.clear();
+			for (const timer of this.validateTimers.values()) clearTimeout(timer);
+			this.validateTimers.clear();
 		});
 	}
 
@@ -183,7 +203,14 @@ export default class BeancountPlugin extends Plugin {
 	}
 
 	private onFileModified(file: TAbstractFile): void {
-		if (!this.settings.alignOnSave || !isTextFile(file)) return;
+		if (!isTextFile(file)) return;
+		if (this.settings.alignOnSave) this.scheduleAlign(file);
+		// Only ledger files reach bean-check; a markdown note is not one,
+		// whatever it happens to contain.
+		if (isLedgerFile(file)) this.scheduleValidate(file);
+	}
+
+	private scheduleAlign(file: TFile): void {
 		clearTimeout(this.alignTimers.get(file.path));
 		this.alignTimers.set(
 			file.path,
@@ -194,6 +221,95 @@ export default class BeancountPlugin extends Plugin {
 				if (!this.settings.alignOnSave) return;
 				this.alignFile(file).catch(() => undefined);
 			}, ALIGN_DEBOUNCE_MS)
+		);
+	}
+
+	private scheduleValidate(file: TFile): void {
+		clearTimeout(this.validateTimers.get(file.path));
+		this.validateTimers.set(
+			file.path,
+			setTimeout(() => {
+				this.validateTimers.delete(file.path);
+				this.validateFile(file).catch(() => undefined);
+			}, VALIDATE_DEBOUNCE_MS)
+		);
+	}
+
+	/**
+	 * Run bean-check over the saved file — or over the entry ledger, when one
+	 * is configured — and mark every line it complains about in the editors
+	 * showing the files it reported.
+	 */
+	private async validateFile(file: TFile): Promise<void> {
+		// An entry ledger turns one run into a check of its whole include
+		// chain; without one, the saved file is checked with whatever it
+		// includes — both name the run that owns the resulting marks.
+		const target = this.settings.entryLedger.trim() || file.path;
+		const command = this.settings.beanCheckPath.trim() || 'bean-check';
+		const basePath = (this.app.vault.adapter as FileSystemAdapter).getBasePath();
+		const run = await this.beanCheckRunner(command, [join(basePath, target)]);
+		if (run.missing) {
+			this.warnMissingBeanCheck();
+			return;
+		}
+		this.markErrors(target, parseBeanCheckErrors(run.stderr));
+	}
+
+	/**
+	 * Mark — or clear — the lines bean-check complained about, naming the run's
+	 * `target` their owner: the target's next run replaces exactly these marks
+	 * (a file that went quiet is cleared), and the target file itself is always
+	 * in scope — its own save is the newest word on it, whoever marked it
+	 * before. A file another target marked is left for that target's next run.
+	 */
+	private markErrors(target: string, errors: readonly BeanCheckError[]): void {
+		const vaultFiles = this.app.vault.getFiles();
+		const errorsByPath = new Map<string, BeanCheckError[]>();
+		const unmapped: BeanCheckError[] = [];
+		for (const error of errors) {
+			// Reports name files by the real paths their loader resolved, so
+			// the vault-relative path is matched at its end. The longest vault
+			// path wins: `other/sub/a.bean` is not mistaken for the shorter
+			// `sub/a.bean` it also ends with.
+			const match = vaultFiles
+				.filter((entry) => matchesVaultFile(error.file, entry.path))
+				.sort((a, b) => b.path.length - a.path.length)[0];
+			if (!match) {
+				unmapped.push(error);
+				continue;
+			}
+			const list = errorsByPath.get(match.path) ?? [];
+			list.push(error);
+			errorsByPath.set(match.path, list);
+		}
+		// What no editor can carry — a `<load>:0` failure (missing entry
+		// ledger, broken include) or an error in a file outside the vault —
+		// must not pass for a clean run, so the first of it becomes a notice.
+		if (unmapped.length > 0) {
+			new Notice(`bean-check: ${unmapped[0].file}: ${unmapped[0].message}`);
+		}
+		const reported = new Set(errorsByPath.keys());
+		const previouslyOwned = [...this.markOwners.entries()]
+			.filter(([, owner]) => owner === target)
+			.map(([path]) => path);
+		for (const path of new Set([...reported, ...previouslyOwned, target])) {
+			if (reported.has(path)) this.markOwners.set(path, target);
+			else this.markOwners.delete(path);
+			const vaultFile = vaultFiles.find((entry) => entry.path === path);
+			// No editor, no markers: a background file is marked when it is
+			// opened and its target is saved again.
+			if (!vaultFile) continue;
+			const editor = openEditorFor(this.app, vaultFile);
+			if (editor) setEditorLineDiagnostics(editor, toLineDiagnostics(errorsByPath.get(path) ?? []));
+		}
+	}
+
+	/** Hint once — bean-check missing is not news at every save. */
+	private warnMissingBeanCheck(): void {
+		if (this.missingWarned) return;
+		this.missingWarned = true;
+		new Notice(
+			'bean-check not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.'
 		);
 	}
 

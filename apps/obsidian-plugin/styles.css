@@ -1,0 +1,16 @@
+/* Lines bean-check complains about: a wavy underline on the text, and a dot in the diagnostics gutter. */
+
+.cm-beancount-error-underline {
+	text-decoration: underline wavy var(--text-error, #e45649);
+	text-decoration-skip-ink: none;
+}
+
+.cm-gutterElement.cm-beancount-error-gutter-marker::after {
+	content: '';
+	display: block;
+	width: 0.55em;
+	height: 0.55em;
+	border-radius: 50%;
+	background-color: var(--text-error, #e45649);
+	margin: 0.35em auto 0;
+}

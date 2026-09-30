@@ -26,6 +26,9 @@ export const MAX_SUGGESTIONS = 50;
 /** File extensions whose text is read: scanned for names, rewritten on align. */
 export const TEXT_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
 
+/** File extensions bean-check parses: the ledger files validation checks. */
+export const LEDGER_EXTENSIONS: Record<string, true> = { beancount: true, bean: true };
+
 /** The shape `isTextFile` needs: a folder has no `extension`. */
 interface VaultEntry {
 	path: string;
@@ -42,6 +45,17 @@ export function isTextFile(file: VaultEntry): file is TFile {
 	return (
 		typeof file.extension === 'string' &&
 		Object.prototype.hasOwnProperty.call(TEXT_EXTENSIONS, file.extension)
+	);
+}
+
+/**
+ * Whether a vault entry is one of the ledger files `bean-check` parses — the
+ * only files whose saves are worth validating.
+ */
+export function isLedgerFile(file: VaultEntry): file is TFile {
+	return (
+		typeof file.extension === 'string' &&
+		Object.prototype.hasOwnProperty.call(LEDGER_EXTENSIONS, file.extension)
 	);
 }
 
