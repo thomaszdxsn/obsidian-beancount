@@ -77,21 +77,35 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(info).toMatchObject({ query: 'Assets:Ca', start: { line: 0, ch: 2 }, end: { line: 0, ch: 11 } });
 	});
 
-	it('stays quiet when editing inside a token', () => {
+	it('stays quiet when editing inside a token', async () => {
 		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		expect(trigger(suggest, 'Assets:Cash', 3)).toBeNull();
 		expect(trigger(suggest, 'Assets:CashUSD', 11)).toBeNull();
 	});
 
-	it('stays quiet on lowercase prose, dates and amounts', () => {
+	it('stays quiet inside a transaction payee field', async () => {
 		const { suggest } = setup(ACCOUNTS);
+		await flush();
+		// The payee suggest owns that field: `"Exp` prefixes `Expenses:Food`,
+		// yet account completion must not pop up over the payee popup.
+		expect(trigger(suggest, '2026-09-30 * "Exp')).toBeNull();
+		expect(trigger(suggest, '2026-09-30 * "As')).toBeNull();
+		// Cursor before the closing quote of an account-shaped payee.
+		expect(trigger(suggest, '2026-09-30 * "Expenses:Foo"', 26)).toBeNull();
+	});
+
+	it('stays quiet on lowercase prose, dates and amounts', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		expect(trigger(suggest, 'see assets here')).toBeNull();
 		expect(trigger(suggest, '2026-09-30')).toBeNull();
 		expect(trigger(suggest, 'paid 100.00')).toBeNull();
 	});
 
-	it('stays quiet when the tail is not a whole token', () => {
+	it('stays quiet when the tail is not a whole token', async () => {
 		const { suggest } = setup(ACCOUNTS);
+		await flush();
 		// The tail `Assets:Ca` sits after a colon, dash or slash inside a
 		// longer token or URL path.
 		expect(trigger(suggest, 'x:Assets:Ca')).toBeNull();

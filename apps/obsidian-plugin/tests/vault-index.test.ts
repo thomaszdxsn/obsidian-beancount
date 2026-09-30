@@ -94,6 +94,22 @@ describe('VaultIndex', () => {
 		expect(index.match('')).toEqual(['Assets:Cash', 'Expenses:Food']);
 		expect(index.match('Income')).toEqual([]);
 	});
+
+	it('caps the popup window instead of returning the whole vault', () => {
+		const index = new VaultIndex(extractAccounts);
+		// Zero-padded so the sorted union is the generation order.
+		const accounts = Array.from({ length: 60 }, (_, i) => `Assets:A${String(i).padStart(2, '0')}`);
+		index.setFileContent('a.md', accounts.join(' '));
+		expect(index.match('Assets:')).toEqual(accounts.slice(0, 50));
+		// A narrower query still returns everything under the window.
+		expect(index.match('Assets:A5')).toHaveLength(10);
+	});
+
+	it('drops values longer than a name could be', () => {
+		const index = new VaultIndex(extractAccounts);
+		index.setFileContent('a.md', `Assets:Cash Assets:${'x'.repeat(300)}`);
+		expect(index.values()).toEqual(['Assets:Cash']);
+	});
 });
 
 interface Fixture {
@@ -206,6 +222,27 @@ describe('registerVaultIndex', () => {
 		expect(accounts.values()).toEqual(['Assets:Cash']);
 		expect(payees.values()).toEqual([]);
 		expect(vault.reads).toEqual(['a.md']);
+	});
+
+	it('re-keys every index on rename and drops every index on delete', async () => {
+		// Both indexes track the file: `renameFile` must run for each of them —
+		// a short-circuiting `moved ||= …` would leave the later index's
+		// entries behind under the old path — and delete must clear both.
+		const vault = new FakeVault();
+		vault.write('ledger.bean', '2026-09-30 * "Whole Foods" "Groceries"\n  Expenses:Food  10.00 USD');
+		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
+		const accounts = new VaultIndex(extractAccounts);
+		const payees = new VaultIndex(extractPayees);
+		registerVaultIndex(plugin as unknown as Plugin, accounts, payees);
+		await flush();
+		const renamed = vault.rename('ledger.bean', 'book.bean');
+		await vault.emit('rename', renamed, 'ledger.bean');
+		expect(accounts.values()).toEqual(['Expenses:Food']);
+		expect(payees.values()).toEqual(['Whole Foods']);
+		expect(vault.reads).toEqual(['ledger.bean']);
+		await vault.emit('delete', vault.delete('book.bean'));
+		expect(accounts.values()).toEqual([]);
+		expect(payees.values()).toEqual([]);
 	});
 
 	it('moves every child entry on a folder rename', async () => {

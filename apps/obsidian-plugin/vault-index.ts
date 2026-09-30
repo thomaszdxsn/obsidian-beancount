@@ -7,8 +7,21 @@
  * (create/modify/delete/rename) invalidate exactly the entries they touch;
  * nothing else is re-read. One wiring pass feeds all registered indexes from
  * a single read per event, so adding an extractor never doubles vault I/O.
+ *
+ * Two bounds keep a pathological file from costing keystrokes: a value
+ * longer than `MAX_VALUE_LENGTH` is junk (a whole line captured as a "name",
+ * not a real one) and is not cached, and `match` returns at most
+ * `MAX_SUGGESTIONS` — the popup window Obsidian renders (its `limit` is 50).
+ * Per-file count and read-size budgets are deliberately not imposed: the
+ * union is bounded by the user's own vault, which the host already read.
  */
 import type { Plugin, TAbstractFile, TFile } from 'obsidian';
+
+/** Longest cached string; longer ones are noise, not names. */
+const MAX_VALUE_LENGTH = 256;
+
+/** Most strings `match` returns — the suggestion popup window. */
+export const MAX_SUGGESTIONS = 50;
 
 /** File extensions whose text is scanned for strings. */
 const INDEXED_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
@@ -37,7 +50,11 @@ export class VaultIndex {
 	constructor(private readonly extract: (content: string) => ReadonlySet<string>) {}
 
 	setFileContent(path: string, content: string): void {
-		const strings = this.extract(content);
+		const extracted = this.extract(content);
+		const strings = new Set<string>();
+		for (const value of extracted) {
+			if (value.length <= MAX_VALUE_LENGTH) strings.add(value);
+		}
 		// Only string-carrying files are tracked: `renameFile`'s "tracked"
 		// answer then means "re-keyed cached strings", which is exactly when a
 		// rename can skip its re-read. A file without such strings stays untracked.
@@ -81,10 +98,16 @@ export class VaultIndex {
 		return this.sorted;
 	}
 
-	/** Case-insensitive prefix match over every cached string. */
+	/** Case-insensitive prefix match, bounded to the popup window. */
 	match(query: string): string[] {
 		const needle = query.toLowerCase();
-		return this.values().filter((value) => value.toLowerCase().startsWith(needle));
+		const matches: string[] = [];
+		for (const value of this.values()) {
+			if (!value.toLowerCase().startsWith(needle)) continue;
+			matches.push(value);
+			if (matches.length >= MAX_SUGGESTIONS) break;
+		}
+		return matches;
 	}
 }
 

@@ -27,6 +27,11 @@ describe('esbuild production bundle', () => {
 			});
 
 			const bundle = readFileSync(outFile, 'utf8');
+			// The shipped artifact must contain no dynamic code: `new Function`
+			// below is the test's loader, never the bundle's.
+			expect(bundle).not.toMatch(/\beval\s*\(/);
+			expect(bundle).not.toMatch(/new\s+Function\s*\(/);
+			expect(bundle).not.toMatch(/\bimport\s*\(/);
 			const moduleShim = { exports: {} as { default?: unknown } };
 			// Modules from the esbuild `external` list are provided by Obsidian
 			// at runtime (`obsidian` plus the CodeMirror/Lezer packages it

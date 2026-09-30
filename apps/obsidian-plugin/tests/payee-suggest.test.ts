@@ -81,24 +81,29 @@ describe('PayeeSuggest.onTrigger', () => {
 		});
 	});
 
-	it('stays quiet when editing inside the field', () => {
+	it('stays quiet when editing inside the field', async () => {
 		const { suggest } = setup(PAYEES);
+		await flush();
 		// Any character but the closing quote after the cursor would garble
 		// the rest of the field when the pick replaces the typed prefix.
 		expect(trigger(suggest, '2026-09-30 * "Whole Foods"', 17)).toBeNull();
 		expect(trigger(suggest, '2026-09-30 * "Whole Foods"', 19)).toBeNull();
 	});
 
-	it('stays quiet in the narration field', () => {
+	it('stays quiet in the narration field', async () => {
 		const { suggest } = setup(PAYEES);
-		expect(trigger(suggest, '2026-09-30 * "Whole Foods" "Groceries at')).toBeNull();
-		expect(trigger(suggest, '2026-09-30 * "Whole Foods" "Groceries at Whole')).toBeNull();
+		await flush();
+		// The narration may well type out a known payee; the field, not the
+		// text, decides.
+		expect(trigger(suggest, '2026-09-30 * "Shell" "Whole')).toBeNull();
+		expect(trigger(suggest, '2026-09-30 * "Whole Foods" "Who')).toBeNull();
 	});
 
-	it('stays quiet on lines that are not transactions', () => {
+	it('stays quiet on lines that are not transactions', async () => {
 		const { suggest } = setup(PAYEES);
+		await flush();
 		expect(trigger(suggest, '2026-09-30 open Assets:Cash "Whole')).toBeNull();
-		expect(trigger(suggest, '2026-09-30 note Assets:Cash "a note')).toBeNull();
+		expect(trigger(suggest, '2026-09-30 note Assets:Cash "Whole')).toBeNull();
 		expect(trigger(suggest, '  Expenses:Food  10.00 USD "Whole')).toBeNull();
 		expect(trigger(suggest, 'paid at "Whole')).toBeNull();
 	});
@@ -109,11 +114,12 @@ describe('PayeeSuggest.onTrigger', () => {
 		const { suggest } = setup(PAYEES);
 		await flush();
 		expect(suggest.getSuggestions(contextFor('Shell'))).toEqual([]);
-		expect(trigger(suggest, '2026-09-30 * "Shell"')).toBeNull();
+		expect(trigger(suggest, '2026-09-30 * "Shell"', 19)).toBeNull();
 	});
 
-	it('stays quiet when the typed text prefixes no cached payee', () => {
+	it('stays quiet when the typed text prefixes no cached payee', async () => {
 		const { suggest } = setup(PAYEES);
+		await flush();
 		expect(trigger(suggest, '2026-09-30 * "Zzz')).toBeNull();
 	});
 });
