@@ -27,6 +27,8 @@ export class FakeVault {
 	readonly files = new Map<string, FakeFile>();
 	readonly contents = new Map<string, string>();
 	readonly reads: string[] = [];
+	/** Paths written through `modify`, in order — one per real write. */
+	readonly writes: string[] = [];
 	/** Paths whose next reads reject, to simulate files vanishing mid-scan. */
 	readonly failures = new Set<string>();
 	/** Per-path delay queues in ms, to resolve concurrent reads out of order. */
@@ -36,6 +38,12 @@ export class FakeVault {
 	readonly api = {
 		getFiles: (): FakeFile[] => [...this.files.values()],
 		cachedRead: (file: FakeFile): Promise<string> => this.read(file),
+		read: (file: FakeFile): Promise<string> => this.read(file),
+		modify: async (file: FakeFile, data: string): Promise<void> => {
+			this.writes.push(file.path);
+			this.contents.set(file.path, data);
+			await this.emit('modify', file);
+		},
 		on: (name: string, handler: (file: FakeFile, oldPath?: string) => void) => {
 			const handlers = this.handlers.get(name) ?? [];
 			handlers.push(handler);
@@ -122,22 +130,78 @@ export class FakeVault {
 	}
 }
 
+export interface FakeEditorChange {
+	from: FakePosition;
+	to: FakePosition;
+	text: string;
+}
+
+export interface FakeSelection {
+	anchor: FakePosition;
+	head: FakePosition;
+}
+
 export interface FakeEditor {
 	lines: string[];
 	replacements: Array<{ replacement: string; from: FakePosition; to?: FakePosition }>;
+	/** Change batches passed to `transaction`, in order. */
+	transactions: FakeEditorChange[][];
+	/** Editor selections; a caret is a selection whose anchor equals its head. */
+	selections: FakeSelection[];
 	getLine(line: number): string;
+	lineCount(): number;
+	getValue(): string;
+	getCursor(): FakePosition;
+	setCursor(pos: FakePosition): void;
+	somethingSelected(): boolean;
+	listSelections(): FakeSelection[];
 	replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void;
+	transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void;
 }
 
 export function createEditor(lines: string[]): FakeEditor {
 	return {
 		lines,
 		replacements: [],
+		transactions: [],
+		selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
 		getLine(line: number): string {
 			return this.lines[line] ?? '';
 		},
+		lineCount(): number {
+			return this.lines.length;
+		},
+		getValue(): string {
+			return this.lines.join('\n');
+		},
+		getCursor(): FakePosition {
+			return this.selections[0].head;
+		},
+		setCursor(pos: FakePosition): void {
+			this.selections = [{ anchor: pos, head: pos }];
+		},
+		somethingSelected(): boolean {
+			return this.selections.some(
+				(selection: FakeSelection) =>
+					selection.anchor.line !== selection.head.line || selection.anchor.ch !== selection.head.ch
+			);
+		},
+		listSelections(): FakeSelection[] {
+			return this.selections;
+		},
 		replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void {
 			this.replacements.push({ replacement, from, to });
+		},
+		transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void {
+			this.transactions.push(tx.changes);
+			for (const change of tx.changes) {
+				const line = this.lines[change.from.line];
+				this.lines[change.from.line] =
+					line.slice(0, change.from.ch) + change.text + line.slice(change.to.ch);
+			}
+			if (tx.selection) {
+				this.selections = [{ anchor: tx.selection.from, head: tx.selection.from }];
+			}
 		},
 	};
 }

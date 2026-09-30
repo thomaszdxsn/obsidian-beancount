@@ -23,21 +23,25 @@ const MAX_VALUE_LENGTH = 256;
 /** Most strings `match` returns — the suggestion popup window. */
 export const MAX_SUGGESTIONS = 50;
 
-/** File extensions whose text is scanned for strings. */
-const INDEXED_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
+/** File extensions whose text is read: scanned for names, rewritten on align. */
+export const TEXT_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
 
-/** The shape `isIndexable` needs: a folder has no `extension`. */
+/** The shape `isTextFile` needs: a folder has no `extension`. */
 interface VaultEntry {
 	path: string;
 	extension?: string;
 }
 
-function isIndexable(file: VaultEntry): file is TFile {
+/**
+ * Whether a vault entry is one of the text files the plugin works in:
+ * completion scans them for names, alignment rewrites their postings.
+ */
+export function isTextFile(file: VaultEntry): file is TFile {
 	// Own-property check: `in` would treat `constructor`/`toString` file
-	// extensions as indexed via the prototype chain.
+	// extensions as text via the prototype chain.
 	return (
 		typeof file.extension === 'string' &&
-		Object.prototype.hasOwnProperty.call(INDEXED_EXTENSIONS, file.extension)
+		Object.prototype.hasOwnProperty.call(TEXT_EXTENSIONS, file.extension)
 	);
 }
 
@@ -126,7 +130,7 @@ export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultInd
 	const revisions = new Map<string, number>();
 	let revision = 0;
 	const refresh = (file: TAbstractFile): void => {
-		if (!isIndexable(file)) return;
+		if (!isTextFile(file)) return;
 		const path = file.path;
 		// Monotonic token: invalidation deletes the entry, so a read from a
 		// previous life of the path can never match again — a per-path counter
@@ -170,7 +174,7 @@ export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultInd
 		// holds none of their strings.
 		let moved = false;
 		for (const index of indexes) moved = index.renameFile(oldPath, file.path) || moved;
-		if (isIndexable(file)) {
+		if (isTextFile(file)) {
 			// A dropped in-flight read must be replaced; an untracked
 			// destination (`.txt` → `.md`, or a file edited to string-less
 			// prose) needs a first read.
