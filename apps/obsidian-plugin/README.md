@@ -36,7 +36,8 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   underline whose tooltip is the message, plus a dot in the gutter. The
   message is parsed from stderr, which is the whole report: the exit code is
   not consulted. Settings hold the executable path (empty uses `bean-check`
-  from PATH; a missing one prompts to `pip install beancount`) and an optional
+  from PATH; a missing one prompts to `pip install beancount`; only a
+  `bean-check` binary is accepted) and an optional
   entry ledger, whose whole `include` chain is checked in one run.
 
 This project uses Typescript to provide type checking and documentation.

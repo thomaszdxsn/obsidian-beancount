@@ -9,6 +9,7 @@ import type { Editor } from 'obsidian';
 import type { LineDiagnostic } from '../bean-check';
 import {
 	diagnosticDecorations,
+	diagnosticsExtension,
 	diagnosticsGutter,
 	DiagnosticsPlugin,
 	ERROR_GUTTER_CLASS,
@@ -77,6 +78,70 @@ describe('lineDiagnostics', () => {
 		expect(updated).toBe(next);
 		// Anything else — including another field's effect — leaves it.
 		expect(field.update(next, { effects: [{ is: () => false, value: [] }] })).toBe(next);
+	});
+
+	it('carries markers along edits and drops the ones whose line is consumed', () => {
+		const field = lineDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const marked = [{ line: 1, message: 'bad' }];
+
+		// A line inserted above moves the marker to line 2.
+		const inserted = field.update(marked, {
+			effects: [],
+			docChanged: true,
+			startState: { doc: fakeDoc('one\ntwo') },
+			state: { doc: fakeDoc('new\none\ntwo') },
+			changes: { mapPos: (pos: number) => pos + 4 },
+		});
+		expect(inserted).toEqual([{ line: 2, message: 'bad' }]);
+
+		// The marked line itself is consumed: the marker goes with it.
+		const consumed = field.update([{ line: 0, message: 'gone' }], {
+			effects: [],
+			docChanged: true,
+			startState: { doc: fakeDoc('one\ntwo') },
+			state: { doc: fakeDoc('two') },
+			changes: { mapPos: () => 0 },
+		});
+		expect(consumed).toEqual([]);
+
+		// A line the document never had (`<load>` reports it as 0) drops.
+		expect(
+			field.update([{ line: -1, message: 'load' }], {
+				effects: [],
+				docChanged: true,
+				startState: { doc: fakeDoc('one') },
+				state: { doc: fakeDoc('one\ntwo') },
+				changes: { mapPos: (pos: number) => pos },
+			})
+		).toEqual([]);
+
+		// A run's report replaces everything, edit or not.
+		const next = [{ line: 0, message: 'new' }];
+		expect(
+			field.update(marked, {
+				effects: [setLineDiagnostics.of(next)],
+				docChanged: true,
+				startState: { doc: fakeDoc('one\ntwo') },
+				state: { doc: fakeDoc('new\none\ntwo') },
+				changes: { mapPos: (pos: number) => pos + 4 },
+			})
+		).toBe(next);
+	});
+
+	it('ships the field, the view plugin and the gutter in one extension', () => {
+		// Wiring test: the extension must carry the very field the effect
+		// publishes to and the gutter reads — otherwise markers never show.
+		const members = diagnosticsExtension as unknown as unknown[];
+		expect(members).toContain(lineDiagnostics);
+		expect(members).toContain(diagnosticsView);
+		expect(members).toContain(diagnosticsGutter);
+
+		const field = lineDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const diagnostics = [{ line: 0, message: 'x' }];
+		const value = field.update(field.create(), { effects: [setLineDiagnostics.of(diagnostics)] });
+		const gutterConfig = diagnosticsGutter as unknown as MockGutterConfig;
+		const view = fakeView('one', value);
+		expect(gutterConfig.lineMarker?.(view, { from: 0, to: 3 }, [])).not.toBeNull();
 	});
 });
 

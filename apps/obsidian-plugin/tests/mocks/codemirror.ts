@@ -91,9 +91,13 @@ export const StateEffect = {
 	},
 };
 
-/** What a `StateField`'s update sees: the transaction's effects. */
+/** What a `StateField`'s update sees: the transaction's effects and edits. */
 export interface MockFieldUpdate {
 	effects: ReadonlyArray<{ is(spec: unknown): boolean; value: unknown }>;
+	docChanged?: boolean;
+	startState?: { doc: { lines: number; line(at: number): { from: number; to: number } } };
+	state?: { doc: { lineAt(pos: number): { number: number } } };
+	changes?: { mapPos(pos: number, assoc?: number): number };
 }
 
 export interface MockStateField<T> {

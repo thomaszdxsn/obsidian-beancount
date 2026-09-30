@@ -11,7 +11,7 @@
  * field wholesale.
  */
 import { StateEffect, StateField } from '@codemirror/state';
-import type { Extension, Range } from '@codemirror/state';
+import type { Extension, Range, Transaction } from '@codemirror/state';
 import { Decoration, GutterMarker, gutter, ViewPlugin } from '@codemirror/view';
 import type { BlockInfo, DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import type { Editor } from 'obsidian';
@@ -20,13 +20,31 @@ import type { LineDiagnostic } from './bean-check';
 /** Publishes one file's diagnostics; an empty list clears the markers. */
 export const setLineDiagnostics = StateEffect.define<readonly LineDiagnostic[]>();
 
+/** The line a marker rides to through an edit; `null` when the edit consumed its line. */
+function movedLine(line: number, tr: Transaction): number | null {
+	if (line < 0 || line >= tr.startState.doc.lines) return null;
+	const span = tr.startState.doc.line(line + 1);
+	const from = tr.changes.mapPos(span.from, 1);
+	// A non-empty line the change consumed maps both ends onto one point.
+	if (span.to > span.from && tr.changes.mapPos(span.to, -1) === from) return null;
+	return tr.state.doc.lineAt(from).number - 1;
+}
+
 export const lineDiagnostics = StateField.define<readonly LineDiagnostic[]>({
 	create: () => [],
 	update(value, tr) {
+		// A run's report replaces the value wholesale; edits carry each
+		// marker along to the line it now sits on.
 		for (const effect of tr.effects) {
 			if (effect.is(setLineDiagnostics)) return effect.value;
 		}
-		return value;
+		if (!tr.docChanged || value.length === 0) return value;
+		const mapped: LineDiagnostic[] = [];
+		for (const diagnostic of value) {
+			const line = movedLine(diagnostic.line, tr);
+			if (line !== null) mapped.push({ line, message: diagnostic.message });
+		}
+		return mapped;
 	},
 });
 

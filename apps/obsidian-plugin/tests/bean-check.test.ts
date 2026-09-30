@@ -4,22 +4,25 @@
  * `<file>:<line>:       <message>` shape. These tests parse that shape, and
  * check a real `bean-check` once so the parsed message is the terminal's.
  */
-import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, spawnSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { App, PluginManifest } from 'obsidian';
 import BeancountPlugin from '../main';
 import type { LineDiagnostic } from '../bean-check';
 import { matchesVaultFile, parseBeanCheckErrors, runBeanCheck, toLineDiagnostics } from '../bean-check';
+import { clipText, isBeanCheckBinary } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import { createEditor, FakeVault } from './fakes';
 
 /** stderr of a real `bean-check`, whatever status it exits with. */
 const execFileAsync = promisify(execFile);
+
+/** The real-spawn tests need the binary (and are version-tolerant where they can be). */
+const hasBeanCheck = spawnSync('bean-check', ['--version']).error === undefined;
 
 async function beanCheckStderr(file: string): Promise<string> {
 	try {
@@ -58,25 +61,51 @@ describe('parseBeanCheckErrors', () => {
 		]);
 	});
 
-	it('takes the line number as the last colon-digits, so a path may hold colons', () => {
+	it('takes the line number as the last colon-digits followed by whitespace', () => {
 		const stderr = "/home/2024:3/ledger.bean:12:       Invalid token: '2026'\n";
 
 		expect(parseBeanCheckErrors(stderr)).toEqual([
 			{ file: '/home/2024:3/ledger.bean', line: 12, message: "Invalid token: '2026'" },
 		]);
 	});
+
+	it('does not mistake a colon-digit account name for the separator', () => {
+		// Digits are legal in an account sub-component, so `:2024:` appears in
+		// ordinary messages — but never followed by the whitespace bean-check
+		// pads its separator with. Captured from real bean-check 2.3.5 output.
+		const stderr =
+			"/tmp/bc/a.bean:2:       Invalid reference to unknown account 'Assets:2024:Cash'\n";
+
+		expect(parseBeanCheckErrors(stderr)).toEqual([
+			{
+				file: '/tmp/bc/a.bean',
+				line: 2,
+				message: "Invalid reference to unknown account 'Assets:2024:Cash'",
+			},
+		]);
+	});
+
+	it('parses CRLF output — Windows bean-check writes text-mode stderr', () => {
+		expect(parseBeanCheckErrors('C:\\v\\a.bean:3:       Bad\r\n\r\n   echo\r\n')).toEqual([
+			{ file: 'C:\\v\\a.bean', line: 3, message: 'Bad' },
+		]);
+	});
 });
 
 describe('matchesVaultFile', () => {
-	it('matches a vault path at the end of the reported path', () => {
-		expect(matchesVaultFile('/home/u/vault/sub/a.bean', 'sub/a.bean')).toBe(true);
-		expect(matchesVaultFile('sub/a.bean', 'sub/a.bean')).toBe(true);
-		expect(matchesVaultFile('C:\\vault\\sub\\a.bean', 'sub/a.bean')).toBe(true);
+	const root = '/home/u/vault/';
+
+	it('accepts the vault-rooted path or a bare relative report', () => {
+		expect(matchesVaultFile('/home/u/vault/sub/a.bean', 'sub/a.bean', root)).toBe(true);
+		expect(matchesVaultFile('sub/a.bean', 'sub/a.bean', root)).toBe(true);
+		expect(matchesVaultFile('C:\\vault\\sub\\a.bean', 'sub/a.bean', 'C:/vault/')).toBe(true);
 	});
 
-	it('also matches a shorter path that is only a suffix — the caller picks the longest', () => {
-		expect(matchesVaultFile('/vault/other/sub/a.bean', 'sub/a.bean')).toBe(true);
-		expect(matchesVaultFile('/vault/sub/a.bean', 'other/sub/a.bean')).toBe(false);
+	it('rejects a path that merely ends with the vault file', () => {
+		// A same-named ledger outside the vault must not draw on the vault's.
+		expect(matchesVaultFile('/home/u/shared/a.bean', 'a.bean', root)).toBe(false);
+		expect(matchesVaultFile('/vault/other/sub/a.bean', 'sub/a.bean', '/vault/')).toBe(false);
+		expect(matchesVaultFile('/home/u/vault/sub/a.bean', 'other/sub/a.bean', root)).toBe(false);
 	});
 });
 
@@ -93,6 +122,27 @@ describe('toLineDiagnostics', () => {
 			{ line: 4, message: 'second line' },
 		]);
 	});
+
+	it('clips a pathological message for notices and tooltips', () => {
+		const [diagnostic] = toLineDiagnostics([{ file: 'a.bean', line: 1, message: 'x'.repeat(500) }]);
+
+		expect(diagnostic.message).toBe(clipText('x'.repeat(500)));
+		expect(diagnostic.message).toHaveLength(401);
+	});
+});
+
+describe('isBeanCheckBinary', () => {
+	it('accepts bean-check at any location', () => {
+		expect(isBeanCheckBinary('bean-check')).toBe(true);
+		expect(isBeanCheckBinary('/opt/homebrew/bin/bean-check')).toBe(true);
+		expect(isBeanCheckBinary('C:\\Python312\\Scripts\\bean-check.exe')).toBe(true);
+	});
+
+	it('refuses anything a hostile setting could turn into "run this program"', () => {
+		expect(isBeanCheckBinary('/bin/bash')).toBe(false);
+		expect(isBeanCheckBinary('/usr/bin/python3')).toBe(false);
+		expect(isBeanCheckBinary('/vault/bean-check.py')).toBe(false);
+	});
 });
 
 describe('runBeanCheck', () => {
@@ -103,14 +153,29 @@ describe('runBeanCheck', () => {
 		expect(run.stderr).toBe('');
 	});
 
-	it('returns the same stderr the terminal prints, exit code aside', async () => {
+	it('distinguishes a killed run from a missing binary', async () => {
+		// Output over maxBuffer is a cut-short run, not "not installed".
+		const big = await runBeanCheck(process.execPath, ['-e', 'console.error("x".repeat(20 * 1024 * 1024))']);
+		expect(big.missing).toBe(false);
+		expect(big.failure).toBe('produced too much output');
+		expect(big.stderr.length).toBeGreaterThan(0);
+
+		// A ledger can make bean-check hang (`include "/dev/stdin"`); the run
+		// is bounded and the timeout is again not "not installed". Real clock:
+		// the subject under test is the child process being killed.
+		const hung = await runBeanCheck(process.execPath, ['-e', 'process.stdin.resume()'], 200);
+		expect(hung.missing).toBe(false);
+		expect(hung.failure).toBe('timed out');
+	});
+
+	it.skipIf(!hasBeanCheck)('returns the same stderr the terminal prints, exit code aside', async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'bean-check-'));
 		try {
 			// A syntax error: bean-check 2.3 prints `Invalid token` and exits 0.
 			const syntax = join(dir, 'syntax.bean');
 			writeFileSync(syntax, 'this is not beancount\n');
 			const syntaxStderr = await beanCheckStderr(syntax);
-			expect(syntaxStderr).toContain('Invalid token');
+			expect(parseBeanCheckErrors(syntaxStderr).length).toBeGreaterThan(0);
 			expect(await runBeanCheck('bean-check', [syntax])).toEqual({ stderr: syntaxStderr, missing: false });
 
 			// A ledger error: the same tool exits non-zero, and the report is still stderr.
@@ -132,7 +197,7 @@ describe('runBeanCheck', () => {
 });
 
 describe('save-time validation end to end', () => {
-	it('marks the saved line with exactly what the terminal bean-check prints', async () => {
+	it.skipIf(!hasBeanCheck)('marks the saved line with exactly what the terminal bean-check prints', async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'bean-check-vault-'));
 		try {
 			// A ledger saved with a deliberate mistake: `Assets:CaSH` is not an
@@ -152,12 +217,15 @@ describe('save-time validation end to end', () => {
 			plugin.beanCheckRunner = runBeanCheck;
 
 			await vault.emit('modify', file);
-			await delay(600);
+			// Wait for the run to land — a fixed sleep would race a cold spawn.
+			await vi.waitFor(() => expect(editor.cm.dispatched).toHaveLength(1), { timeout: 10_000 });
 
-			// What the terminal's own `bean-check main.bean` says about this file…
-			const terminal = await beanCheckStderr(join(dir, 'main.bean'));
+			// What the terminal's own `bean-check` says about this file — run
+			// on the same real, vault-rooted path the plugin used…
+			const root = realpathSync(dir).replace(/\\/g, '/') + '/';
+			const terminal = await beanCheckStderr(join(root, 'main.bean'));
 			const reported = parseBeanCheckErrors(terminal).filter((error) =>
-				matchesVaultFile(error.file, 'main.bean')
+				matchesVaultFile(error.file, 'main.bean', root)
 			);
 			expect(reported.length).toBeGreaterThan(0);
 			// …is line for line what the editor was handed to mark.

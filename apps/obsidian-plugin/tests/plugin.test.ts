@@ -618,23 +618,35 @@ describe('BeancountPlugin', () => {
 		expect(vault.writes).toEqual([]);
 	});
 
-	it('tolerates a vanishing file and a failing bean-check between save and run', async () => {
+	it('tolerates a file that vanishes before its on-save align reads it', async () => {
 		const vault = new FakeVault();
-		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
-		const editor = createEditor(['2026-10-01 * "A"']);
-		const { plugin } = await loadPlugin(vault, { alignOnSave: true }, [{ view: { file, editor } }]);
-		plugin.beanCheckRunner = async () => {
-			throw new Error('bean-check exploded');
-		};
+		// Not open in any leaf: the aligner reads it through the vault.
+		const file = vault.write('ledger.bean', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		await loadPlugin(vault, { alignOnSave: true });
 
-		// The save's reads fail — the file vanished after all — and the
-		// validation run explodes: neither may surface as an unhandled
-		// rejection; the next save simply tries again.
+		// The read rejects — the file vanished after the save. That must not
+		// surface as an unhandled rejection, and nothing is rewritten.
 		vault.failures.add('ledger.bean');
 		await expect(vault.emit('modify', file)).resolves.toBeUndefined();
 		await delay(600);
 
-		expect(editor.lines).toEqual(['2026-10-01 * "A"']);
+		expect(vault.writes).toEqual([]);
+	});
+
+	it('tolerates a bean-check run that rejects', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		plugin.beanCheckRunner = async () => {
+			throw new Error('bean-check exploded');
+		};
+
+		// A failing run must not surface as an unhandled rejection; the next
+		// save simply tries again.
+		await expect(vault.emit('modify', file)).resolves.toBeUndefined();
+		await delay(600);
+
+		expect(notices).toEqual([]);
 	});
 
 	it('leaves a file alone when it changed while the read was in flight', async () => {
@@ -729,9 +741,10 @@ describe('BeancountPlugin', () => {
 	});
 
 	// The stderr bean-check prints for a ledger saved with a deliberate
-	// mistake: one report per line, an indented source echo after each.
+	// mistake: one report per line, an indented source echo after each. It
+	// names the real, vault-rooted path the plugin hands the tool.
 	const BROKEN_STDERR = [
-		'/private/tmp/realpath/ledger.bean:1:       Transaction does not balance: (10.00 USD)',
+		'/vault/ledger.bean:1:       Transaction does not balance: (10.00 USD)',
 		'',
 		'   2026-10-01 * "Broken"',
 		'     Assets:Cash  10.00 USD',
@@ -965,13 +978,16 @@ describe('BeancountPlugin', () => {
 
 		await vault.emit('modify', file);
 		await delay(600);
+		await vault.emit('modify', file);
+		await delay(600);
 
+		// The same problem announced once — autosave must not stack toasts.
 		expect(notices).toEqual(['bean-check: <load>: File "/vault/gone.bean" does not exist']);
 		// The saved file itself is still cleared: a file-scoped run owns it.
 		expect(published(editor)).toEqual([]);
 	});
 
-	it('prefers the longest vault path when a report ends with several', async () => {
+	it('matches a report against the vault root, not a suffix', async () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', '');
 		const short = vault.write('sub/a.bean', '2026-10-01 * "S"\n');
@@ -982,14 +998,15 @@ describe('BeancountPlugin', () => {
 			{ view: { file: short, editor: shortEditor } },
 			{ view: { file: long, editor: longEditor } },
 		]);
-		beanCheckResult = { stderr: '/real/other/sub/a.bean:3:       oops\n', missing: false };
+		beanCheckResult = { stderr: '/vault/other/sub/a.bean:3:       oops\n', missing: false };
 
 		await vault.emit('modify', short);
 		await delay(600);
 
 		expect(published(longEditor)).toEqual([{ line: 2, message: 'oops' }]);
-		// The suffix-only match must not steal the report.
+		// The same tail under another folder must not draw on `sub/a.bean`.
 		expect(shortEditor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
 	});
 
 	it('runs the configured bean-check executable', async () => {
@@ -1003,5 +1020,144 @@ describe('BeancountPlugin', () => {
 		expect(beanCheckRuns).toEqual([
 			{ command: '/opt/homebrew/bin/bean-check', args: ['/vault/ledger.bean'] },
 		]);
+	});
+
+	it('marks every pane showing a reported file', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const first = createEditor(['2026-10-01 * "A"']);
+		const second = createEditor(['2026-10-01 * "A"']);
+		await loadPlugin(vault, null, [
+			{ view: { file, editor: first } },
+			{ view: { file, editor: second } },
+		]);
+		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		// Split panes are separate views; both carry the mark…
+		expect(published(first)).toEqual([{ line: 0, message: 'oops' }]);
+		expect(published(second)).toEqual([{ line: 0, message: 'oops' }]);
+
+		// …and both clear together.
+		beanCheckResult = { stderr: '', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(published(first)).toEqual([]);
+		expect(published(second)).toEqual([]);
+	});
+
+	it('keeps the newest run for a target, not the fastest', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		let calls = 0;
+		plugin.beanCheckRunner = async () => {
+			calls += 1;
+			if (calls === 1) {
+				// The first run is slow and reports the pre-fix state.
+				await delay(1200);
+				return { stderr: '/vault/ledger.bean:1:       stale\n', missing: false };
+			}
+			return { stderr: '', missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600); // the slow run is in flight now
+		await vault.emit('modify', file);
+		await delay(2000); // …and resolves last
+
+		// The newer clean report stands; the stale run is dropped.
+		expect(calls).toBe(2);
+		expect(editor.cm.dispatched).toHaveLength(1);
+		expect(published(editor)).toEqual([]);
+	});
+
+	it('collapses saves across the include chain into one run', async () => {
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'include "child.bean"\n');
+		const child = vault.write('child.bean', '2026-10-01 * "Sub"\n');
+		await loadPlugin(vault, { entryLedger: 'main.bean' });
+
+		await vault.emit('modify', child);
+		await delay(100);
+		await vault.emit('modify', main);
+		await delay(600);
+
+		// One target, one debounce window, one run.
+		expect(beanCheckRuns).toEqual([{ command: 'bean-check', args: ['/vault/main.bean'] }]);
+	});
+
+	it('does not draw outside-vault reports on same-named vault files', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('main.bean', 'include "/Users/me/shared/main.bean"\n');
+		const editor = createEditor(['include "/Users/me/shared/main.bean"']);
+		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = {
+			stderr: '/Users/me/shared/main.bean:3:       oops\n',
+			missing: false,
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		// Same tail, different file: the report is announced, not drawn.
+		expect(notices).toEqual(['bean-check: /Users/me/shared/main.bean: oops']);
+		expect(published(editor)).toEqual([]);
+	});
+
+	it('keeps marks when bean-check output is not a report', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
+
+		// bean-check broke (a traceback, not a report): say so and keep the
+		// marks — clearing them would read as "clean".
+		beanCheckResult = {
+			stderr: "Traceback (most recent call last):\nModuleNotFoundError: No module named 'beancount'\n",
+			missing: false,
+		};
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(notices).toEqual(['bean-check failed: Traceback (most recent call last):']);
+		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
+	});
+
+	it('refuses a bean-check path that is not the validator', async () => {
+		// A hostile synced data.json must not turn the save into
+		// "execute this ledger with /bin/bash".
+		const vault = new FakeVault();
+		const file = vault.write('pwn.bean', 'touch /tmp/pwned\n');
+		await loadPlugin(vault, { beanCheckPath: '/bin/bash' });
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toEqual([]);
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toContain('pip install beancount');
+	});
+
+	it('refuses an entry ledger outside the vault', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		await loadPlugin(vault, { entryLedger: '/etc/passwd' });
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		// bean-check quotes source tokens in its report — it must never be
+		// pointed at a file the vault does not own.
+		expect(beanCheckRuns).toEqual([]);
+		expect(notices).toEqual(['bean-check: entry ledger must be a vault file, not "/etc/passwd"']);
 	});
 });
