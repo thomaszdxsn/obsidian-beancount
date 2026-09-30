@@ -252,14 +252,20 @@ export function alignText(text: string): string {
 /**
  * One character occupies two cells when it falls in a UAX #11 wide or
  * fullwidth range — East Asian accounts (`Expenses:餐饮`) are measured the
- * way fixed-pitch fonts render them. Tabs count as one: indents stay
+ * way fixed-pitch fonts render them — and nothing at all when it is a
+ * combining mark or zero-width character. Tabs count as one: indents stay
  * verbatim, only measured.
  */
 const WIDE_CHAR_RE =
-	/[\u{1100}-\u{115f}\u{2e80}-\u{303e}\u{3041}-\u{33ff}\u{3400}-\u{4dbf}\u{4e00}-\u{9fff}\u{a000}-\u{a4cf}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe10}-\u{fe19}\u{fe30}-\u{fe6f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+	/[\u{1100}-\u{115f}\u{2e80}-\u{303e}\u{3041}-\u{33ff}\u{3400}-\u{4dbf}\u{4e00}-\u{9fff}\u{a000}-\u{a4cf}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe10}-\u{fe19}\u{fe30}-\u{fe6f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]/u;
+const ZERO_WIDTH_RE =
+	/[\u{0300}-\u{036f}\u{1ab0}-\u{1aff}\u{1dc0}-\u{1dff}\u{200b}-\u{200f}\u{20d0}-\u{20ff}\u{fe00}-\u{fe0f}\u{fe20}-\u{fe2f}]/u;
 
 export function displayWidth(text: string): number {
 	let width = 0;
-	for (const char of text) width += WIDE_CHAR_RE.test(char) ? 2 : 1;
+	for (const char of text) {
+		if (ZERO_WIDTH_RE.test(char)) continue;
+		width += WIDE_CHAR_RE.test(char) ? 2 : 1;
+	}
 	return width;
 }

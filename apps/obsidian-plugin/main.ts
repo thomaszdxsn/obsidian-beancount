@@ -82,8 +82,13 @@ function commandScope(editor: Editor, lines: readonly string[]): LineRange {
 	let from = Number.MAX_SAFE_INTEGER;
 	let to = 0;
 	for (const selection of editor.listSelections()) {
-		from = Math.min(from, selection.anchor.line, selection.head.line);
-		to = Math.max(to, selection.anchor.line, selection.head.line);
+		const start = Math.min(selection.anchor.line, selection.head.line);
+		const end = Math.max(selection.anchor.line, selection.head.line);
+		const endCh = selection.anchor.line === end ? selection.anchor.ch : selection.head.ch;
+		from = Math.min(from, start);
+		// A selection dragged to the start of the next line holds none of its
+		// characters, so the last selected line is the one before it.
+		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
 	}
 	return { from, to };
 }
@@ -190,9 +195,18 @@ export default class BeancountPlugin extends Plugin {
 		}
 		const text = await this.app.vault.read(file);
 		const aligned = alignText(text);
+		if (aligned === text) return;
+		// The file may have been opened — or edited — while the read was in
+		// flight. An open one is the editor's business again, and a changed
+		// one is left alone: its own `modify` will bring alignment back here.
 		// Write only on change — `vault.process` would write the unchanged
-		// text back and re-arm the debounce forever. The read-then-modify
-		// race is limited to closed files, which no editor is typing into.
-		if (aligned !== text) await this.app.vault.modify(file, aligned);
+		// text back and re-arm the debounce forever.
+		const live = openEditorFor(this.app, file);
+		if (live) {
+			alignInEditor(live);
+			return;
+		}
+		if ((await this.app.vault.read(file)) !== text) return;
+		await this.app.vault.modify(file, aligned);
 	}
 }

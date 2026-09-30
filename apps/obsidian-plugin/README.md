@@ -20,7 +20,8 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   — or in the selection, when there is one. Each block gets its own column:
   the amounts' `sign + integer` blocks right-align at it (integers at the
   units place) and cost/price annotations stay put. An optional setting walks
-  every block of a ledger file the same way whenever it is saved.
+  every block of each markdown/beancount file the same way whenever it is
+  saved.
 
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.

@@ -81,6 +81,44 @@ describe('alignText', () => {
 		]);
 	});
 
+	it('starts a fresh block at back-to-back headers', () => {
+		const lines = [
+			'2026-01-01 * "A"',
+			'  Expenses:Food 1.00 USD',
+			'2026-01-02 * "B"',
+			'  Expenses:Food:Rest -1234.00 USD',
+		];
+		// Each posting keeps its own block's column; the wide amount in the
+		// second transaction never pads the first.
+		expect(align(lines)).toEqual(lines);
+	});
+
+	it('starts a fresh block after a whitespace-only separator', () => {
+		const lines = [
+			'2026-01-01 * "A"',
+			'  Expenses:Food 1.00 USD',
+			'   ',
+			'  Expenses:Food:Rest -1234.00 USD',
+		];
+		expect(align(lines)).toEqual(lines);
+	});
+
+	it('keeps one column around an indented comment inside the block', () => {
+		expect(
+			align([
+				'2026-01-01 * "A"',
+				'  Expenses:Food 1.00 USD',
+				'  ; note inside the transaction',
+				'  Expenses:Food:Rest -1234.00 USD',
+			])
+		).toEqual([
+			'2026-01-01 * "A"',
+			'  Expenses:Food          1.00 USD',
+			'  ; note inside the transaction',
+			'  Expenses:Food:Rest -1234.00 USD',
+		]);
+	});
+
 	it('keeps one column across commodities and leaves cost annotations in place', () => {
 		expect(
 			align([
@@ -107,15 +145,15 @@ describe('alignText', () => {
 	});
 
 	it('keeps a posting flag with its account while moving the amount', () => {
-		expect(align(['  * Assets:Cash 12.5 CNY', '  Expenses:A -12.5 CNY'])).toEqual([
-			'  * Assets:Cash 12.5 CNY',
+		expect(align(['  ! Assets:Cash 12.5 CNY', '  Expenses:A -12.5 CNY'])).toEqual([
+			'  ! Assets:Cash 12.5 CNY',
 			'  Expenses:A   -12.5 CNY',
 		]);
 	});
 
 	it('aligns flagged postings like any other', () => {
-		expect(align(['  * Assets:Broker -12345.67 USD', '  Expenses:Food 1.00 USD'])).toEqual([
-			'  * Assets:Broker -12345.67 USD',
+		expect(align(['  P Assets:Broker -12345.67 USD', '  Expenses:Food 1.00 USD'])).toEqual([
+			'  P Assets:Broker -12345.67 USD',
 			'  Expenses:Food        1.00 USD',
 		]);
 	});
@@ -281,5 +319,12 @@ describe('displayWidth', () => {
 		expect(displayWidth('Assets:现金')).toBe(11);
 		expect(displayWidth('a产b')).toBe(4);
 		expect(displayWidth('\u{1F600}')).toBe(2);
+		expect(displayWidth('\u{1F697}')).toBe(2);
+		expect(displayWidth('\u{1FA99}')).toBe(2);
+	});
+
+	it('counts combining marks and zero-width characters as nothing', () => {
+		expect(displayWidth('e\u0301')).toBe(1);
+		expect(displayWidth('a\u200bb')).toBe(2);
 	});
 });

@@ -32,7 +32,7 @@ export class BeancountSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		new Setting(containerEl)
 			.setName('Align amounts on save')
-			.setDesc('Re-align the decimal points of posting amounts whenever a ledger file is saved.')
+			.setDesc('Re-align the decimal points of posting amounts whenever a markdown or beancount file is saved.')
 			.addToggle((toggle) =>
 				toggle.setValue(this.host.settings.alignOnSave).onChange(async (value) => {
 					this.host.settings.alignOnSave = value;
