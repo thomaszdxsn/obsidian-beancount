@@ -144,6 +144,8 @@ export interface FakeSelection {
 export interface FakeEditor {
 	lines: string[];
 	replacements: Array<{ replacement: string; from: FakePosition; to?: FakePosition }>;
+	/** Texts passed to `replaceSelection`, in order — one per call. */
+	selectionReplacements: string[];
 	/** Change batches passed to `transaction`, in order. */
 	transactions: FakeEditorChange[][];
 	/** Editor selections; a caret is a selection whose anchor equals its head. */
@@ -156,6 +158,7 @@ export interface FakeEditor {
 	somethingSelected(): boolean;
 	listSelections(): FakeSelection[];
 	replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void;
+	replaceSelection(replacement: string): void;
 	transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void;
 }
 
@@ -163,6 +166,7 @@ export function createEditor(lines: string[]): FakeEditor {
 	return {
 		lines,
 		replacements: [],
+		selectionReplacements: [],
 		transactions: [],
 		selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
 		getLine(line: number): string {
@@ -192,6 +196,21 @@ export function createEditor(lines: string[]): FakeEditor {
 		replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void {
 			this.replacements.push({ replacement, from, to });
 		},
+		replaceSelection(replacement: string): void {
+			// Recording is the contract the tests assert; the text effect is
+			// the single-caret case they smoke-check. Multi-caret insertion
+			// and caret mapping are Obsidian's behavior, not the plugin's.
+			this.selectionReplacements.push(replacement);
+			const selection = this.selections[0];
+			const text = this.lines.join('\n');
+			const anchor = offsetOf(this.lines, selection.anchor);
+			const head = offsetOf(this.lines, selection.head);
+			const from = Math.min(anchor, head);
+			const to = Math.max(anchor, head);
+			this.lines = (text.slice(0, from) + replacement + text.slice(to)).split('\n');
+			const pos = positionAt(from + replacement.length, this.lines);
+			this.selections = [{ anchor: pos, head: pos }];
+		},
 		transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void {
 			this.transactions.push(tx.changes);
 			for (const change of tx.changes) {
@@ -204,4 +223,22 @@ export function createEditor(lines: string[]): FakeEditor {
 			}
 		},
 	};
+}
+
+/** Flat-buffer offset of `pos`, counting the newline before each line. */
+function offsetOf(lines: readonly string[], pos: FakePosition): number {
+	let offset = 0;
+	for (let line = 0; line < pos.line; line += 1) offset += lines[line].length + 1;
+	return offset + pos.ch;
+}
+
+/** The position of a flat-buffer offset in `lines`, clamped to the buffer. */
+function positionAt(offset: number, lines: readonly string[]): FakePosition {
+	let rest = offset;
+	for (let line = 0; line < lines.length; line += 1) {
+		if (rest <= lines[line].length) return { line, ch: rest };
+		rest -= lines[line].length + 1;
+	}
+	const last = lines.length - 1;
+	return { line: last, ch: lines[last].length };
 }

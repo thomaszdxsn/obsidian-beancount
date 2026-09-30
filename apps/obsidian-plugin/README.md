@@ -27,6 +27,10 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   units place) and cost/price annotations stay put. An optional setting walks
   every block of each markdown/beancount file the same way whenever it is
   saved.
+- **Date quick-insert**: the "Insert today's date" command drops today's date
+  — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
+  selection when there is one. It ships with the default hotkey `Mod+Shift+D`;
+  a hotkey customized for this command wins over the default.
 
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.

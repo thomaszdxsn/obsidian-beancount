@@ -17,6 +17,9 @@ export default defineConfig({
 	test: {
 		environment: 'node',
 		include: ['tests/**/*.test.ts'],
+		// Pin a non-zero offset so the local-vs-UTC date fixtures are
+		// timezone-independent: under UTC a UTC-based date bug would pass.
+		env: { TZ: 'Asia/Shanghai' },
 		coverage: {
 			provider: 'istanbul',
 			include: ['**/*.ts'],
