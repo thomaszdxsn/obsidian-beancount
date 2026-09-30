@@ -15,6 +15,11 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
   indexes.
+- **Decimal point alignment**: the "Align decimal points" command rewrites the
+  whitespace between account and amount on every posting line of the open
+  file so the decimal points of the amounts sit on one shared column (integers
+  align at the units place, cost/price annotations stay put). An optional
+  setting does the same automatically whenever a ledger file is saved.
 
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.

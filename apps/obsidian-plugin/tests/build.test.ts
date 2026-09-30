@@ -64,21 +64,24 @@ describe('esbuild production bundle', () => {
 				id: 'beancount-obsidian',
 			} as PluginManifest);
 			await instance.onload();
-			const { events, editorSuggests, ...registrations } = (instance as unknown as RecordingPlugin).registrations;
-			// No sample UI: no commands, ribbon, status bar, settings or stray
-			// listeners. The vault events and editor suggests belong to account
-			// and payee completion.
+			const { events, editorSuggests, commands, settingTabs, cleanups, ...registrations } = (
+				instance as unknown as RecordingPlugin
+			).registrations;
+			// The plugin's whole surface, in bundle form: one command, one
+			// settings tab, the vault events behind completion and on-save
+			// alignment, the two editor suggests, and the cleanup for pending
+			// on-save work. Nothing else.
+			expect(commands.map((command) => command.id)).toEqual(['align-decimal-points']);
+			expect(settingTabs).toBe(1);
 			expect(registrations).toEqual({
-				commands: [],
 				ribbonIcons: [],
 				statusBarItems: 0,
-				settingTabs: 0,
 				domEvents: [],
 				intervals: [],
-				cleanups: [],
 			});
-			expect(events).toHaveLength(4);
+			expect(events).toHaveLength(5);
 			expect(editorSuggests).toHaveLength(2);
+			expect(cleanups).toHaveLength(1);
 			await instance.onunload();
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });

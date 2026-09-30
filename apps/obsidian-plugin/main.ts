@@ -1,10 +1,13 @@
 import { Plugin } from 'obsidian';
+import type { App, Editor, MarkdownView, TAbstractFile, TFile } from 'obsidian';
+import { alignText, computeAlignment } from './align';
 import { beancountMode } from './beancount-mode';
 import { extractAccounts } from './account-index';
 import { AccountSuggest } from './account-suggest';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
-import { registerVaultIndex, VaultIndex } from './vault-index';
+import { isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
 
 /**
  * Obsidian highlights fenced code blocks through its bundled CodeMirror 5
@@ -46,8 +49,61 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 	};
 }
 
+/** Delay before on-save alignment, so a burst of edits aligns once. */
+const ALIGN_DEBOUNCE_MS = 500;
+
+/** The editor of a leaf showing `file`, if any. */
+function openEditorFor(app: App, file: TFile): Editor | null {
+	// The active editor answers for any leaf type; the scan covers other
+	// markdown tabs (Obsidian opens text files like `.bean` there too).
+	const active = app.workspace.activeEditor;
+	if (active && active.file?.path === file.path && active.editor) return active.editor;
+	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
+		const view = leaf.view as MarkdownView | null;
+		if (view && view.file?.path === file.path && view.editor) return view.editor;
+	}
+	return null;
+}
+
+/** Rewrite the gaps of `editor`'s posting lines so the decimal points line up. */
+function alignEditor(editor: Editor): void {
+	const lines: string[] = [];
+	for (let line = 0; line < editor.lineCount(); line += 1) lines.push(editor.getLine(line));
+	const edits = computeAlignment(lines);
+	if (edits.length === 0) return;
+	const changes = edits.map((edit) => ({
+		from: { line: edit.line, ch: edit.from },
+		to: { line: edit.line, ch: edit.to },
+		text: edit.text,
+	}));
+	// One transaction: CodeMirror maps the cursor and undo stack through all
+	// gap rewrites at once. Its offset mapping leaves the caret inside a
+	// widened gap, so a lone caret is mapped onto the text it sat on: just
+	// before the amount — and a caret that sat inside the gap lands there too.
+	// A range or several carets are left to the editor's own mapping: forcing
+	// a caret there would collapse what the user has selected.
+	const carets = editor.listSelections();
+	if (carets.length !== 1 || editor.somethingSelected()) {
+		editor.transaction({ changes });
+		return;
+	}
+	const caret = editor.getCursor();
+	let ch = caret.ch;
+	for (const edit of edits) {
+		if (edit.line !== caret.line) continue;
+		if (ch >= edit.to) ch += edit.text.length - (edit.to - edit.from);
+		else if (ch > edit.from) ch = edit.from + edit.text.length;
+	}
+	editor.transaction({ changes, selection: { from: { line: caret.line, ch } } });
+}
+
 export default class BeancountPlugin extends Plugin {
-	onload() {
+	settings: BeancountSettings = { ...DEFAULT_SETTINGS };
+	/** Pending on-save alignment per file path. */
+	private readonly alignTimers = new Map<string, NodeJS.Timeout>();
+
+	async onload() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
 		// One vault scan feeds both completion indexes.
@@ -56,7 +112,55 @@ export default class BeancountPlugin extends Plugin {
 		registerVaultIndex(this, accounts, payees);
 		this.registerEditorSuggest(new AccountSuggest(this.app, accounts));
 		this.registerEditorSuggest(new PayeeSuggest(this.app, payees));
+		this.addCommand({
+			id: 'align-decimal-points',
+			name: 'Align decimal points',
+			editorCallback: alignEditor,
+		});
+		this.addSettingTab(new BeancountSettingTab(this.app, this));
+		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
+		this.register(() => {
+			for (const timer of this.alignTimers.values()) clearTimeout(timer);
+			this.alignTimers.clear();
+		});
 	}
 
 	onunload() {}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+
+	private onFileModified(file: TAbstractFile): void {
+		if (!this.settings.alignOnSave || !isTextFile(file)) return;
+		clearTimeout(this.alignTimers.get(file.path));
+		this.alignTimers.set(
+			file.path,
+			setTimeout(() => {
+				this.alignTimers.delete(file.path);
+				// The setting may have been toggled off while waiting; a file
+				// that vanished (or a write that failed) is not worth a retry.
+				if (!this.settings.alignOnSave) return;
+				this.alignFile(file).catch(() => undefined);
+			}, ALIGN_DEBOUNCE_MS)
+		);
+	}
+
+	private async alignFile(file: TFile): Promise<void> {
+		// A file open in a leaf is edited through its editor: the editor buffer
+		// is what Obsidian autosaves, so a vault-level write would be clobbered
+		// by the next autosave from the still-unaligned buffer. Files not open
+		// in any leaf have no buffer to fight with.
+		const editor = openEditorFor(this.app, file);
+		if (editor) {
+			alignEditor(editor);
+			return;
+		}
+		const text = await this.app.vault.read(file);
+		const aligned = alignText(text);
+		// Write only on change — `vault.process` would write the unchanged
+		// text back and re-arm the debounce forever. The read-then-modify
+		// race is limited to closed files, which no editor is typing into.
+		if (aligned !== text) await this.app.vault.modify(file, aligned);
+	}
 }
