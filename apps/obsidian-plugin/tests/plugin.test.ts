@@ -105,8 +105,9 @@ describe('BeancountPlugin', () => {
 	// The plugin's whole surface: the alignment, date-insert and outline
 	// commands, one settings tab, the vault events behind completion and
 	// on-save alignment, the two editor suggests, the posting-indent Enter
-	// binding, the diagnostics markers, the account hover tooltip and the
-	// outline view — no ribbon, status bar, DOM listeners or intervals.
+	// binding, the instant-alignment period binding, the diagnostics
+	// markers, the account hover tooltip and the outline view — no ribbon,
+	// status bar, DOM listeners or intervals.
 	it('registers only the alignment and date commands, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
 		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, views, ...rest } =
@@ -120,7 +121,7 @@ describe('BeancountPlugin', () => {
 		expect(rest).toEqual({ ribbonIcons: [], statusBarItems: 0, domEvents: [], intervals: [] });
 		expect(events).toHaveLength(5);
 		expect(editorSuggests).toHaveLength(2);
-		expect(editorExtensions).toHaveLength(3);
+		expect(editorExtensions).toHaveLength(4);
 		expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 		// One cleanup: pending on-save alignments. The mode uninstall registers
 		// only when a CodeMirror registry exists.
@@ -240,9 +241,8 @@ describe('BeancountPlugin', () => {
 	it('registers the posting-indent Enter binding', async () => {
 		const { plugin } = await loadPlugin();
 
-		// The diagnostics markers ride along as the second extension; account
-		// hover as the third.
-		expect(plugin.registrations.editorExtensions).toHaveLength(3);
+		// Instant alignment, diagnostics markers, then account hover.
+		expect(plugin.registrations.editorExtensions).toHaveLength(4);
 		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
 		expect(extension.bindings.map((binding) => binding.key)).toEqual(['Enter']);
 	});
@@ -255,7 +255,7 @@ describe('BeancountPlugin', () => {
 		);
 		const { plugin } = await loadPlugin(vault);
 		await flush();
-		const hover = plugin.registrations.editorExtensions[2] as MockHoverTooltip;
+		const hover = plugin.registrations.editorExtensions[3] as MockHoverTooltip;
 		const known = '  Assets:Cash  10.00 USD';
 		expect(
 			hover.source({ state: { doc: { lineAt: () => ({ from: 0, to: known.length, text: known }) } } }, 2)
@@ -286,6 +286,23 @@ describe('BeancountPlugin', () => {
 		expect(run(closed)).toBe(true);
 		expect(closed.dispatched).toHaveLength(1);
 	});
+
+	it('registers the instant-alignment period binding', async () => {
+		const { plugin } = await loadPlugin();
+		const extension = plugin.registrations.editorExtensions[1] as MockKeymapExtension;
+		expect(extension.bindings.map((binding) => binding.key)).toEqual(['.']);
+		const run = extension.bindings[0].run as unknown as (view: MockView) => boolean;
+		const text = '  Assets:Cash 12 USD';
+		const caret = text.indexOf('12') + 2;
+		const view = createView(text, [{ anchor: caret }]);
+		expect(run(view)).toBe(true);
+		expect(view.dispatched).toHaveLength(1);
+		plugin.settings.instantAlignment = false;
+		const silenced = createView(text, [{ anchor: caret }]);
+		expect(run(silenced)).toBe(false);
+		expect(silenced.dispatched).toEqual([]);
+	});
+
 
 	it('aligns the transaction block at the cursor from the command', async () => {
 		const { plugin } = await loadPlugin();
@@ -750,20 +767,38 @@ describe('BeancountPlugin', () => {
 
 		expect(settings.map((setting) => setting.name)).toEqual([
 			'Align amounts on save',
+			'Instant alignment',
+			'Separator column',
 			'Bean-check executable',
 			'Entry ledger',
 		]);
-		expect(settings[2].desc).toContain('```beancount');
+		expect(settings[4].desc).toContain('```beancount');
 		expect(settings[0].toggle?.value).toBe(false);
+		expect(settings[1].toggle?.value).toBe(true);
 		await settings[0].toggle?.onChangeHandler?.(true);
-		expect(plugin.savedData).toEqual([{ alignOnSave: true, beanCheckPath: '', entryLedger: '' }]);
+		expect(plugin.savedData).toEqual([
+			{
+				alignOnSave: true,
+				instantAlignment: true,
+				separatorColumn: 50,
+				beanCheckPath: '',
+				entryLedger: '',
+			},
+		]);
 
-		expect(settings[1].text?.placeholder).toBe('bean-check');
-		await settings[1].text?.onChangeHandler?.('/usr/local/bin/bean-check');
-		expect(settings[2].text?.placeholder).toBe('main.bean');
-		await settings[2].text?.onChangeHandler?.('ledger/main.bean');
+		expect(settings[3].text?.placeholder).toBe('bean-check');
+		await settings[3].text?.onChangeHandler?.('/usr/local/bin/bean-check');
+		expect(settings[4].text?.placeholder).toBe('main.bean');
+		await settings[4].text?.onChangeHandler?.('ledger/main.bean');
 		expect(plugin.settings.beanCheckPath).toBe('/usr/local/bin/bean-check');
 		expect(plugin.settings.entryLedger).toBe('ledger/main.bean');
+		await settings[1].toggle?.onChangeHandler?.(false);
+		expect(plugin.settings.instantAlignment).toBe(false);
+		expect(settings[2].text?.placeholder).toBe('50');
+		await settings[2].text?.onChangeHandler?.('40');
+		expect(plugin.settings.separatorColumn).toBe(40);
+		await settings[2].text?.onChangeHandler?.('nope');
+		expect(plugin.settings.separatorColumn).toBe(40);
 
 		await vault.emit('modify', file);
 		await delay(600);

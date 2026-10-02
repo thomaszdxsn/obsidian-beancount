@@ -26,6 +26,7 @@ import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
 import { postingIndentExtension } from './posting-indent';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
+import { instantAlignmentExtension } from './instant-alignment';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
 
@@ -222,6 +223,9 @@ export default class BeancountPlugin extends Plugin {
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
 		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest]));
+		// Typing `.` in a posting amount aligns that transaction block and
+		// parks the caret after the point; the setting can silence it.
+		this.registerEditorExtension(instantAlignmentExtension(this));
 		// The markers on lines bean-check complains about: inline underline
 		// plus a gutter dot, styled by `styles.css`.
 		this.registerEditorExtension(diagnosticsExtension);

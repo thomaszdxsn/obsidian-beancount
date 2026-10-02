@@ -204,11 +204,17 @@ export function blockRangeAt(lines: readonly string[], line: number): LineRange 
 /**
  * Gap rewrites that align the decimal points of the posting amounts in
  * `lines` — one column per transaction block, or per block inside `range`
- * when given (a selection). Lines that are not postings are ignored; a line
- * whose gap already lands on its block's column produces no edit, so the
- * result of one pass is a fixed point of the next.
+ * when given (a selection). `targetColumn` is a floor on that column: the
+ * 0-based display width at which the decimal point should sit, so a
+ * 1-based separator column of 50 is `49`. Lines that are not postings are
+ * ignored; a line whose gap already lands on its block's column produces no
+ * edit, so the result of one pass is a fixed point of the next.
  */
-export function computeAlignment(lines: readonly string[], range?: LineRange): LineEdit[] {
+export function computeAlignment(
+	lines: readonly string[],
+	range?: LineRange,
+	targetColumn?: number
+): LineEdit[] {
 	const blockOfLine = scanBlocks(lines);
 	const postings: Array<Posting & { line: number; block: number }> = [];
 	for (let line = 0; line < lines.length; line += 1) {
@@ -218,13 +224,15 @@ export function computeAlignment(lines: readonly string[], range?: LineRange): L
 	}
 	if (postings.length === 0) return [];
 
-	// Each block's column is set by its widest `sign + integer` block; every
-	// gap of the block is rewritten to exactly the run of spaces that lands
-	// its amount on it — growing or shrinking — never shorter than `MIN_GAP`.
+	// Each block's column is set by its widest `sign + integer` block, then
+	// raised to `targetColumn` when given; every gap of the block is
+	// rewritten to exactly the run of spaces that lands its amount on it —
+	// growing or shrinking — never shorter than `MIN_GAP`.
 	const columnOfBlock: number[] = [];
+	const floor = targetColumn ?? 0;
 	for (const posting of postings) {
 		const column = posting.prefixWidth + MIN_GAP + posting.beforeDot;
-		columnOfBlock[posting.block] = Math.max(columnOfBlock[posting.block] ?? 0, column);
+		columnOfBlock[posting.block] = Math.max(columnOfBlock[posting.block] ?? 0, column, floor);
 	}
 
 	const edits: LineEdit[] = [];
@@ -235,6 +243,17 @@ export function computeAlignment(lines: readonly string[], range?: LineRange): L
 		}
 	}
 	return edits;
+}
+
+/**
+ * Whether inserting `.` at `ch` would become the units amount's decimal
+ * point on this posting line. Integers (`12|`) qualify; a second dot
+ * (`12.|5`) and non-posting text do not.
+ */
+export function isAmountDotInsert(line: string, ch: number): boolean {
+	if (ch < 0 || ch > line.length) return false;
+	const posting = parsePosting(line.slice(0, ch) + '.' + line.slice(ch));
+	return posting !== null && posting.gapEnd + posting.beforeDot === ch;
 }
 
 /** `computeAlignment` applied to a whole document's text. */

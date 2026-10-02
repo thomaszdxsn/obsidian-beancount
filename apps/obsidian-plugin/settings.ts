@@ -8,6 +8,13 @@ import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
 export interface BeancountSettings {
 	/** Re-align posting amounts whenever a ledger file is saved. */
 	alignOnSave: boolean;
+	/** Align the current transaction block when `.` is typed in an amount. */
+	instantAlignment: boolean;
+	/**
+	 * 1-based display column of the decimal point for instant alignment.
+	 * Matches vscode-beancount `beancount.separatorColumn`.
+	 */
+	separatorColumn: number;
 	/** Path to the bean-check executable; empty takes `bean-check` from PATH. */
 	beanCheckPath: string;
 	/** Vault path of the ledger entry file; empty validates each saved file alone. */
@@ -16,6 +23,8 @@ export interface BeancountSettings {
 
 export const DEFAULT_SETTINGS: BeancountSettings = {
 	alignOnSave: false,
+	instantAlignment: true,
+	separatorColumn: 50,
 	beanCheckPath: '',
 	entryLedger: '',
 };
@@ -45,6 +54,29 @@ export class BeancountSettingTab extends PluginSettingTab {
 					this.host.settings.alignOnSave = value;
 					await this.host.saveSettings();
 				})
+			);
+		new Setting(containerEl)
+			.setName('Instant alignment')
+			.setDesc('When typing a decimal point in a posting amount, align that transaction block and keep the cursor after the point.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.instantAlignment).onChange(async (value) => {
+					this.host.settings.instantAlignment = value;
+					await this.host.saveSettings();
+				})
+			);
+		new Setting(containerEl)
+			.setName('Separator column')
+			.setDesc('1-based column the decimal point jumps to during instant alignment. Wide accounts still push past it.')
+			.addText((text) =>
+				text
+					.setPlaceholder('50')
+					.setValue(String(this.host.settings.separatorColumn))
+					.onChange(async (value) => {
+						const column = Number.parseInt(value, 10);
+						if (!Number.isFinite(column) || column < 1) return;
+						this.host.settings.separatorColumn = column;
+						await this.host.saveSettings();
+					})
 			);
 		new Setting(containerEl)
 			.setName('Bean-check executable')
