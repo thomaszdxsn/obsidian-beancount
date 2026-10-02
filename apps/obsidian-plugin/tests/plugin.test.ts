@@ -297,6 +297,12 @@ describe('BeancountPlugin', () => {
 		const view = createView(text, [{ anchor: caret }]);
 		expect(run(view)).toBe(true);
 		expect(view.dispatched).toHaveLength(1);
+		// Default separator column 50: the inserted `.` sits at 0-based index 49.
+		expect(view.dispatched[0].changes[0].insert.indexOf('.')).toBe(49);
+		plugin.settings.separatorColumn = 40;
+		const col40 = createView(text, [{ anchor: caret }]);
+		expect(run(col40)).toBe(true);
+		expect(col40.dispatched[0].changes[0].insert.indexOf('.')).toBe(39);
 		plugin.settings.instantAlignment = false;
 		const silenced = createView(text, [{ anchor: caret }]);
 		expect(run(silenced)).toBe(false);

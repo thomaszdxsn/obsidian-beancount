@@ -171,6 +171,8 @@ export function instantAlignmentExtension(host: InstantAlignmentHost): Extension
 		view.dispatch({
 			changes: plan.changes,
 			selection: EditorSelection.create(plan.carets.map((head) => EditorSelection.cursor(head))),
+			userEvent: 'input.type',
+			scrollIntoView: true,
 		});
 		return true;
 	};

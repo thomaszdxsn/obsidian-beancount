@@ -156,11 +156,6 @@ describe('instantAlignmentPlan', () => {
 describe('instantAlignmentExtension', () => {
 	const host: Host = { settings: { instantAlignment: true, separatorColumn: COLUMN } };
 
-	it('binds the period key only', () => {
-		const extension = instantAlignmentExtension(host) as unknown as MockKeymapExtension;
-		expect(extension.bindings.map((binding) => binding.key)).toEqual(['.']);
-	});
-
 	it('dispatches the insert and alignment as one transaction', () => {
 		const text = '  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;

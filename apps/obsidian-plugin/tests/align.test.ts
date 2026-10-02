@@ -294,11 +294,17 @@ describe('isAmountDotInsert', () => {
 		expect(isAmountDotInsert('  Assets:Cash 12 USD', 16)).toBe(true);
 		expect(isAmountDotInsert('  Assets:Cash 12', 16)).toBe(true);
 		expect(isAmountDotInsert('  Assets:Cash -12 USD', 17)).toBe(true);
+		// Splitting the integer (`1|2` → `1.2`) is still the units decimal.
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 15)).toBe(true);
 	});
 
-	it('rejects a second dot, prose, and out of range', () => {
+	it('rejects a second dot, the gap, annotations, and prose', () => {
 		expect(isAmountDotInsert('  Assets:Cash 12.5 USD', 17)).toBe(false);
 		expect(isAmountDotInsert('  Assets:Cash 12.5 USD', 18)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 13)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 14)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD @ 7', 23)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD {150', 24)).toBe(false);
 		expect(isAmountDotInsert('2026-10-01 * "Store"', 16)).toBe(false);
 		expect(isAmountDotInsert('  Assets:Cash 12 USD', -1)).toBe(false);
 		expect(isAmountDotInsert('  Assets:Cash 12 USD', 99)).toBe(false);
