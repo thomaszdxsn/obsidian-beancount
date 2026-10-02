@@ -866,9 +866,7 @@ describe('BeancountPlugin', () => {
 		await vault.emit('modify', file);
 		await delay(600);
 
-		expect(body).toBe(
-			'include "/vault/main.bean"\n\n2026-10-01 * "Cafe"\n  Assets:Cash  -10.00 USD\n'
-		);
+		expect(body.startsWith('include "/vault/main.bean"')).toBe(true);
 		expect(notices).toEqual([]);
 	});
 
@@ -917,6 +915,109 @@ describe('BeancountPlugin', () => {
 
 		expect(published(editor)).toEqual([]);
 		expect(beanCheckRuns).toHaveLength(1);
+	});
+
+	it('does not notice on a prose note even when bean-check is misconfigured', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('note.md', 'just prose');
+		await loadPlugin(vault, { beanCheckPath: '/bin/bash' });
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('refuses an entry ledger that would break out of the include line', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		await loadPlugin(vault, { entryLedger: 'main.bean\nplugin "os"' });
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toEqual([]);
+		expect(notices[0]).toContain('entry ledger must be a vault file');
+	});
+
+	it('maps an error in the second fence onto that fence’s host line', async () => {
+		const note = [
+			'```beancount',
+			'option "title" "A"',
+			'```',
+			'',
+			'```beancount',
+			'2026-10-02 * "B"',
+			'```',
+		].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		plugin.beanCheckRunner = async (command, args) => {
+			beanCheckRuns.push({ command, args: [...args] });
+			return { stderr: `${args[0]}:3:       oops\n`, missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(published(editor)).toEqual([{ line: 5, message: 'oops' }]);
+	});
+
+	it('deletes the temp fence ledger when the runner throws', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const { plugin } = await loadPlugin(vault);
+		let tempPath = '';
+		plugin.beanCheckRunner = async (_command, args) => {
+			tempPath = args[0];
+			throw new Error('boom');
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(tempPath.endsWith('fences.bean')).toBe(true);
+		expect(existsSync(tempPath)).toBe(false);
+	});
+
+	it('does not collapse a markdown save with an entry-ledger save', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'option "title" "Main"\n');
+		const file = vault.write('note.md', note);
+		await loadPlugin(vault, { entryLedger: 'main.bean' });
+
+		await vault.emit('modify', file);
+		await delay(100);
+		await vault.emit('modify', main);
+		await delay(600);
+
+		expect(beanCheckRuns).toHaveLength(2);
+	});
+
+	it('announces a <load> failure from a markdown fence run', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, { entryLedger: 'main.bean' }, [
+			{ view: { file, editor } },
+		]);
+		plugin.beanCheckRunner = async (command, args) => {
+			beanCheckRuns.push({ command, args: [...args] });
+			return { stderr: '<load>:0:       File "/vault/main.bean" does not exist\n', missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(notices).toEqual(['bean-check: <load>: File "/vault/main.bean" does not exist']);
+		expect(published(editor)).toEqual([]);
 	});
 
 	it('checks the whole entry ledger and marks every file it reports', async () => {

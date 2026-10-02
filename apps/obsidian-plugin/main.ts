@@ -18,7 +18,8 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
-import { buildFenceLedger, extractBeancountFences } from './fences';
+import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
+import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
@@ -300,6 +301,24 @@ export default class BeancountPlugin extends Plugin {
 		// include chain. A markdown save always owns its own run: the fences
 		// live in a temp file, even when the entry ledger is included first.
 		const target = markdown ? file.path : this.settings.entryLedger.trim() || file.path;
+		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
+		// Only the newest run for a target may report: bean-check speed varies
+		// with its cache, and an older run finishing last must not overwrite
+		// the newer report.
+		const seq = (this.validateSeq.get(target) ?? 0) + 1;
+		this.validateSeq.set(target, seq);
+
+		let fences: BeancountFence[] | undefined;
+		if (markdown) {
+			const text = await this.app.vault.read(file);
+			if (this.validateSeq.get(target) !== seq) return;
+			fences = extractBeancountFences(text);
+			if (fences.length === 0) {
+				this.markErrors(target, [], root);
+				return;
+			}
+		}
+
 		// Only the validator itself may run: the setting locates bean-check,
 		// it must not name some other program to execute on the ledger.
 		const command = this.settings.beanCheckPath.trim() || 'bean-check';
@@ -307,10 +326,13 @@ export default class BeancountPlugin extends Plugin {
 			this.notify(MISSING_BEAN_CHECK_NOTICE);
 			return;
 		}
-		// bean-check reports the path it is given, so hand it the real,
-		// vault-rooted path and match reports against the same root.
-		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
 		const entry = this.settings.entryLedger.trim();
+		// Newlines/quotes in the setting would break out of the generated
+		// `include "..."` line; reject them the same way as a path escape.
+		if (entry && !isSafeIncludePath(entry)) {
+			this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+			return;
+		}
 		const confined = resolve(root, entry || file.path);
 		// The entry-ledger setting must stay inside the vault: `..` or an
 		// absolute path would point bean-check (and its quoted error text)
@@ -320,25 +342,28 @@ export default class BeancountPlugin extends Plugin {
 			this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`);
 			return;
 		}
-		// Only the newest run for a target may report: bean-check speed varies
-		// with its cache, and an older run finishing last must not overwrite
-		// the newer report.
-		const seq = (this.validateSeq.get(target) ?? 0) + 1;
-		this.validateSeq.set(target, seq);
+
+		let includePath: string | undefined;
+		if (markdown && entry) {
+			try {
+				const real = realpathSync(confined).replace(/\\/g, '/');
+				const realRel = relative(root, real);
+				if (realRel === '' || realRel === '..' || realRel.startsWith('..' + sep) || isAbsolute(realRel)) {
+					this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+					return;
+				}
+				includePath = real;
+			} catch {
+				includePath = confined.replace(/\\/g, '/');
+			}
+		}
 
 		let checkPath = confined;
 		let cleanup: (() => void) | undefined;
 		let hostLine: ((tempLine: number) => number | undefined) | undefined;
 		try {
-			if (markdown) {
-				const text = await this.app.vault.read(file);
-				if (this.validateSeq.get(target) !== seq) return;
-				const fences = extractBeancountFences(text);
-				if (fences.length === 0) {
-					this.markErrors(target, [], root);
-					return;
-				}
-				const ledger = buildFenceLedger(fences, entry ? confined : undefined);
+			if (markdown && fences) {
+				const ledger = buildFenceLedger(fences, includePath);
 				const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
 				cleanup = () => rmSync(dir, { recursive: true, force: true });
 				const temp = join(dir, 'fences.bean');
@@ -364,6 +389,7 @@ export default class BeancountPlugin extends Plugin {
 			if (hostLine) {
 				const mapHost = hostLine;
 				errors = errors.flatMap((error) => {
+					if (error.file.startsWith('<')) return [error];
 					if (!matchesTempFile(error.file, checkPath)) return [];
 					const line = mapHost(error.line);
 					if (line === undefined) return [];

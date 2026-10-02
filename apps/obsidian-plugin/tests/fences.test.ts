@@ -3,7 +3,7 @@
  * bodies, then map bean-check's temp-file lines back onto the host document.
  */
 import { describe, expect, it } from 'vitest';
-import { buildFenceLedger, extractBeancountFences } from '../fences';
+import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from '../fences';
 
 describe('extractBeancountFences', () => {
 	it('returns nothing for prose without a fence', () => {
@@ -47,6 +47,12 @@ describe('extractBeancountFences', () => {
 			{ startLine: 1, lines: ['2026-10-01 * "A"'] },
 		]);
 	});
+
+	it('strips the opener indent from each body line', () => {
+		expect(extractBeancountFences('  ```beancount\n  2026-10-01 open Assets:Cash\n  ```\n')).toEqual([
+			{ startLine: 1, lines: ['2026-10-01 open Assets:Cash'] },
+		]);
+	});
 });
 
 describe('buildFenceLedger', () => {
@@ -81,5 +87,22 @@ describe('buildFenceLedger', () => {
 
 		expect(ledger.text.startsWith('include "C:/vault/main.bean"\n\n')).toBe(true);
 		expect(ledger.hostLine(3)).toBe(1);
+	});
+
+	it('omits an include path that would break out of the string', () => {
+		const ledger = buildFenceLedger(fences, '/vault/main.bean\nplugin "os"');
+
+		expect(ledger.text.startsWith('include ')).toBe(false);
+		expect(ledger.hostLine(1)).toBe(4);
+	});
+});
+
+describe('isSafeIncludePath', () => {
+	it('rejects quotes, newlines, and NULs', () => {
+		expect(isSafeIncludePath('/vault/main.bean')).toBe(true);
+		expect(isSafeIncludePath('/v/a"b.bean')).toBe(false);
+		expect(isSafeIncludePath('main.bean\ninclude "/etc/passwd"')).toBe(false);
+		expect(isSafeIncludePath('main.bean\0x')).toBe(false);
+		expect(isSafeIncludePath('')).toBe(false);
 	});
 });

@@ -47,11 +47,16 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 		}
 		const marker = open[1][0];
 		const minLen = open[1].length;
+		// CommonMark strips the opener's indent (0–3 spaces) from each body line.
+		const indent = (/^ */.exec(lines[i]) ?? [''])[0].length;
 		const body: string[] = [];
 		let j = i + 1;
 		for (; j < lines.length; j += 1) {
 			if (isClosingFence(lines[j], marker, minLen)) break;
-			body.push(lines[j]);
+			const line = lines[j];
+			let start = 0;
+			while (start < indent && line[start] === ' ') start += 1;
+			body.push(line.slice(start));
 		}
 		fences.push({ startLine: i + 1, lines: body });
 		i = j + 1;
@@ -64,10 +69,20 @@ function isClosingFence(line: string, marker: string, minLen: number): boolean {
 	return close !== null && close[2][0] === marker && close[2].length >= minLen;
 }
 
+
+/**
+ * Whether `path` can be interpolated into one `include "..."` line: no CR/LF,
+ * NUL, or quotes that would break out of the string.
+ */
+export function isSafeIncludePath(path: string): boolean {
+	return path.length > 0 && !/[\r\n\0"]/.test(path);
+}
+
 /**
  * Concatenate `fences` into one ledger. When `includePath` is set, an
  * `include` of that file (forward-slash path) is prepended so the fences are
- * checked against the entry ledger's opens and accounts.
+ * checked against the entry ledger's opens and accounts. An unsafe path is
+ * omitted rather than written into the temp file.
  */
 export function buildFenceLedger(fences: readonly BeancountFence[], includePath?: string): FenceLedger {
 	const hostByTemp = new Map<number, number>();
@@ -76,8 +91,10 @@ export function buildFenceLedger(fences: readonly BeancountFence[], includePath?
 
 	if (includePath !== undefined) {
 		const posix = includePath.replace(/\\/g, '/');
-		chunks.push(`include "${posix.replace(/"/g, '\\"')}"`, '');
-		tempLine += 2;
+		if (isSafeIncludePath(posix)) {
+			chunks.push(`include "${posix}"`, '');
+			tempLine += 2;
+		}
 	}
 
 	for (let i = 0; i < fences.length; i += 1) {
