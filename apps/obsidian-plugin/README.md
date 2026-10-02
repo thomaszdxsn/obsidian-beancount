@@ -36,7 +36,9 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   the amounts' `sign + integer` blocks right-align at it (integers at the
   units place) and cost/price annotations stay put. An optional setting walks
   every block of each markdown/beancount file the same way whenever it is
-  saved.
+  saved. Instant alignment (on by default) intercepts `.` in a posting amount,
+  aligns that transaction block onto the separator column (default 50), and
+  leaves the caret just after the point — one undo restores the insert.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
   selection when there is one. It ships with the default hotkey `Mod+Shift+D`;

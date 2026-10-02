@@ -3,7 +3,7 @@
  * column is computed, and that the rewrite is idempotent and surgical.
  */
 import { describe, expect, it } from 'vitest';
-import { alignText, blockRangeAt, computeAlignment, displayWidth } from '../align';
+import { alignText, blockRangeAt, computeAlignment, displayWidth, isAmountDotInsert } from '../align';
 
 /** Align a document given as lines; return the document as lines. */
 function align(lines: string[]): string[] {
@@ -275,6 +275,39 @@ describe('computeAlignment', () => {
 		expect(computeAlignment(lines)).toEqual([{ line: 1, from: 13, to: 14, text: '         ' }]);
 		// Only the short one in range: it already sits on its own column.
 		expect(computeAlignment(lines, { from: 1, to: 1 })).toEqual([]);
+	});
+
+	it('pads a block up to a target decimal column', () => {
+		// prefix `  Assets:Cash` = 13, beforeDot 2, target 19 → gap of 4.
+		expect(computeAlignment(['  Assets:Cash 12.5 USD'], undefined, 19)).toEqual([
+			{ line: 0, from: 13, to: 14, text: '    ' },
+		]);
+	});
+
+	it('keeps a column already past the target', () => {
+		expect(computeAlignment(['  Expenses:Food:Rest 1234.5 CNY'], undefined, 10)).toEqual([]);
+	});
+});
+
+describe('isAmountDotInsert', () => {
+	it('accepts the first decimal of a posting amount', () => {
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 16)).toBe(true);
+		expect(isAmountDotInsert('  Assets:Cash 12', 16)).toBe(true);
+		expect(isAmountDotInsert('  Assets:Cash -12 USD', 17)).toBe(true);
+		// Splitting the integer (`1|2` → `1.2`) is still the units decimal.
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 15)).toBe(true);
+	});
+
+	it('rejects a second dot, the gap, annotations, and prose', () => {
+		expect(isAmountDotInsert('  Assets:Cash 12.5 USD', 17)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12.5 USD', 18)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 13)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 14)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD @ 7', 23)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD {150', 24)).toBe(false);
+		expect(isAmountDotInsert('2026-10-01 * "Store"', 16)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', -1)).toBe(false);
+		expect(isAmountDotInsert('  Assets:Cash 12 USD', 99)).toBe(false);
 	});
 });
 

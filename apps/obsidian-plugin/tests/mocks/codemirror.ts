@@ -39,6 +39,8 @@ export const EditorSelection = {
 export interface MockDispatchSpec {
 	changes: Array<{ from: number; to: number; insert: string }>;
 	selection: { ranges: MockCaret[] };
+	userEvent?: string;
+	scrollIntoView?: boolean;
 }
 
 /** The whole `EditorView` surface the posting-indent binding touches. */
