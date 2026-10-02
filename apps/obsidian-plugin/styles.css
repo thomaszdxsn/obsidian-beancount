@@ -14,3 +14,9 @@
 	background-color: var(--text-error, #e45649);
 	margin: 0.35em auto 0;
 }
+
+.beancount-account-suggest-meta {
+	white-space: pre-wrap;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}

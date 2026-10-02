@@ -1,8 +1,8 @@
 /**
  * Shared behaviour for completion popovers over vault strings (accounts,
- * payees, …): prefix-match candidates from a `VaultIndex`, and picking one
- * replaces the typed query in place. Subclasses only decide when a line and
- * cursor open a completable field (`onTrigger`).
+ * payees, …): prefix-match candidates from an index with `match`, and
+ * picking one replaces the typed query in place. Subclasses only decide
+ * when a line and cursor open a completable field (`onTrigger`).
  */
 import { EditorSuggest } from 'obsidian';
 import type {
@@ -13,12 +13,16 @@ import type {
 	EditorSuggestTriggerInfo,
 	TFile,
 } from 'obsidian';
-import type { VaultIndex } from './vault-index';
+
+/** Anything `IndexSuggest` can prefix-match against. */
+export interface CompletionIndex {
+	match(query: string): string[];
+}
 
 export abstract class IndexSuggest extends EditorSuggest<string> {
 	constructor(
 		app: App,
-		protected readonly index: VaultIndex
+		protected readonly index: CompletionIndex
 	) {
 		super(app);
 	}

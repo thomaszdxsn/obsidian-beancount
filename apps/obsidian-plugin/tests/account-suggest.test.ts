@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
-import { extractAccounts } from '../account-index';
+import { AccountIndex } from '../account-index';
 import { AccountSuggest } from '../account-suggest';
-import { registerVaultIndex, VaultIndex } from '../vault-index';
+import { registerVaultIndex } from '../vault-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
@@ -22,7 +22,7 @@ function contextFor(query: string): EditorSuggestContext {
 
 interface Fixture {
 	vault: FakeVault;
-	index: VaultIndex;
+	index: AccountIndex;
 	suggest: AccountSuggest;
 	plugin: RecordingPlugin;
 }
@@ -31,7 +31,7 @@ function setup(files: Record<string, string> = {}): Fixture {
 	const vault = new FakeVault();
 	for (const [path, content] of Object.entries(files)) vault.write(path, content);
 	const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
-	const index = new VaultIndex(extractAccounts);
+	const index = new AccountIndex();
 	registerVaultIndex(plugin as unknown as Plugin, index);
 	return { vault, index, suggest: new AccountSuggest({} as App, index), plugin };
 }
@@ -161,6 +161,43 @@ describe('AccountSuggest suggestions', () => {
 		};
 		suggest.renderSuggestion('Assets:Cash', { setText } as unknown as HTMLElement);
 		expect(rendered).toBe('Assets:Cash');
+	});
+
+	it('omits closed accounts and stays quiet when they are the only match', async () => {
+		const { suggest } = setup({
+			'a.bean': [
+				'2020-01-01 open Assets:Cash USD',
+				'2021-01-01 close Assets:Cash',
+				'2020-01-01 open Assets:Broker',
+			].join('\n'),
+		});
+		await flush();
+		expect(suggest.getSuggestions(contextFor('Assets:'))).toEqual(['Assets:Broker']);
+		expect(suggest.getSuggestions(contextFor('Assets:Cash'))).toEqual([]);
+		expect(trigger(suggest, 'Assets:Cash')).toBeNull();
+	});
+
+	it('renders open date and currencies under the account name', async () => {
+		const { suggest } = setup({
+			'a.bean': '2020-01-01 open Assets:Cash USD, CNY',
+		});
+		await flush();
+		let title: string | DocumentFragment | null = null;
+		let meta: { text?: string; cls?: string } | undefined;
+		suggest.renderSuggestion('Assets:Cash', {
+			setText: (text: string | DocumentFragment) => {
+				title = text;
+			},
+			createDiv: (opts: { text?: string; cls?: string }) => {
+				meta = opts;
+				return {};
+			},
+		} as unknown as HTMLElement);
+		expect(title).toBe('Assets:Cash');
+		expect(meta).toEqual({
+			text: 'opened on 2020-01-01\ncurrencies: USD, CNY',
+			cls: 'beancount-account-suggest-meta',
+		});
 	});
 
 	it('replaces the trigger range with the selected account and closes', () => {

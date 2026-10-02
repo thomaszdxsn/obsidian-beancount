@@ -8,9 +8,14 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   highlighting through a CodeMirror stream mode ported from
   `beancount.tmLanguage`.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
-  editor suggests every account name found in the vault. Account names are
+  editor suggests still-open account names found in the vault. Names are
   extracted per file with a regex, cached, and invalidated when files are
-  created, modified, deleted or renamed.
+  created, modified, deleted or renamed. An account with a `close` directive
+  is omitted unless a later `open` reopens it. The popup shows the latest
+  open date and constrained currencies when those directives are present.
+  Balances are not computed here: doing it in JS would reimplement
+  beancount's booking, and a Python subprocess would add latency on every
+  index refresh.
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion

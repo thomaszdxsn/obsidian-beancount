@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { alignText, blockRangeAt, computeAlignment } from './align';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
-import { extractAccounts } from './account-index';
+import { AccountIndex } from './account-index';
 import { AccountSuggest } from './account-suggest';
 import type { BeanCheckError, BeanCheckRunner } from './bean-check';
 import {
@@ -198,7 +198,7 @@ export default class BeancountPlugin extends Plugin {
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
 		// One vault scan feeds both completion indexes.
-		const accounts = new VaultIndex(extractAccounts);
+		const accounts = new AccountIndex();
 		const payees = new VaultIndex(extractPayees);
 		registerVaultIndex(this, accounts, payees);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
