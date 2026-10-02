@@ -99,7 +99,7 @@ describe('extractAccountDirectives', () => {
 	});
 
 	it('strips comments and booking methods from the currency list', () => {
-		expect(records('2020-01-01 open Assets:Cash USD, EUR {STRICT} ; note')).toEqual({
+		expect(records('2020-01-01 open Assets:Cash USD, EUR "STRICT" ; note')).toEqual({
 			'Assets:Cash': { open: '2020-01-01', currencies: ['USD', 'EUR'] },
 		});
 	});

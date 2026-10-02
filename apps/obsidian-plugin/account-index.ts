@@ -5,6 +5,7 @@
  * completion. The vault-wide cache is `AccountIndex`.
  */
 import { MAX_SUGGESTIONS, VaultIndex } from './vault-index';
+import type { VaultCache } from './vault-index';
 
 /**
  * A complete account name: a capitalized root segment plus one or more
@@ -29,7 +30,7 @@ export const ACCOUNT_PREFIX_RE = /(?:^|[^A-Za-z0-9\-_:/])([A-Z][A-Za-z0-9\-_]*(?
 const DIRECTIVE_RE =
 	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+(open|close)(?![A-Za-z0-9])[ \t]+([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+)\b(.*)$/gm;
 
-/** Beancount commodity tokens on an `open` line, after comments and `{booking}`. */
+/** Beancount commodity tokens on an `open` line, after comments and `"booking"`. */
 const COMMODITY_RE = /^[A-Z][A-Z0-9._'-]*$/;
 
 export interface AccountRecord {
@@ -90,7 +91,7 @@ export function describeAccount(record: AccountRecord | undefined): string {
  * closed accounts and caps the popup window after that filter, so a vault
  * of closed names cannot crowd out still-open ones.
  */
-export class AccountIndex {
+export class AccountIndex implements VaultCache {
 	private readonly names = new VaultIndex(extractAccounts);
 	private readonly directivesByPath = new Map<string, ReadonlyMap<string, AccountRecord>>();
 	private merged: ReadonlyMap<string, AccountRecord> | null = null;
@@ -147,7 +148,7 @@ export class AccountIndex {
 }
 
 function parseCurrencies(rest: string): string[] {
-	const body = rest.split(';')[0].replace(/\{[^}]*\}/g, ' ');
+	const body = rest.split(';')[0].replace(/"[^"]*"/g, ' ');
 	const currencies: string[] = [];
 	for (const token of body.split(/[\s,]+/)) {
 		if (COMMODITY_RE.test(token)) currencies.push(token);
