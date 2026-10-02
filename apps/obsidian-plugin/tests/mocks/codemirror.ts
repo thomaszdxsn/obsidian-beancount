@@ -3,9 +3,10 @@
  * (`esbuild` lists them as external): just the `keymap`/`Prec`/
  * `EditorSelection` pieces the posting-indent extension builds from, plus a
  * minimal `EditorView` double its Enter binding can be driven with — and the
- * `StateField`/`StateEffect`/`Decoration`/`ViewPlugin`/`gutter` pieces the
- * diagnostics extension builds from, each mirroring the real behaviour those
- * calls rely on (effect identity via `is`, decoration ranges, sorted sets).
+ * `StateField`/`StateEffect`/`Decoration`/`ViewPlugin`/`gutter`/`hoverTooltip`
+ * pieces the diagnostics and account-hover extensions build from, each
+ * mirroring the real behaviour those calls rely on (effect identity via `is`,
+ * decoration ranges, sorted sets, captured hover sources).
  */
 
 export interface MockKeyBinding {
@@ -181,3 +182,20 @@ export interface MockGutterConfig {
 }
 
 export const gutter = (config: MockGutterConfig): MockGutterConfig => config;
+
+/** The hover source `hoverTooltip` captures so tests can call it directly. */
+export interface MockHoverTooltip {
+	source: (
+		view: { state: { doc: { lineAt(pos: number): { from: number; to: number; text: string } } } },
+		pos: number,
+		side?: -1 | 1
+	) => { pos: number; end?: number; create: () => { dom: unknown } } | null;
+	options?: unknown;
+}
+
+export function hoverTooltip(
+	source: MockHoverTooltip['source'],
+	options?: unknown
+): MockHoverTooltip {
+	return { source, options };
+}

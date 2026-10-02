@@ -1,8 +1,9 @@
 /**
  * Account names: what counts as one (`extractAccounts`), how to recognize
- * one while typing (`ACCOUNT_PREFIX_RE`), and the open/close lifecycle
+ * one while typing (`ACCOUNT_PREFIX_RE`), the token under a hover
+ * (`accountTokenAt`), and the open/close lifecycle
  * (`extractAccountDirectives`) used to hide closed accounts from
- * completion. The vault-wide cache is `AccountIndex`.
+ * completion and to fill the hover card. The vault-wide cache is `AccountIndex`.
  */
 import { MAX_SUGGESTIONS, VaultIndex } from './vault-index';
 import type { VaultCache } from './vault-index';
@@ -22,6 +23,19 @@ const ACCOUNT_RE = /(?<![A-Za-z0-9\-_:/])[A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+
 
 /** The same shape while typing, where the last segment may be partial. */
 export const ACCOUNT_PREFIX_RE = /(?:^|[^A-Za-z0-9\-_:/])([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]*)*)$/;
+
+/** The complete account token covering `offset`, if any. */
+export function accountTokenAt(
+	text: string,
+	offset: number
+): { name: string; from: number; to: number } | null {
+	for (const match of text.matchAll(ACCOUNT_RE)) {
+		const from = match.index!;
+		const to = from + match[0].length;
+		if (offset >= from && offset <= to) return { name: match[0], from, to };
+	}
+	return null;
+}
 
 /**
  * Column-0 `open` / `close` directives. The account shape matches
@@ -87,6 +101,24 @@ export function describeAccount(record: AccountRecord | undefined): string {
 }
 
 /**
+ * Hover card: the name, then open/close dates and constrained currencies.
+ * A close is listed only while it still closes the account — a later open
+ * hides the stale date. A posting-only name yields just the title.
+ */
+export function accountHoverCard(
+	name: string,
+	record: AccountRecord | undefined
+): { name: string; lines: string[] } {
+	const lines: string[] = [];
+	if (record?.open !== undefined) lines.push(`opened on ${record.open}`);
+	if (record?.close !== undefined && isAccountClosed(record)) lines.push(`closed on ${record.close}`);
+	if (record !== undefined && record.currencies.length > 0) {
+		lines.push(`currencies: ${record.currencies.join(', ')}`);
+	}
+	return { name, lines };
+}
+
+/**
  * Vault-wide account names plus their open/close lifecycle. `match` hides
  * closed accounts and caps the popup window after that filter, so a vault
  * of closed names cannot crowd out still-open ones.
@@ -125,6 +157,11 @@ export class AccountIndex implements VaultCache {
 
 	record(name: string): AccountRecord | undefined {
 		return this.lifecycle().get(name);
+	}
+
+	/** Whether `name` has been seen in the vault, open or closed. */
+	has(name: string): boolean {
+		return this.names.values().includes(name);
 	}
 
 	/** Case-insensitive prefix match of still-open accounts. */

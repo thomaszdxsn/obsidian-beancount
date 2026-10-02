@@ -79,15 +79,16 @@ describe('esbuild production bundle', () => {
 			// The plugin's whole surface, in bundle form: the alignment,
 			// date-insert and outline commands, one settings tab, the vault
 			// events behind completion and on-save alignment, the two editor
-			// suggests, the posting-indent Enter binding, the outline view,
-			// and the cleanup for pending on-save work. Nothing else.
+			// suggests, the posting-indent Enter binding, the diagnostics
+			// markers, the account hover tooltip, the outline view, and the
+			// cleanup for pending on-save work. Nothing else.
 			expect(commands.map((command) => command.id)).toEqual([
 				'align-decimal-points',
 				'insert-today-date',
 				'show-outline',
 			]);
 			expect(settingTabs).toBe(1);
-			expect(editorExtensions).toHaveLength(2);
+			expect(editorExtensions).toHaveLength(3);
 			expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 			expect(registrations).toEqual({
 				ribbonIcons: [],

@@ -16,6 +16,11 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   Balances are not computed here: doing it in JS would reimplement
   beancount's booking, and a Python subprocess would add latency on every
   index refresh.
+- **Account hover**: hovering a complete account name shows an info card with
+  the latest open/close dates and constrained currencies when those directives
+  are in the vault. Names the vault has never seen produce no tooltip. Closed
+  accounts still hover — the card is how their close date is visible.
+  Balances are not computed here, for the same reason as completion.
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion

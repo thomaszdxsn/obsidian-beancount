@@ -8,7 +8,7 @@ import { parseBeanCheckErrors, toLineDiagnostics } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import { notices } from './mocks/obsidian';
-import type { MockKeymapExtension, MockView } from './mocks/codemirror';
+import type { MockHoverTooltip, MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
@@ -105,8 +105,8 @@ describe('BeancountPlugin', () => {
 	// The plugin's whole surface: the alignment, date-insert and outline
 	// commands, one settings tab, the vault events behind completion and
 	// on-save alignment, the two editor suggests, the posting-indent Enter
-	// binding, the diagnostics markers and the outline view — no ribbon,
-	// status bar, DOM listeners or intervals.
+	// binding, the diagnostics markers, the account hover tooltip and the
+	// outline view — no ribbon, status bar, DOM listeners or intervals.
 	it('registers only the alignment and date commands, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
 		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, views, ...rest } =
@@ -120,7 +120,7 @@ describe('BeancountPlugin', () => {
 		expect(rest).toEqual({ ribbonIcons: [], statusBarItems: 0, domEvents: [], intervals: [] });
 		expect(events).toHaveLength(5);
 		expect(editorSuggests).toHaveLength(2);
-		expect(editorExtensions).toHaveLength(2);
+		expect(editorExtensions).toHaveLength(3);
 		expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 		// One cleanup: pending on-save alignments. The mode uninstall registers
 		// only when a CodeMirror registry exists.
@@ -240,10 +240,33 @@ describe('BeancountPlugin', () => {
 	it('registers the posting-indent Enter binding', async () => {
 		const { plugin } = await loadPlugin();
 
-		// The diagnostics markers ride along as the second extension.
-		expect(plugin.registrations.editorExtensions).toHaveLength(2);
+		// The diagnostics markers ride along as the second extension; account
+		// hover as the third.
+		expect(plugin.registrations.editorExtensions).toHaveLength(3);
 		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
 		expect(extension.bindings.map((binding) => binding.key)).toEqual(['Enter']);
+	});
+
+	it('shows a hover card on known accounts and stays quiet on unknown ones', async () => {
+		const vault = new FakeVault();
+		vault.write(
+			'a.bean',
+			['2020-01-01 open Assets:Cash USD', '2021-01-01 close Assets:Cash'].join('\n')
+		);
+		const { plugin } = await loadPlugin(vault);
+		await flush();
+		const hover = plugin.registrations.editorExtensions[2] as MockHoverTooltip;
+		const known = '  Assets:Cash  10.00 USD';
+		expect(
+			hover.source({ state: { doc: { lineAt: () => ({ from: 0, to: known.length, text: known }) } } }, 2)
+		).toMatchObject({ pos: 2, end: 13 });
+		const unknown = '  Expenses:Ghost  1.00 USD';
+		expect(
+			hover.source(
+				{ state: { doc: { lineAt: () => ({ from: 0, to: unknown.length, text: unknown }) } } },
+				2
+			)
+		).toBeNull();
 	});
 
 	it('lets the plugin’s own completion popovers keep Enter', async () => {
