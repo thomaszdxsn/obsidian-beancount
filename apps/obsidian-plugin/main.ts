@@ -25,6 +25,7 @@ import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
 import { postingIndentExtension } from './posting-indent';
+import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
 
@@ -237,6 +238,14 @@ export default class BeancountPlugin extends Plugin {
 			// A default hotkey so the date is one chord away while typing; a
 			// customized binding for this command wins over the default.
 			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'D' }],
+		});
+		// Ledger files have no markdown headings, so Obsidian's Outline pane
+		// stays empty; this view is the jumpable txn/heading tree.
+		this.registerView(VIEW_TYPE_OUTLINE, (leaf) => new BeancountOutlineView(leaf));
+		this.addCommand({
+			id: 'show-outline',
+			name: 'Show outline',
+			callback: () => revealOutlineView(this.app),
 		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));

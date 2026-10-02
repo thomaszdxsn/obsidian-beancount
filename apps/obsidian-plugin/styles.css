@@ -29,3 +29,27 @@
 	margin: 0.25em 0 0;
 	padding-left: 1.2em;
 }
+
+.beancount-outline-empty {
+	color: var(--text-muted);
+	padding: 8px;
+}
+
+.beancount-outline-item {
+	cursor: pointer;
+	padding: 2px 8px;
+	border-radius: var(--radius-s);
+}
+
+.beancount-outline-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+
+.beancount-outline-heading {
+	font-weight: var(--font-semibold);
+}
+
+.beancount-outline-date {
+	color: var(--text-muted);
+}

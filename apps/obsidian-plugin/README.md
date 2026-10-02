@@ -54,6 +54,11 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   chain; a markdown save includes the entry first so the fence is checked
   against its opens and accounts. Without an entry ledger each saved file
   (or note's fences) is validated on its own.
+- **Outline**: the "Show outline" command opens a sidebar of the active
+  ledger. Org-mode `*` section titles nest the same way vscode-beancount's
+  DocumentSymbolProvider does (including `_` fillers for skipped levels).
+  Dated transactions, `open`, `close` and `balance` directives hang under
+  consecutive date groups; clicking a row jumps the editor to that line.
 
 This project uses Typescript to provide type checking and documentation.
 The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.
