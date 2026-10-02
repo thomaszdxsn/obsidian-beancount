@@ -70,7 +70,7 @@ describe('esbuild production bundle', () => {
 			expect(LoadedPlugin.prototype).toBeInstanceOf(obsidian.Plugin);
 
 			const instance = new LoadedPlugin({ vault: new FakeVault().api } as unknown as App, {
-				id: 'beancount-obsidian',
+				id: 'beancount',
 			} as PluginManifest);
 			await instance.onload();
 			const { events, editorSuggests, editorExtensions, commands, settingTabs, cleanups, ...registrations } = (

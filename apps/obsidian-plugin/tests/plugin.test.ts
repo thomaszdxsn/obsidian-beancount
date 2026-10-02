@@ -15,7 +15,7 @@ import { beancountMode } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
 
-const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+const manifest = { id: 'beancount' } as PluginManifest;
 
 // Obsidian injects `CodeMirror` onto the global at startup; tests install a
 // fake registry there to observe plugin registration and teardown.
@@ -98,7 +98,7 @@ describe('BeancountPlugin', () => {
 	it('is an Obsidian Plugin subclass', () => {
 		const plugin = new BeancountPlugin({} as App, manifest);
 		expect(plugin).toBeInstanceOf(Plugin);
-		expect(plugin.manifest.id).toBe('beancount-obsidian');
+		expect(plugin.manifest.id).toBe('beancount');
 	});
 
 	// The plugin's whole surface: the alignment and date-insert commands, one

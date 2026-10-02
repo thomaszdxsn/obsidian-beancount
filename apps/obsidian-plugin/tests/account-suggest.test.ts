@@ -6,7 +6,7 @@ import { AccountSuggest } from '../account-suggest';
 import { registerVaultIndex, VaultIndex } from '../vault-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
-const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+const manifest = { id: 'beancount' } as PluginManifest;
 
 /** A vault with completable accounts, for trigger expectations. */
 const ACCOUNTS = { 'a.md': 'Assets:Cash:Wallet Expenses:Food' };

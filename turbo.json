@@ -8,6 +8,7 @@
     },
     "test": {
       "dependsOn": ["^test"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/manifest.json", "$TURBO_ROOT$/versions.json"],
       "outputs": ["coverage/**"]
     },
     "dev": {

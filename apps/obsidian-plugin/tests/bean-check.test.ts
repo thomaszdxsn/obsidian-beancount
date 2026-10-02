@@ -211,7 +211,7 @@ describe('save-time validation end to end', () => {
 			const editor = createEditor(broken.split('\n'));
 			const plugin = new BeancountPlugin(
 				{ vault: vault.api, workspace: { getLeavesOfType: () => [{ view: { file, editor } }], activeEditor: null } } as unknown as App,
-				{ id: 'beancount-obsidian' } as PluginManifest
+				{ id: 'beancount' } as PluginManifest
 			);
 			await plugin.onload();
 			plugin.beanCheckRunner = runBeanCheck;

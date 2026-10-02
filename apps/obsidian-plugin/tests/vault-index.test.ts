@@ -7,7 +7,7 @@ import { extractPayees } from '../payee-index';
 import { registerVaultIndex, VaultIndex } from '../vault-index';
 import { FakeVault, flush } from './fakes';
 
-const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+const manifest = { id: 'beancount' } as PluginManifest;
 
 describe('VaultIndex', () => {
 	it('caches strings per file and exposes a sorted union', () => {

@@ -6,7 +6,7 @@ import { PayeeSuggest } from '../payee-suggest';
 import { registerVaultIndex, VaultIndex } from '../vault-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
-const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+const manifest = { id: 'beancount' } as PluginManifest;
 
 /** A vault with completable payees, for trigger expectations. */
 const PAYEES = {
