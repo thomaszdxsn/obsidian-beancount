@@ -251,4 +251,39 @@ describe('save-time validation end to end', () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it.skipIf(!hasBeanCheck)('marks a markdown fence with the terminal bean-check message', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bean-check-md-'));
+		try {
+			const broken = '2026-10-01 * "Cafe"\n  Expenses:Food  10.00 USD\n  Assets:CaSH   -10.00 USD\n';
+			const note = '```beancount\n' + broken + '```\n';
+			writeFileSync(join(dir, 'note.md'), note);
+
+			const vault = new FakeVault(dir);
+			const file = vault.write('note.md', note);
+			const editor = createEditor(note.split('\n'));
+			const plugin = new BeancountPlugin(
+				{ vault: vault.api, workspace: { getLeavesOfType: () => [{ view: { file, editor } }], activeEditor: null } } as unknown as App,
+				{ id: 'beancount-obsidian' } as PluginManifest
+			);
+			await plugin.onload();
+			plugin.beanCheckRunner = runBeanCheck;
+
+			await vault.emit('modify', file);
+			await vi.waitFor(() => expect(editor.cm.dispatched).toHaveLength(1), { timeout: 10_000 });
+
+			const [spec] = editor.cm.dispatched[0].effects as Array<{
+				value: unknown;
+				is(spec: unknown): boolean;
+			}>;
+			expect(spec.is(setLineDiagnostics)).toBe(true);
+			const shown = spec.value as LineDiagnostic[];
+			expect(shown).toHaveLength(1);
+			// Opening fence is line 0; the transaction header is the first body line.
+			expect(shown[0].line).toBe(1);
+			expect(shown[0].message).toContain("Invalid reference to unknown account 'Assets:CaSH'");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

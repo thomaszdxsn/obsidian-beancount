@@ -1,6 +1,7 @@
 import { Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
-import { realpathSync } from 'fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { alignText, blockRangeAt, computeAlignment } from './align';
 import type { LineRange } from './align';
@@ -17,6 +18,7 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
+import { buildFenceLedger, extractBeancountFences } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
@@ -109,6 +111,15 @@ function vaultRoot(basePath: string): string {
 		// A base path that does not exist has no real path to resolve.
 		return basePath.replace(/\\/g, '/').replace(/\/+$/, '') + '/';
 	}
+}
+
+/**
+ * Whether a bean-check report names the temp fence ledger we handed it.
+ * The tool prints the path it was given, or — rarely — the bare filename.
+ */
+function matchesTempFile(reported: string, absPath: string): boolean {
+	const normalized = reported.replace(/\\/g, '/');
+	return normalized === absPath.replace(/\\/g, '/') || normalized === 'fences.bean';
 }
 
 /** Every line of the editor, in order. */
@@ -242,10 +253,10 @@ export default class BeancountPlugin extends Plugin {
 
 	private onFileModified(file: TAbstractFile): void {
 		if (!isTextFile(file)) return;
+		const { extension } = file;
 		if (this.settings.alignOnSave) this.scheduleAlign(file);
-		// Only ledger files reach bean-check; a markdown note is not one,
-		// whatever it happens to contain.
-		if (isLedgerFile(file)) this.scheduleValidate(file);
+		// Ledger files, and markdown notes that may hold ```beancount fences.
+		if (isLedgerFile(file) || extension === 'md') this.scheduleValidate(file);
 	}
 
 	private scheduleAlign(file: TFile): void {
@@ -263,9 +274,10 @@ export default class BeancountPlugin extends Plugin {
 	}
 
 	private scheduleValidate(file: TFile): void {
-		// Keyed by run target: with an entry ledger, saves of any member file
-		// are one run and collapse into one debounce window.
-		const target = this.settings.entryLedger.trim() || file.path;
+		// Keyed by run target: with an entry ledger, saves of any member
+		// ledger file are one run. Markdown notes keep their own window —
+		// they check a temp file, not the entry ledger itself.
+		const target = file.extension === 'md' ? file.path : this.settings.entryLedger.trim() || file.path;
 		clearTimeout(this.validateTimers.get(target));
 		this.validateTimers.set(
 			target,
@@ -279,13 +291,15 @@ export default class BeancountPlugin extends Plugin {
 	/**
 	 * Run bean-check over the saved file — or over the entry ledger, when one
 	 * is configured — and mark every line it complains about in the editors
-	 * showing the files it reported.
+	 * showing the files it reported. A markdown note is checked through a
+	 * temp ledger of its fences, with lines mapped back onto the note.
 	 */
 	private async validateFile(file: TFile): Promise<void> {
-		// An entry ledger turns one run into a check of its whole include
-		// chain; without one, the saved file is checked with whatever it
-		// includes — both name the run that owns the resulting marks.
-		const target = this.settings.entryLedger.trim() || file.path;
+		const markdown = file.extension === 'md';
+		// An entry ledger turns a ledger-file save into a check of its whole
+		// include chain. A markdown save always owns its own run: the fences
+		// live in a temp file, even when the entry ledger is included first.
+		const target = markdown ? file.path : this.settings.entryLedger.trim() || file.path;
 		// Only the validator itself may run: the setting locates bean-check,
 		// it must not name some other program to execute on the ledger.
 		const command = this.settings.beanCheckPath.trim() || 'bean-check';
@@ -296,13 +310,14 @@ export default class BeancountPlugin extends Plugin {
 		// bean-check reports the path it is given, so hand it the real,
 		// vault-rooted path and match reports against the same root.
 		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
-		const full = resolve(root, target);
+		const entry = this.settings.entryLedger.trim();
+		const confined = resolve(root, entry || file.path);
 		// The entry-ledger setting must stay inside the vault: `..` or an
 		// absolute path would point bean-check (and its quoted error text)
 		// at some other file entirely.
-		const rel = relative(root, full);
+		const rel = relative(root, confined);
 		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-			this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(target)}"`);
+			this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`);
 			return;
 		}
 		// Only the newest run for a target may report: bean-check speed varies
@@ -310,21 +325,55 @@ export default class BeancountPlugin extends Plugin {
 		// the newer report.
 		const seq = (this.validateSeq.get(target) ?? 0) + 1;
 		this.validateSeq.set(target, seq);
-		const run = await this.beanCheckRunner(command, [full]);
-		if (this.validateSeq.get(target) !== seq) return;
-		if (run.missing) {
-			this.notify(MISSING_BEAN_CHECK_NOTICE);
-			return;
+
+		let checkPath = confined;
+		let cleanup: (() => void) | undefined;
+		let hostLine: ((tempLine: number) => number | undefined) | undefined;
+		try {
+			if (markdown) {
+				const text = await this.app.vault.read(file);
+				if (this.validateSeq.get(target) !== seq) return;
+				const fences = extractBeancountFences(text);
+				if (fences.length === 0) {
+					this.markErrors(target, [], root);
+					return;
+				}
+				const ledger = buildFenceLedger(fences, entry ? confined : undefined);
+				const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
+				cleanup = () => rmSync(dir, { recursive: true, force: true });
+				const temp = join(dir, 'fences.bean');
+				writeFileSync(temp, ledger.text);
+				checkPath = realpathSync(temp);
+				hostLine = (line) => ledger.hostLine(line);
+			}
+
+			const run = await this.beanCheckRunner(command, [checkPath]);
+			if (this.validateSeq.get(target) !== seq) return;
+			if (run.missing) {
+				this.notify(MISSING_BEAN_CHECK_NOTICE);
+				return;
+			}
+			let errors = parseBeanCheckErrors(run.stderr);
+			// stderr that parses to nothing is a broken bean-check (a traceback,
+			// a hang cut short) — say so and keep the marks that are already up,
+			// instead of clearing them for "clean".
+			if (errors.length === 0 && (run.stderr.trim() !== '' || run.failure)) {
+				this.notify(`bean-check ${run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`}`);
+				return;
+			}
+			if (hostLine) {
+				const mapHost = hostLine;
+				errors = errors.flatMap((error) => {
+					if (!matchesTempFile(error.file, checkPath)) return [];
+					const line = mapHost(error.line);
+					if (line === undefined) return [];
+					return [{ ...error, file: root + file.path, line }];
+				});
+			}
+			this.markErrors(target, errors, root);
+		} finally {
+			cleanup?.();
 		}
-		const errors = parseBeanCheckErrors(run.stderr);
-		// stderr that parses to nothing is a broken bean-check (a traceback,
-		// a hang cut short) — say so and keep the marks that are already up,
-		// instead of clearing them for "clean".
-		if (errors.length === 0 && (run.stderr.trim() !== '' || run.failure)) {
-			this.notify(`bean-check ${run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`}`);
-			return;
-		}
-		this.markErrors(target, errors, root);
 	}
 
 	/**
