@@ -59,7 +59,14 @@ export function isLedgerFile(file: VaultEntry): file is TFile {
 	);
 }
 
-export class VaultIndex {
+/** Per-file cache `registerVaultIndex` keeps in sync with vault events. */
+export interface VaultCache {
+	setFileContent(path: string, content: string): void;
+	removeFile(path: string): void;
+	renameFile(oldPath: string, newPath: string): boolean;
+}
+
+export class VaultIndex implements VaultCache {
 	/** Extracted strings by vault path; folders may hold re-keyed children on rename. */
 	private readonly stringsByPath = new Map<string, ReadonlySet<string>>();
 	/** Cached sorted union of `stringsByPath`, recomputed after each change. */
@@ -138,7 +145,7 @@ export class VaultIndex {
  * dropped by a per-path revision counter, and a read that fails (the file
  * vanished mid-scan) leaves the caches untouched.
  */
-export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultIndex[]): void {
+export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultCache[]): void {
 	const { vault } = plugin.app;
 
 	const revisions = new Map<string, number>();
