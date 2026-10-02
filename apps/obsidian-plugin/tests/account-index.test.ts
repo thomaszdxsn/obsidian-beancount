@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
 	AccountIndex,
+	accountHoverCard,
+	accountTokenAt,
 	describeAccount,
 	extractAccountDirectives,
 	extractAccounts,
@@ -173,6 +175,54 @@ describe('describeAccount', () => {
 	});
 });
 
+describe('accountTokenAt', () => {
+	it('returns the complete token covering the offset, including both ends', () => {
+		expect(accountTokenAt('  Assets:Cash  10.00 USD', 2)).toEqual({
+			name: 'Assets:Cash',
+			from: 2,
+			to: 13,
+		});
+		expect(accountTokenAt('  Assets:Cash  10.00 USD', 13)).toEqual({
+			name: 'Assets:Cash',
+			from: 2,
+			to: 13,
+		});
+		expect(accountTokenAt('  Assets:Cash  10.00 USD', 1)).toBeNull();
+		expect(accountTokenAt('  Assets:Cash  10.00 USD', 14)).toBeNull();
+	});
+
+	it('picks the token under the cursor when a line has two accounts', () => {
+		const line = 'Assets:Cash Assets:Broker';
+		expect(accountTokenAt(line, 0)?.name).toBe('Assets:Cash');
+		expect(accountTokenAt(line, 12)?.name).toBe('Assets:Broker');
+	});
+
+	it('ignores incomplete prefixes and prose', () => {
+		expect(accountTokenAt('Assets:', 3)).toBeNull();
+		expect(accountTokenAt('just prose', 3)).toBeNull();
+	});
+});
+
+describe('accountHoverCard', () => {
+	it('lists open, close and currencies and omits missing fields', () => {
+		expect(accountHoverCard('Assets:Cash', undefined)).toEqual({ name: 'Assets:Cash', lines: [] });
+		expect(accountHoverCard('Assets:Cash', { currencies: [] })).toEqual({
+			name: 'Assets:Cash',
+			lines: [],
+		});
+		expect(
+			accountHoverCard('Assets:Cash', {
+				open: '2020-01-01',
+				close: '2021-01-01',
+				currencies: ['USD', 'CNY'],
+			})
+		).toEqual({
+			name: 'Assets:Cash',
+			lines: ['opened on 2020-01-01', 'closed on 2021-01-01', 'currencies: USD, CNY'],
+		});
+	});
+});
+
 describe('AccountIndex', () => {
 	it('hides closed accounts from prefix matches and keeps posting-only names', () => {
 		const index = new AccountIndex();
@@ -188,6 +238,23 @@ describe('AccountIndex', () => {
 		expect(index.match('Assets:')).toEqual(['Assets:Broker']);
 		expect(index.match('Expenses:')).toEqual(['Expenses:Food']);
 		expect(index.match('Assets:Cash')).toEqual([]);
+	});
+
+	it('reports known names including closed and posting-only, and rejects unknown ones', () => {
+		const index = new AccountIndex();
+		index.setFileContent(
+			'a.bean',
+			[
+				'2020-01-01 open Assets:Cash USD',
+				'2021-01-01 close Assets:Cash',
+				'  Expenses:Food  10.00 USD',
+			].join('\n')
+		);
+		expect(index.has('Assets:Cash')).toBe(true);
+		expect(index.has('Expenses:Food')).toBe(true);
+		expect(index.has('Expenses:Ghost')).toBe(false);
+		index.removeFile('a.bean');
+		expect(index.has('Assets:Cash')).toBe(false);
 	});
 
 	it('reopens an account when a later open supersedes its close', () => {

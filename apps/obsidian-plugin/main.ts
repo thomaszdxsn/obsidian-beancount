@@ -8,6 +8,7 @@ import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
 import { AccountIndex } from './account-index';
 import { AccountSuggest } from './account-suggest';
+import { accountHoverTooltip } from './account-hover';
 import type { BeanCheckError, BeanCheckRunner } from './bean-check';
 import {
 	clipText,
@@ -223,6 +224,7 @@ export default class BeancountPlugin extends Plugin {
 		// The markers on lines bean-check complains about: inline underline
 		// plus a gutter dot, styled by `styles.css`.
 		this.registerEditorExtension(diagnosticsExtension);
+		this.registerEditorExtension(accountHoverTooltip(accounts));
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
