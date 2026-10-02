@@ -8,6 +8,7 @@ export interface PluginCommand {
 	id: string;
 	name?: string;
 	editorCallback?: (editor: unknown) => void;
+	callback?: () => void | Promise<void>;
 	/** The command's default hotkeys, as `Command.hotkeys` carries them. */
 	hotkeys?: Array<{ modifiers: string[]; key: string }>;
 }
@@ -22,6 +23,7 @@ export interface Registrations {
 	events: unknown[];
 	editorSuggests: unknown[];
 	editorExtensions: unknown[];
+	views: Array<{ type: string; creator: (leaf: unknown) => unknown }>;
 	cleanups: Array<() => void>;
 }
 
@@ -36,6 +38,7 @@ export class Plugin {
 		events: [],
 		editorSuggests: [],
 		editorExtensions: [],
+		views: [],
 		cleanups: [],
 	};
 
@@ -91,6 +94,10 @@ export class Plugin {
 		this.registrations.editorExtensions.push(extension);
 	}
 
+	registerView(type: string, creator: (leaf: unknown) => unknown): void {
+		this.registrations.views.push({ type, creator });
+	}
+
 	async loadData(): Promise<unknown> {
 		return this.loadedData;
 	}
@@ -111,6 +118,35 @@ export class Notice {
 export class Modal {}
 export class MarkdownView {}
 export class Editor {}
+
+/** Sidebar content host: `empty`/`createDiv` match the Obsidian HTMLElement helpers. */
+export class ItemView {
+	app: { workspace: unknown };
+	leaf: unknown;
+	contentEl = {
+		children: [] as Array<{ className: string; text: string; clicks: Array<() => void> }>,
+		empty() {
+			this.children = [];
+		},
+		createDiv(opts?: { cls?: string; text?: string }) {
+			const child = {
+				className: opts?.cls ?? '',
+				text: opts?.text ?? '',
+				clicks: [] as Array<() => void>,
+				addEventListener(_type: 'click', listener: () => void) {
+					this.clicks.push(listener);
+				},
+			};
+			this.children.push(child);
+			return child;
+		},
+	};
+	constructor(leaf: { app?: { workspace: unknown } }) {
+		this.leaf = leaf;
+		this.app = leaf.app ?? { workspace: {} };
+	}
+	registerEvent(_ref: unknown): void {}
+}
 
 /** The toggle a `Setting.addToggle` callback configures. */
 export interface FakeToggle {
