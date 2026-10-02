@@ -221,6 +221,19 @@ describe('accountHoverCard', () => {
 			lines: ['opened on 2020-01-01', 'closed on 2021-01-01', 'currencies: USD, CNY'],
 		});
 	});
+
+	it('omits a close that a later open has superseded', () => {
+		expect(
+			accountHoverCard('Assets:Cash', {
+				open: '2022-01-01',
+				close: '2021-01-01',
+				currencies: ['CNY'],
+			})
+		).toEqual({
+			name: 'Assets:Cash',
+			lines: ['opened on 2022-01-01', 'currencies: CNY'],
+		});
+	});
 });
 
 describe('AccountIndex', () => {

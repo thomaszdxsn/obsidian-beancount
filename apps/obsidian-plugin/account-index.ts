@@ -102,7 +102,8 @@ export function describeAccount(record: AccountRecord | undefined): string {
 
 /**
  * Hover card: the name, then open/close dates and constrained currencies.
- * Missing fields are omitted; a posting-only name yields just the title.
+ * A close is listed only while it still closes the account — a later open
+ * hides the stale date. A posting-only name yields just the title.
  */
 export function accountHoverCard(
 	name: string,
@@ -110,7 +111,7 @@ export function accountHoverCard(
 ): { name: string; lines: string[] } {
 	const lines: string[] = [];
 	if (record?.open !== undefined) lines.push(`opened on ${record.open}`);
-	if (record?.close !== undefined) lines.push(`closed on ${record.close}`);
+	if (record?.close !== undefined && isAccountClosed(record)) lines.push(`closed on ${record.close}`);
 	if (record !== undefined && record.currencies.length > 0) {
 		lines.push(`currencies: ${record.currencies.join(', ')}`);
 	}
