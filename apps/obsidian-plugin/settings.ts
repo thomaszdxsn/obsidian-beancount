@@ -63,7 +63,7 @@ export class BeancountSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Entry ledger')
 			.setDesc(
-				'Vault path of the ledger entry file to validate — its whole include chain is checked — e.g. main.bean. Leave empty to validate each saved file on its own.'
+				'Vault path of the ledger entry file. Saving a .bean file checks that file’s whole include chain. Saving a markdown note with ```beancount / ```bean fences checks those fences: with an entry ledger they are validated as if included after it (opens and accounts apply); without one, the fences are checked on their own. Leave empty to validate each saved ledger file on its own.'
 			)
 			.addText((text) =>
 				text

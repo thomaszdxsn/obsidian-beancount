@@ -1,5 +1,6 @@
 import type { App, PluginManifest } from 'obsidian';
 import { Plugin } from 'obsidian';
+import { existsSync, readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BeanCheckRun, LineDiagnostic } from '../bean-check';
@@ -721,6 +722,7 @@ describe('BeancountPlugin', () => {
 			'Bean-check executable',
 			'Entry ledger',
 		]);
+		expect(settings[2].desc).toContain('```beancount');
 		expect(settings[0].toggle?.value).toBe(false);
 		await settings[0].toggle?.onChangeHandler?.(true);
 		expect(plugin.savedData).toEqual([{ alignOnSave: true, beanCheckPath: '', entryLedger: '' }]);
@@ -783,7 +785,7 @@ describe('BeancountPlugin', () => {
 	});
 
 	it('leaves non-ledger text files unvalidated', async () => {
-		// bean-check cannot parse markdown; a note save never spawns it.
+		// Prose without a beancount fence is not a ledger; bean-check stays idle.
 		const vault = new FakeVault();
 		const file = vault.write('note.md', 'prose');
 		await loadPlugin(vault);
@@ -792,6 +794,230 @@ describe('BeancountPlugin', () => {
 		await delay(600);
 
 		expect(beanCheckRuns).toEqual([]);
+	});
+
+	it('marks a fence error on the markdown line, not the temp-file line', async () => {
+		const note = [
+			'# Grocery',
+			'',
+			'```beancount',
+			'2026-10-01 * "Cafe"',
+			'  Expenses:Food  10.00 USD',
+			'  Assets:CaSH   -10.00 USD',
+			'```',
+		].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		let tempPath = '';
+		plugin.beanCheckRunner = async (command, args) => {
+			tempPath = args[0];
+			beanCheckRuns.push({ command, args: [...args] });
+			return {
+				stderr: `${args[0]}:1:       Invalid reference to unknown account 'Assets:CaSH'\n`,
+				missing: false,
+			};
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toHaveLength(1);
+		expect(tempPath.endsWith('fences.bean')).toBe(true);
+		expect(tempPath.includes('/vault/')).toBe(false);
+		expect(existsSync(tempPath)).toBe(false);
+		// bean-check's line 1 is the transaction header — markdown line 3.
+		expect(published(editor)).toEqual([
+			{ line: 3, message: "Invalid reference to unknown account 'Assets:CaSH'" },
+		]);
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice when a fence is clean', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = { stderr: '', missing: false };
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toHaveLength(1);
+		expect(published(editor)).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('includes the entry ledger when checking a markdown fence', async () => {
+		const note = ['```bean', '2026-10-01 * "Cafe"', '  Assets:Cash  -10.00 USD', '```'].join('\n');
+		const vault = new FakeVault();
+		vault.write('main.bean', 'option "title" "Main"\n');
+		const file = vault.write('note.md', note);
+		const { plugin } = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		let body = '';
+		plugin.beanCheckRunner = async (command, args) => {
+			body = readFileSync(args[0], 'utf8');
+			beanCheckRuns.push({ command, args: [...args] });
+			return { stderr: '', missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(body.startsWith('include "/vault/main.bean"')).toBe(true);
+		expect(notices).toEqual([]);
+	});
+
+	it('does not announce entry-ledger errors when the fence itself is clean', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		vault.write('main.bean', 'garbage\n');
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, { entryLedger: 'main.bean' }, [
+			{ view: { file, editor } },
+		]);
+		plugin.beanCheckRunner = async (command, args) => {
+			beanCheckRuns.push({ command, args: [...args] });
+			return {
+				stderr: '/vault/main.bean:1:       Invalid token: \'garbage\'\n',
+				missing: false,
+			};
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(published(editor)).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('clears fence marks when the note no longer has a ledger fence', async () => {
+		const note = ['```beancount', '2026-10-01 * "Cafe"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		plugin.beanCheckRunner = async (command, args) => {
+			beanCheckRuns.push({ command, args: [...args] });
+			return { stderr: `${args[0]}:1:       oops\n`, missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(published(editor)).toEqual([{ line: 1, message: 'oops' }]);
+
+		vault.write('note.md', 'just prose\n');
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(published(editor)).toEqual([]);
+		expect(beanCheckRuns).toHaveLength(1);
+	});
+
+	it('does not notice on a prose note even when bean-check is misconfigured', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('note.md', 'just prose');
+		await loadPlugin(vault, { beanCheckPath: '/bin/bash' });
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('refuses an entry ledger that would break out of the include line', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		await loadPlugin(vault, { entryLedger: 'main.bean\nplugin "os"' });
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(beanCheckRuns).toEqual([]);
+		expect(notices[0]).toContain('entry ledger must be a vault file');
+	});
+
+	it('maps an error in the second fence onto that fence’s host line', async () => {
+		const note = [
+			'```beancount',
+			'option "title" "A"',
+			'```',
+			'',
+			'```beancount',
+			'2026-10-02 * "B"',
+			'```',
+		].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		plugin.beanCheckRunner = async (command, args) => {
+			beanCheckRuns.push({ command, args: [...args] });
+			return { stderr: `${args[0]}:3:       oops\n`, missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(published(editor)).toEqual([{ line: 5, message: 'oops' }]);
+	});
+
+	it('deletes the temp fence ledger when the runner throws', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const { plugin } = await loadPlugin(vault);
+		let tempPath = '';
+		plugin.beanCheckRunner = async (_command, args) => {
+			tempPath = args[0];
+			throw new Error('boom');
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(tempPath.endsWith('fences.bean')).toBe(true);
+		expect(existsSync(tempPath)).toBe(false);
+	});
+
+	it('does not collapse a markdown save with an entry-ledger save', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'option "title" "Main"\n');
+		const file = vault.write('note.md', note);
+		await loadPlugin(vault, { entryLedger: 'main.bean' });
+
+		await vault.emit('modify', file);
+		await delay(100);
+		await vault.emit('modify', main);
+		await delay(600);
+
+		expect(beanCheckRuns).toHaveLength(2);
+	});
+
+	it('announces a <load> failure from a markdown fence run', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, { entryLedger: 'main.bean' }, [
+			{ view: { file, editor } },
+		]);
+		plugin.beanCheckRunner = async (command, args) => {
+			beanCheckRuns.push({ command, args: [...args] });
+			return { stderr: '<load>:0:       File "/vault/main.bean" does not exist\n', missing: false };
+		};
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(notices).toEqual(['bean-check: <load>: File "/vault/main.bean" does not exist']);
+		expect(published(editor)).toEqual([]);
 	});
 
 	it('checks the whole entry ledger and marks every file it reports', async () => {
