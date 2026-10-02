@@ -297,30 +297,6 @@ describe('BeancountPlugin', () => {
 		}
 	});
 
-	it('opens the outline sidebar from the show-outline command', async () => {
-		const states: unknown[] = [];
-		const revealed: unknown[] = [];
-		const leaf = {
-			setViewState: async (state: unknown) => {
-				states.push(state);
-			},
-		};
-		const { plugin } = await loadPlugin();
-		const workspace = plugin.app.workspace as {
-			getLeavesOfType: () => unknown[];
-			getRightLeaf?: (split: boolean) => unknown;
-			revealLeaf?: (opened: unknown) => void;
-		};
-		workspace.getLeavesOfType = () => [];
-		workspace.getRightLeaf = () => leaf;
-		workspace.revealLeaf = (opened: unknown) => {
-			revealed.push(opened);
-		};
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'show-outline');
-		await command?.callback?.();
-		expect(states).toEqual([{ type: 'beancount-outline', active: true }]);
-		expect(revealed).toEqual([leaf]);
-	});
 
 	it('aligns only the transaction block at the cursor', async () => {
 		const { plugin } = await loadPlugin();

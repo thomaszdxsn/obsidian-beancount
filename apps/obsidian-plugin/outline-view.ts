@@ -6,7 +6,7 @@
  * completion; this is an `ItemView` plus a command that reveals it.
  */
 import { ItemView } from 'obsidian';
-import type { App } from 'obsidian';
+import type { App, Editor } from 'obsidian';
 import { flattenOutline, jumpToOutlineLine, parseBeancountOutline } from './outline';
 import { isLedgerFile } from './vault-index';
 
@@ -20,6 +20,7 @@ export interface OutlineMount {
 
 export interface OutlineItemEl {
 	addEventListener(type: 'click', listener: () => void): void;
+	style: { paddingLeft: string };
 }
 
 const EMPTY_LEDGER = 'Open a Beancount file to see its outline.';
@@ -41,6 +42,7 @@ export function drawOutline(mount: OutlineMount, text: string, onJump: (line: nu
 			cls: `beancount-outline-item beancount-outline-${row.kind} beancount-outline-depth-${row.depth}`,
 			text: row.title,
 		});
+		el.style.paddingLeft = `${8 + row.depth * 12}px`;
 		el.addEventListener('click', () => onJump(row.line));
 	}
 }
@@ -60,6 +62,9 @@ export async function revealOutlineView(app: App): Promise<void> {
 }
 
 export class BeancountOutlineView extends ItemView {
+	/** Last ledger editor: kept when the outline leaf itself is focused. */
+	private ledger: Editor | null = null;
+
 	getViewType(): string {
 		return VIEW_TYPE_OUTLINE;
 	}
@@ -73,21 +78,39 @@ export class BeancountOutlineView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
-		this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.sync()));
+		this.registerEvent(
+			this.app.workspace.on('active-leaf-change', (leaf) => {
+				if (leaf && leaf.view === this) return;
+				this.sync();
+			})
+		);
 		this.registerEvent(this.app.workspace.on('editor-change', () => this.sync()));
 		this.sync();
 	}
 
-	/** Rebuild the tree from the active ledger editor, if any. */
+	/** Rebuild the tree from the active ledger, or the last one if the outline has focus. */
 	sync(): void {
-		const file = this.app.workspace.getActiveFile();
-		const editor = this.app.workspace.activeEditor?.editor;
-		if (!file || !isLedgerFile(file) || !editor) {
+		const editor = this.ledgerEditor();
+		if (!editor) {
 			this.contentEl.empty();
 			this.contentEl.createDiv({ cls: 'beancount-outline-empty', text: EMPTY_LEDGER });
 			return;
 		}
 		drawOutline(this.contentEl, editor.getValue(), (line) => jumpToOutlineLine(editor, line));
+	}
+
+	private ledgerEditor(): Editor | null {
+		const file = this.app.workspace.getActiveFile();
+		const editor = this.app.workspace.activeEditor?.editor;
+		if (file && isLedgerFile(file) && editor) {
+			this.ledger = editor;
+			return editor;
+		}
+		if (file && !isLedgerFile(file)) {
+			this.ledger = null;
+			return null;
+		}
+		return this.ledger;
 	}
 }
 

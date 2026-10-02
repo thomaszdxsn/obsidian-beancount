@@ -36,21 +36,6 @@
 	background-color: var(--background-modifier-hover);
 }
 
-.beancount-outline-depth-1 {
-	padding-left: 20px;
-}
-
-.beancount-outline-depth-2 {
-	padding-left: 32px;
-}
-
-.beancount-outline-depth-3 {
-	padding-left: 44px;
-}
-
-.beancount-outline-depth-4 {
-	padding-left: 56px;
-}
 
 .beancount-outline-heading {
 	font-weight: var(--font-semibold);

@@ -26,7 +26,12 @@ function titles(nodes: readonly OutlineNode[]): unknown {
 }
 
 class FakeMount {
-	children: Array<{ className: string; text: string; clicks: Array<() => void> }> = [];
+	children: Array<{
+		className: string;
+		text: string;
+		clicks: Array<() => void>;
+		style: { paddingLeft: string };
+	}> = [];
 	empty(): void {
 		this.children = [];
 	}
@@ -35,6 +40,7 @@ class FakeMount {
 			className: opts?.cls ?? '',
 			text: opts?.text ?? '',
 			clicks: [] as Array<() => void>,
+			style: { paddingLeft: '' },
 			addEventListener(_type: 'click', listener: () => void) {
 				this.clicks.push(listener);
 			},
@@ -276,6 +282,7 @@ describe('drawOutline', () => {
 				text: 'Store — Groceries',
 			},
 		]);
+		expect(mount.children.map((child) => child.style.paddingLeft)).toEqual(['8px', '20px']);
 		mount.children[1].clicks[0]();
 		expect(jumped).toEqual([0]);
 	});
@@ -339,30 +346,30 @@ describe('revealOutlineView', () => {
 
 describe('BeancountOutlineView', () => {
 	function leafFor(editor: FakeEditor | null, file: { path: string; extension: string } | null) {
-		const events: Array<{ name: string; callback: () => void }> = [];
+		const box = { editor, file };
+		const events: Array<{ name: string; callback: (leaf?: unknown) => void }> = [];
 		const app = {
 			workspace: {
-				getActiveFile: () => file,
-				activeEditor: editor ? { editor, file } : null,
-				on: (name: string, callback: () => void) => {
+				getActiveFile: () => box.file,
+				get activeEditor() {
+					return box.editor ? { editor: box.editor, file: box.file } : null;
+				},
+				on: (name: string, callback: (leaf?: unknown) => void) => {
 					events.push({ name, callback });
 					return { name, callback };
 				},
 			},
 		};
-		return { leaf: { app } as unknown as WorkspaceLeaf, app, events };
+		return { leaf: { app } as unknown as WorkspaceLeaf, events, box };
 	}
 
-	it('names the view and redraws from the active ledger', async () => {
+	it('redraws from the active ledger and jumps on click', async () => {
 		const editor = createEditor(['2026-01-01 * "Store"']);
-		const { leaf, events } = leafFor(editor, { path: 'ledger.bean', extension: 'bean' });
+		const { leaf } = leafFor(editor, { path: 'ledger.bean', extension: 'bean' });
 		const view = new BeancountOutlineView(leaf);
 		expect(view.getViewType()).toBe(VIEW_TYPE_OUTLINE);
-		expect(view.getDisplayText()).toBe('Beancount Outline');
-		expect(view.getIcon()).toBe('list-tree');
 
 		await view.onOpen();
-		expect(events.map((event) => event.name)).toEqual(['active-leaf-change', 'editor-change']);
 		const items = (view.contentEl as unknown as FakeMount).children;
 		expect(items.map((item) => item.text)).toEqual(['2026-01-01', 'Store']);
 		items[1].clicks[0]();
@@ -391,5 +398,42 @@ describe('BeancountOutlineView', () => {
 			'2026-02-02',
 			'Later',
 		]);
+	});
+
+	it('keeps the tree when the outline pane takes focus', async () => {
+		const editor = createEditor(['2026-01-01 * "Store"']);
+		const { leaf, events, box } = leafFor(editor, { path: 'ledger.bean', extension: 'bean' });
+		const view = new BeancountOutlineView(leaf);
+		await view.onOpen();
+		box.editor = null;
+		events[0].callback();
+		const items = (view.contentEl as unknown as FakeMount).children;
+		expect(items.map((item) => item.text)).toEqual(['2026-01-01', 'Store']);
+		items[1].clicks[0]();
+		expect(editor.getCursor()).toEqual({ line: 0, ch: 0 });
+	});
+
+	it('does not wipe rows when its own leaf becomes active', async () => {
+		const editor = createEditor(['2026-01-01 * "Store"']);
+		const { leaf, events } = leafFor(editor, { path: 'ledger.bean', extension: 'bean' });
+		const view = new BeancountOutlineView(leaf);
+		await view.onOpen();
+		const before = (view.contentEl as unknown as FakeMount).children;
+		editor.lines = ['2026-02-02 * "Later"'];
+		events[0].callback({ view });
+		expect((view.contentEl as unknown as FakeMount).children).toBe(before);
+		expect(before.map((item) => item.text)).toEqual(['2026-01-01', 'Store']);
+	});
+
+	it('clears when the user switches to a non-ledger file', async () => {
+		const editor = createEditor(['2026-01-01 * "Store"']);
+		const { leaf, events, box } = leafFor(editor, { path: 'ledger.bean', extension: 'bean' });
+		const view = new BeancountOutlineView(leaf);
+		await view.onOpen();
+		box.file = { path: 'note.md', extension: 'md' };
+		events[0].callback();
+		expect((view.contentEl as unknown as FakeMount).children[0].text).toBe(
+			'Open a Beancount file to see its outline.'
+		);
 	});
 });

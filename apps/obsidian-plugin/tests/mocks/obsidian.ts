@@ -124,7 +124,12 @@ export class ItemView {
 	app: { workspace: unknown };
 	leaf: unknown;
 	contentEl = {
-		children: [] as Array<{ className: string; text: string; clicks: Array<() => void> }>,
+		children: [] as Array<{
+			className: string;
+			text: string;
+			clicks: Array<() => void>;
+			style: { paddingLeft: string };
+		}>,
 		empty() {
 			this.children = [];
 		},
@@ -133,6 +138,7 @@ export class ItemView {
 				className: opts?.cls ?? '',
 				text: opts?.text ?? '',
 				clicks: [] as Array<() => void>,
+				style: { paddingLeft: '' },
 				addEventListener(_type: 'click', listener: () => void) {
 					this.clicks.push(listener);
 				},
