@@ -102,20 +102,26 @@ describe('BeancountPlugin', () => {
 		expect(plugin.manifest.id).toBe('beancount-obsidian');
 	});
 
-	// The plugin's whole surface: the alignment and date-insert commands, one
-	// settings tab, the vault events behind completion and on-save alignment,
-	// the two editor suggests, the posting-indent Enter binding and the
-	// diagnostics markers — no ribbon, status bar, DOM listeners or intervals.
+	// The plugin's whole surface: the alignment, date-insert and outline
+	// commands, one settings tab, the vault events behind completion and
+	// on-save alignment, the two editor suggests, the posting-indent Enter
+	// binding, the diagnostics markers and the outline view — no ribbon,
+	// status bar, DOM listeners or intervals.
 	it('registers only the alignment and date commands, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
-		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, ...rest } =
+		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, views, ...rest } =
 			plugin.registrations;
-		expect(commands.map((command) => command.id)).toEqual(['align-decimal-points', 'insert-today-date']);
+		expect(commands.map((command) => command.id)).toEqual([
+			'align-decimal-points',
+			'insert-today-date',
+			'show-outline',
+		]);
 		expect(settingTabs).toBe(1);
 		expect(rest).toEqual({ ribbonIcons: [], statusBarItems: 0, domEvents: [], intervals: [] });
 		expect(events).toHaveLength(5);
 		expect(editorSuggests).toHaveLength(2);
 		expect(editorExtensions).toHaveLength(2);
+		expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 		// One cleanup: pending on-save alignments. The mode uninstall registers
 		// only when a CodeMirror registry exists.
 		expect(cleanups).toHaveLength(1);
@@ -128,6 +134,7 @@ describe('BeancountPlugin', () => {
 			events,
 			editorSuggests,
 			editorExtensions,
+			views,
 			cleanups,
 		});
 	});
@@ -289,6 +296,7 @@ describe('BeancountPlugin', () => {
 			vi.useRealTimers();
 		}
 	});
+
 
 	it('aligns only the transaction block at the cursor', async () => {
 		const { plugin } = await loadPlugin();

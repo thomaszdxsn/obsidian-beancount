@@ -169,11 +169,14 @@ export interface FakeEditor {
 	cm: FakeCm;
 	/** Editor selections; a caret is a selection whose anchor equals its head. */
 	selections: FakeSelection[];
+	/** Ranges passed to `scrollIntoView`, in order. */
+	scrollIntoViewCalls: Array<{ range: { from: FakePosition; to: FakePosition }; center?: boolean }>;
 	getLine(line: number): string;
 	lineCount(): number;
 	getValue(): string;
 	getCursor(): FakePosition;
 	setCursor(pos: FakePosition): void;
+	scrollIntoView(range: { from: FakePosition; to: FakePosition }, center?: boolean): void;
 	somethingSelected(): boolean;
 	listSelections(): FakeSelection[];
 	replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void;
@@ -195,6 +198,7 @@ export function createEditor(lines: string[]): FakeEditor {
 		transactions: [],
 		cm,
 		selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
+		scrollIntoViewCalls: [],
 		getLine(line: number): string {
 			return this.lines[line] ?? '';
 		},
@@ -209,6 +213,9 @@ export function createEditor(lines: string[]): FakeEditor {
 		},
 		setCursor(pos: FakePosition): void {
 			this.selections = [{ anchor: pos, head: pos }];
+		},
+		scrollIntoView(range: { from: FakePosition; to: FakePosition }, center?: boolean): void {
+			this.scrollIntoViewCalls.push({ range, center });
 		},
 		somethingSelected(): boolean {
 			return this.selections.some(

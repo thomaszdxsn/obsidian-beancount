@@ -20,3 +20,27 @@
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
+
+.beancount-outline-empty {
+	color: var(--text-muted);
+	padding: 8px;
+}
+
+.beancount-outline-item {
+	cursor: pointer;
+	padding: 2px 8px;
+	border-radius: var(--radius-s);
+}
+
+.beancount-outline-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+
+.beancount-outline-heading {
+	font-weight: var(--font-semibold);
+}
+
+.beancount-outline-date {
+	color: var(--text-muted);
+}

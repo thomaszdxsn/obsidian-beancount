@@ -73,17 +73,22 @@ describe('esbuild production bundle', () => {
 				id: 'beancount-obsidian',
 			} as PluginManifest);
 			await instance.onload();
-			const { events, editorSuggests, editorExtensions, commands, settingTabs, cleanups, ...registrations } = (
+			const { events, editorSuggests, editorExtensions, commands, settingTabs, cleanups, views, ...registrations } = (
 				instance as unknown as RecordingPlugin
 			).registrations;
-			// The plugin's whole surface, in bundle form: the alignment and
-			// date-insert commands, one settings tab, the vault events behind
-			// completion and on-save alignment, the two editor suggests, the
-			// posting-indent Enter binding, and the cleanup for pending on-save
-			// work. Nothing else.
-			expect(commands.map((command) => command.id)).toEqual(['align-decimal-points', 'insert-today-date']);
+			// The plugin's whole surface, in bundle form: the alignment,
+			// date-insert and outline commands, one settings tab, the vault
+			// events behind completion and on-save alignment, the two editor
+			// suggests, the posting-indent Enter binding, the outline view,
+			// and the cleanup for pending on-save work. Nothing else.
+			expect(commands.map((command) => command.id)).toEqual([
+				'align-decimal-points',
+				'insert-today-date',
+				'show-outline',
+			]);
 			expect(settingTabs).toBe(1);
 			expect(editorExtensions).toHaveLength(2);
+			expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 			expect(registrations).toEqual({
 				ribbonIcons: [],
 				statusBarItems: 0,
