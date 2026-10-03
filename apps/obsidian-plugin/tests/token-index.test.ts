@@ -37,6 +37,30 @@ describe('extractCommodities', () => {
 		expect([...extractCommodities('  Stocks:AAPL  2 AAPL')]).toEqual(['AAPL']);
 	});
 
+	it('keeps escapes inside quoted metadata straight', () => {
+		// The escaped quotes stay inside the string; the real amount after it
+		// is the only extraction. An escape-blind quote toggle would swallow
+		// `2 USD` (or harvest `B` and `EUR`).
+		const content = '  note: "a \\"b" 2 USD';
+		expect([...extractCommodities(content)]).toEqual(['USD']);
+	});
+
+	it('ignores quoted metadata values and comment tails', () => {
+		const content = [
+			'2026-09-30 * "Shell" "Fuel"',
+			'  invoice: "Order 2024 Q1"',
+			'  Assets:Cash  10.00 USD ; paid 2 ATM fees',
+		].join('\n');
+		expect([...extractCommodities(content)]).toEqual(['USD']);
+	});
+
+	it('ignores digit-capital shapes outside amount lines', () => {
+		// Column-0 prose: not a posting, not a balance/price date.
+		expect([...extractCommodities('paid 10 USD')]).toEqual([]);
+		// A single letter is an account segment shape, not a currency.
+		expect([...extractCommodities('  X:Y  1 C')]).toEqual([]);
+	});
+
 	it('ignores lowercase tokens and prose amounts', () => {
 		expect([...extractCommodities('paid 10 usd for lunch')]).toEqual([]);
 	});
@@ -62,6 +86,11 @@ describe('extractTags', () => {
 
 	it('ignores markdown headings', () => {
 		expect([...extractTags('# Heading\n## Subheading')]).toEqual([]);
+	});
+
+	it('requires the sigil at a token boundary', () => {
+		// URLs and mid-word sigils are not tags.
+		expect([...extractTags('see https://a.com/x#frag and C#')]).toEqual([]);
 	});
 
 	it('deduplicates tags', () => {

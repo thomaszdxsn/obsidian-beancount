@@ -221,9 +221,19 @@ export default class BeancountPlugin extends Plugin {
 		// One vault scan feeds every completion index.
 		const accounts = new AccountIndex();
 		const payees = new VaultIndex(extractPayees);
-		const commodities = new VaultIndex(extractCommodities);
-		const tags = new VaultIndex(extractTags);
-		const links = new VaultIndex(extractLinks);
+		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
+		// prose amounts (`- 10 GB`) collide with ledger token shapes, so on
+		// notes these extractors see only the beancount fence bodies; ledger
+		// files are scanned whole.
+		const ledgerText = (path: string, content: string): string =>
+			path.endsWith('.md')
+				? extractBeancountFences(content)
+						.map((fence) => fence.lines.join('\n'))
+						.join('\n')
+				: content;
+		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)));
+		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)));
+		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)));
 		const narrations = new VaultIndex(extractNarrations);
 		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations);
 		const accountSuggest = new AccountSuggest(this.app, accounts);

@@ -103,6 +103,7 @@ describe('BeancountPlugin', () => {
 	});
 
 
+
 	it('wires every completion index to the vault on load', async () => {
 		const vault = new FakeVault();
 		vault.write(
@@ -273,15 +274,16 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin();
 		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
 		const run = extension.bindings[0].run as unknown as (view: MockView) => boolean;
-		const suggest = plugin.registrations.editorSuggests[0] as { context: unknown };
+		const suggests = plugin.registrations.editorSuggests as Array<{ context: unknown }>;
+		for (const suggest of suggests) {
+			// A popup is open: Enter accepts the suggestion, never indents.
+			suggest.context = {};
+			const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+			expect(run(open)).toBe(false);
+			expect(open.dispatched).toEqual([]);
 
-		// A popup is open: Enter accepts the suggestion, never indents.
-		suggest.context = {};
-		const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
-		expect(run(open)).toBe(false);
-		expect(open.dispatched).toEqual([]);
-
-		suggest.context = null;
+			suggest.context = null;
+		}
 		const closed = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
 		expect(run(closed)).toBe(true);
 		expect(closed.dispatched).toHaveLength(1);

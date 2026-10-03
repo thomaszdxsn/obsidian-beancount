@@ -39,6 +39,27 @@ function tokenAfter(line: string, cursor: EditorPosition, tokenChars: RegExp): b
 }
 
 /**
+ * Whether the cursor sits in free text a token popup must not interrupt: an
+ * unclosed quoted string (a payee, a narration, a quoted metadata value) or
+ * a `;` comment, which owns the rest of its line. Quotes outside strings
+ * are field delimiters; escapes are respected inside.
+ */
+function inStringOrComment(prefix: string): boolean {
+	let inString = false;
+	for (let i = 0; i < prefix.length; i += 1) {
+		const ch = prefix[i];
+		if (inString && ch === '\\') {
+			i += 1;
+		} else if (ch === '"') {
+			inString = !inString;
+		} else if (ch === ';' && !inString) {
+			return true;
+		}
+	}
+	return inString;
+}
+
+/**
  * Tag completion: typing `#` (plus a partial name) inside ledger text
  * triggers a prefix-match popup over every tag cached from the vault;
  * picking one replaces the typed `#na` with `#name` — the sigil is part of
@@ -46,11 +67,17 @@ function tokenAfter(line: string, cursor: EditorPosition, tokenChars: RegExp): b
  */
 export class TagSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		if (!inLedgerContext(editor, cursor, file)) return null;
 		const line = editor.getLine(cursor.line);
 		if (tokenAfter(line, cursor, /[A-Za-z0-9\-_/.]/)) return null;
-		const match = TAG_PREFIX_RE.exec(line.slice(0, cursor.ch));
+		const prefix = line.slice(0, cursor.ch);
+		const match = TAG_PREFIX_RE.exec(prefix);
 		if (!match) return null;
+		// The `#` transaction flag: `2026-09-30 #` is a date and flag, not a
+		// tag with an empty name.
+		if (match[1] === '' && new RegExp(`^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \\t]*#$`).test(prefix)) return null;
+		// The context scan reads the whole buffer, so it runs only for a line
+		// that has already matched its trigger shape.
+		if (inStringOrComment(prefix) || !inLedgerContext(editor, cursor, file)) return null;
 		return this.triggerInfo(cursor, `#${match[1]}`);
 	}
 }
@@ -58,11 +85,12 @@ export class TagSuggest extends IndexSuggest {
 /** Link completion: the same as tags, triggered by `^`. */
 export class LinkSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		if (!inLedgerContext(editor, cursor, file)) return null;
 		const line = editor.getLine(cursor.line);
 		if (tokenAfter(line, cursor, /[A-Za-z0-9\-_/.]/)) return null;
-		const match = LINK_PREFIX_RE.exec(line.slice(0, cursor.ch));
+		const prefix = line.slice(0, cursor.ch);
+		const match = LINK_PREFIX_RE.exec(prefix);
 		if (!match) return null;
+		if (inStringOrComment(prefix) || !inLedgerContext(editor, cursor, file)) return null;
 		return this.triggerInfo(cursor, `^${match[1]}`);
 	}
 }
@@ -75,11 +103,12 @@ export class LinkSuggest extends IndexSuggest {
  */
 export class CommoditySuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		if (!inLedgerContext(editor, cursor, file)) return null;
 		const line = editor.getLine(cursor.line);
 		if (tokenAfter(line, cursor, /[A-Za-z0-9._'-]/)) return null;
-		const match = COMMODITY_PREFIX_RE.exec(line.slice(0, cursor.ch));
+		const prefix = line.slice(0, cursor.ch);
+		const match = COMMODITY_PREFIX_RE.exec(prefix);
 		if (!match) return null;
+		if (inStringOrComment(prefix) || !inLedgerContext(editor, cursor, file)) return null;
 		return this.triggerInfo(cursor, match[1]);
 	}
 }

@@ -126,5 +126,16 @@ export class BeancountSettingTab extends PluginSettingTab {
 					await this.host.saveSettings();
 				})
 			);
+		new Setting(containerEl)
+			.setName('Complete narrations')
+			.setDesc(
+				'Typing the second quoted field of a transaction line ("payee" "na…) suggests narrations found in the vault, and picking one closes the field.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.completeNarration).onChange(async (value) => {
+					this.host.settings.completeNarration = value;
+					await this.host.saveSettings();
+				})
+			);
 	}
 }

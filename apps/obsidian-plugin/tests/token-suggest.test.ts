@@ -105,6 +105,37 @@ describe('TagSuggest.onTrigger', () => {
 		expect(suggest.onTrigger(cursor, editor, LEDGER_FILE)).toBeNull();
 	});
 
+	it('stays quiet inside quoted strings', async () => {
+		const { index } = setup(extractTags, { 'a.md': 'x #trip' });
+		await flush();
+		const tag = new TagSuggest({} as App, index);
+		// The payee/narration fields own quoted text: `Fix #` is not a tag
+		// position — the popup must not hijack the string.
+		expect(tag.onTrigger(at('"Shell" "Fix #').cursor, at('"Shell" "Fix #').editor, LEDGER_FILE)).toBeNull();
+	});
+
+	it('respects escaped quotes when deciding string state', async () => {
+		const { index } = setup(extractTags, { 'a.md': 'x #trip' });
+		await flush();
+		const tag = new TagSuggest({} as App, index);
+		// `\"` inside the payee is an escaped quote: the string ends at the
+		// last quote, and the sigil after it is a real tag position.
+		const line = '2026-09-30 * "Say \\"hi" #tr';
+		expect(tag.onTrigger(at(line).cursor, at(line).editor, LEDGER_FILE)).toMatchObject({ query: '#tr' });
+	});
+
+	it('stays quiet on the bare # transaction flag', async () => {
+		const { index } = setup(extractTags, { 'a.md': '#trip' });
+		await flush();
+		const tag = new TagSuggest({} as App, index);
+		// `#` is a transaction flag: `2026-09-30 #` must not open the tag list.
+		expect(tag.onTrigger(at('2026-09-30 #').cursor, at('2026-09-30 #').editor, LEDGER_FILE)).toBeNull();
+		// After a flag character the sigil is a tag again.
+		expect(tag.onTrigger(at('2026-09-30 * #').cursor, at('2026-09-30 * #').editor, LEDGER_FILE)).toMatchObject({
+			query: '#',
+		});
+	});
+
 	it('caps suggestions at MAX_SUGGESTIONS', async () => {
 		const { index } = setup(
 			extractTags,
@@ -167,6 +198,19 @@ describe('LinkSuggest.onTrigger', () => {
 			query: '^re',
 		});
 	});
+
+	it('keeps the closed fence bounds: prose above and below stays quiet', async () => {
+		const { index } = setup(extractTags, { 'a.md': 'x #trip' });
+		await flush();
+		const suggest = new TagSuggest({} as App, index);
+		// Line 1 is the fence body; lines 0, 2 (the closing fence) and 3 are
+		// prose — a typo'd bounds check would pop the tag list over them.
+		const editor = createEditor(['#tr', '```beancount', '#trip', '```', '#tr']);
+		expect(suggest.onTrigger({ line: 0, ch: 3 }, editor as unknown as Editor, null)).toBeNull();
+		expect(suggest.onTrigger({ line: 2, ch: 5 }, editor as unknown as Editor, null)).toBeNull();
+		expect(suggest.onTrigger({ line: 3, ch: 3 }, editor as unknown as Editor, null)).toBeNull();
+		expect(suggest.onTrigger({ line: 4, ch: 3 }, editor as unknown as Editor, null)).toBeNull();
+	});
 });
 
 describe('CommoditySuggest.onTrigger', () => {
@@ -221,6 +265,18 @@ describe('CommoditySuggest.onTrigger', () => {
 		const { editor, cursor } = at('  Assets:Cash  10.00 US');
 		expect(suggest.onTrigger(cursor, editor, null)).toBeNull();
 	});
+
+	it('stays quiet inside quoted strings and comments', async () => {
+		const { index } = setup(extractCommodities, { 'a.md': '  Assets:Cash  10.00 USD' });
+		await flush();
+		const suggest = new CommoditySuggest({} as App, index);
+		// The payee field owns quoted text; a `;` comment owns the tail.
+		expect(
+			suggest.onTrigger(at('2026-09-30 * "Paid 5 E').cursor, at('2026-09-30 * "Paid 5 E').editor, LEDGER_FILE)
+		).toBeNull();
+		const comment = at('; bought 10 U');
+		expect(suggest.onTrigger(comment.cursor, comment.editor, LEDGER_FILE)).toBeNull();
+	});
 });
 
 describe('NarrationSuggest', () => {
@@ -254,6 +310,18 @@ describe('NarrationSuggest', () => {
 		await flush();
 		const { editor, cursor } = at('2026-09-30 * "Shel');
 		expect(suggest.onTrigger(cursor, editor, null)).toBeNull();
+	});
+
+	it('triggers before a typed closing quote', async () => {
+		const suggest = setupNarrations(true);
+		await flush();
+		// CodeMirror auto-pairs quotes: `"Shell" "Fu|"` is the common state.
+		const { editor, cursor } = at('2026-09-30 * "Shell" "Fu"', 24);
+		expect(suggest.onTrigger(cursor, editor, null)).toEqual({
+			start: { line: 0, ch: 22 },
+			end: { line: 0, ch: 24 },
+			query: 'Fu',
+		});
 	});
 
 	it('stays quiet when editing inside the narration', async () => {

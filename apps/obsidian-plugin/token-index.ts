@@ -58,13 +58,36 @@ const AMOUNT_RE = new RegExp(`[0-9][ \\t]+(${COMMODITY_TOKEN})(?![A-Z0-9])`, 'g'
 /** Lines whose amounts carry commodities: postings (indented) and `balance`/`price` dates. */
 const AMOUNT_LINE_RE = /^[ \t]|[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]+(?:balance|price)(?![A-Za-z0-9])/;
 
+/**
+ * The line without quoted strings and `;` comments: metadata values
+ * (`invoice: "Order 2024 Q1"`) and comment tails (`; paid 2 ATM fees`) hold
+ * digit+capitalized-word shapes that are not amounts.
+ */
+function stripStringsAndComments(line: string): string {
+	let out = '';
+	let inString = false;
+	for (let i = 0; i < line.length; i += 1) {
+		const ch = line[i];
+		if (inString && ch === '\\') {
+			i += 1;
+		} else if (ch === '"') {
+			inString = !inString;
+		} else if (ch === ';' && !inString) {
+			break;
+		} else if (!inString) {
+			out += ch;
+		}
+	}
+	return out;
+}
+
 export function extractCommodities(content: string): ReadonlySet<string> {
 	const commodities = new Set<string>();
 	for (const match of content.matchAll(COMMODITY_DIRECTIVE_RE)) commodities.add(match[1]);
 	for (const match of content.matchAll(PRICE_DIRECTIVE_RE)) commodities.add(match[1]);
 	for (const line of content.split('\n')) {
 		if (!AMOUNT_LINE_RE.test(line)) continue;
-		for (const match of line.matchAll(AMOUNT_RE)) commodities.add(match[1]);
+		for (const match of stripStringsAndComments(line).matchAll(AMOUNT_RE)) commodities.add(match[1]);
 	}
 	return commodities;
 }
