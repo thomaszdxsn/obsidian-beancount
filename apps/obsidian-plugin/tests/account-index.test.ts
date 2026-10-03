@@ -66,6 +66,34 @@ describe('extractAccounts', () => {
 		expect([...extractAccounts('assets:cash Assets: Meeting:Notes')]).toEqual(['Meeting:Notes']);
 	});
 
+	it('extracts names with non-ASCII segments', () => {
+		const content = [
+			'2026-09-30 open Expenses:餐饮:午饭 CNY',
+			'  Assets:现金  -30.00 CNY',
+			'  Assets:Café:Checking',
+		].join('\n');
+		expect([...extractAccounts(content)].sort()).toEqual(['Assets:Café:Checking', 'Assets:现金', 'Expenses:餐饮:午饭']);
+	});
+
+	it('ends a non-ASCII name at CJK punctuation and keeps it out of longer tokens', () => {
+		expect([...extractAccounts('（见Expenses:餐饮，午饭）记到 Assets:现金。')]).toEqual(['Assets:现金']);
+		expect([...extractAccounts('（见 Expenses:餐饮，午饭）')]).toEqual(['Expenses:餐饮']);
+		expect([...extractAccounts('Expenses:餐饮：午饭 Assets:: Assets:现金-')]).toEqual(['Expenses:餐饮', 'Assets:现金']);
+	});
+
+	it('accepts kana, hangul and digits in segments and stops at emoji and spaces', () => {
+		expect([...extractAccounts('Expenses:食費:ランチ Assets:은행:2024 Expenses:咖啡☕ Assets:现金 记账')]).toEqual([
+			'Expenses:食費:ランチ',
+			'Assets:은행:2024',
+			'Expenses:咖啡',
+			'Assets:现金',
+		]);
+	});
+
+	it('keeps dates and lowercase roots out even next to CJK text', () => {
+		expect([...extractAccounts('日期2026-09-30 时间12:30 备注:午饭 expenses:餐饮')]).toEqual([]);
+	});
+
 	it('returns an empty set for empty content', () => {
 		expect([...extractAccounts('')]).toEqual([]);
 	});
@@ -85,6 +113,13 @@ describe('extractAccountDirectives', () => {
 		expect(records(content)).toEqual({
 			'Assets:Cash': { open: '2020-01-01', close: '2021-06-15', currencies: ['USD', 'EUR'] },
 			'Liabilities:Card': { open: '2022-03-01', currencies: ['CNY'] },
+		});
+	});
+
+	it('reads directives for accounts with non-ASCII segments', () => {
+		const content = ['2020-01-01 open Expenses:餐饮:午饭 CNY', '2021-06-15 close Expenses:餐饮:午饭'].join('\n');
+		expect(records(content)).toEqual({
+			'Expenses:餐饮:午饭': { open: '2020-01-01', close: '2021-06-15', currencies: ['CNY'] },
 		});
 	});
 
@@ -201,6 +236,14 @@ describe('accountTokenAt', () => {
 		expect(accountTokenAt('Assets:', 3)).toBeNull();
 		expect(accountTokenAt('just prose', 3)).toBeNull();
 	});
+
+	it('covers non-ASCII segments', () => {
+		expect(accountTokenAt('  Expenses:餐饮:午饭  30.00 CNY', 12)).toEqual({
+			name: 'Expenses:餐饮:午饭',
+			from: 2,
+			to: 16,
+		});
+	});
 });
 
 describe('accountHoverCard', () => {
@@ -251,6 +294,19 @@ describe('AccountIndex', () => {
 		expect(index.match('Assets:')).toEqual(['Assets:Broker']);
 		expect(index.match('Expenses:')).toEqual(['Expenses:Food']);
 		expect(index.match('Assets:Cash')).toEqual([]);
+	});
+
+	it('hides a closed non-ASCII account while keeping its open sibling', () => {
+		const index = new AccountIndex();
+		index.setFileContent(
+			'a.bean',
+			[
+				'2020-01-01 open Expenses:餐饮:午饭 CNY',
+				'2020-01-01 open Expenses:餐饮:晚饭 CNY',
+				'2021-01-01 close Expenses:餐饮:晚饭',
+			].join('\n')
+		);
+		expect(index.match('Expenses:餐饮:')).toEqual(['Expenses:餐饮:午饭']);
 	});
 
 	it('reports known names including closed and posting-only, and rejects unknown ones', () => {

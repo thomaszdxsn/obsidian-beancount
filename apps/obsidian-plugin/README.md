@@ -10,7 +10,10 @@ This is a sample plugin for Obsidian (https://obsidian.md).
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault. Names are
   extracted per file with a regex, cached, and invalidated when files are
-  created, modified, deleted or renamed. An account with a `close` directive
+  created, modified, deleted or renamed. Segments after the capitalized root
+  may hold non-ASCII letters (`Expenses:餐饮:午饭`), the same accounts the
+  highlighter and alignment recognize; CJK punctuation (`，`, `：`) ends a name.
+  An account with a `close` directive
   is omitted unless a later `open` reopens it. The popup shows the latest
   open date and constrained currencies when those directives are present.
   Balances are not computed here: doing it in JS would reimplement

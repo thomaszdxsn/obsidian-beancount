@@ -77,6 +77,20 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(info).toMatchObject({ query: 'Assets:Ca', start: { line: 0, ch: 2 }, end: { line: 0, ch: 11 } });
 	});
 
+	it('triggers on and completes accounts with non-ASCII segments', async () => {
+		const { suggest } = setup({ 'a.md': '  Expenses:餐饮:午饭  30.00 CNY\n  Expenses:餐饮:晚饭  50.00 CNY' });
+		await flush();
+		expect(trigger(suggest, '  Expenses:餐饮:午')).toEqual({
+			start: { line: 0, ch: 2 },
+			end: { line: 0, ch: 15 },
+			query: 'Expenses:餐饮:午',
+		});
+		expect(suggest.getSuggestions(contextFor('Expenses:餐饮:'))).toEqual(['Expenses:餐饮:午饭', 'Expenses:餐饮:晚饭']);
+		expect(trigger(suggest, '见Expenses:餐')).toBeNull();
+		// CJK punctuation is a boundary like ASCII punctuation; a CJK letter is not.
+		expect(trigger(suggest, '（Expenses:餐')).toMatchObject({ query: 'Expenses:餐', start: { line: 0, ch: 1 } });
+	});
+
 	it('stays quiet when editing inside a token', async () => {
 		const { suggest } = setup(ACCOUNTS);
 		await flush();
