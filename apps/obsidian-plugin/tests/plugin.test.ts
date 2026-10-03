@@ -8,7 +8,7 @@ import { parseBeanCheckErrors, toLineDiagnostics } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import { notices } from './mocks/obsidian';
-import type { MockHoverTooltip, MockKeymapExtension, MockView } from './mocks/codemirror';
+import type { MockHoverTooltip, MockKeymapExtension, MockLanguageDataExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
@@ -106,8 +106,8 @@ describe('BeancountPlugin', () => {
 	// commands, one settings tab, the vault events behind completion and
 	// on-save alignment, the two editor suggests, the posting-indent Enter
 	// binding, the instant-alignment period binding, the diagnostics
-	// markers, the account hover tooltip and the outline view — no ribbon,
-	// status bar, DOM listeners or intervals.
+	// markers, the account hover tooltip, the fence language overlay and
+	// the outline view — no ribbon, status bar, DOM listeners or intervals.
 	it('registers only the alignment and date commands, settings tab and known listeners', async () => {
 		const { plugin } = await loadPlugin();
 		const { commands, settingTabs, events, editorSuggests, editorExtensions, cleanups, views, ...rest } =
@@ -121,7 +121,7 @@ describe('BeancountPlugin', () => {
 		expect(rest).toEqual({ ribbonIcons: [], statusBarItems: 0, domEvents: [], intervals: [] });
 		expect(events).toHaveLength(5);
 		expect(editorSuggests).toHaveLength(2);
-		expect(editorExtensions).toHaveLength(4);
+		expect(editorExtensions).toHaveLength(5);
 		expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 		// One cleanup: pending on-save alignments. The mode uninstall registers
 		// only when a CodeMirror registry exists.
@@ -198,6 +198,7 @@ describe('BeancountPlugin', () => {
 		expect(beancount.name).toBe('beancount');
 		expect(bean.name).toBe('bean');
 		expect(beancount.token).toBe(beancountMode.token);
+		expect(beancount.lineComment).toBe(';');
 		expect(beancountMode.name).toBe('beancount');
 	});
 
@@ -240,11 +241,25 @@ describe('BeancountPlugin', () => {
 
 	it('registers the posting-indent Enter binding', async () => {
 		const { plugin } = await loadPlugin();
-
-		// Instant alignment, diagnostics markers, then account hover.
-		expect(plugin.registrations.editorExtensions).toHaveLength(4);
+		// Instant alignment, diagnostics markers, account hover, then fence language.
+		expect(plugin.registrations.editorExtensions).toHaveLength(5);
 		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
 		expect(extension.bindings.map((binding) => binding.key)).toEqual(['Enter']);
+	});
+
+	it('overlays beancount commentTokens inside markdown fence bodies', async () => {
+		const { plugin } = await loadPlugin();
+		const extension = plugin.registrations.editorExtensions[4] as [MockLanguageDataExtension, unknown];
+		const text = ['```beancount', '  Assets:Cash', '```', 'prose'].join('\n');
+		const state = { doc: { toString: () => text } };
+		expect(extension[0].languageData(state, text.indexOf('Assets'))).toEqual([
+			{
+				commentTokens: { line: ';' },
+				closeBrackets: { brackets: ['(', '[', '{', "'"] },
+				wordChars: ':',
+			},
+		]);
+		expect(extension[0].languageData(state, text.indexOf('prose'))).toEqual([]);
 	});
 
 	it('shows a hover card on known accounts and stays quiet on unknown ones', async () => {

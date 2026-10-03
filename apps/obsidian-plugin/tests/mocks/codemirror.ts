@@ -19,7 +19,23 @@ export interface MockKeymapExtension {
 }
 
 export const Prec = {
-	high: (extension: MockKeymapExtension): MockKeymapExtension => extension,
+	high: <T>(extension: T): T => extension,
+};
+
+/** `EditorState.languageData.of` — tests call the captured source. */
+export type MockLanguageDataSource = (
+	state: { doc: { toString(): string } },
+	pos: number
+) => readonly unknown[];
+
+export interface MockLanguageDataExtension {
+	languageData: MockLanguageDataSource;
+}
+
+export const EditorState = {
+	languageData: {
+		of: (source: MockLanguageDataSource): MockLanguageDataExtension => ({ languageData: source }),
+	},
 };
 
 export const keymap = {

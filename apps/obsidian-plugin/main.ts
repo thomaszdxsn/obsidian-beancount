@@ -25,6 +25,7 @@ import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
 import { postingIndentExtension } from './posting-indent';
+import { fenceLanguageExtension } from './fence-language';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { instantAlignmentExtension } from './instant-alignment';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
@@ -230,6 +231,11 @@ export default class BeancountPlugin extends Plugin {
 		// plus a gutter dot, styled by `styles.css`.
 		this.registerEditorExtension(diagnosticsExtension);
 		this.registerEditorExtension(accountHoverTooltip(accounts));
+		// Cmd+/ comments, auto-close brackets, and ;#region folds inside
+		// ```beancount / ```bean fences — markdown's languageData otherwise
+		// wins because the fence highlighter is a CM5 overlay, not a nested
+		// CM6 language.
+		this.registerEditorExtension(fenceLanguageExtension());
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',

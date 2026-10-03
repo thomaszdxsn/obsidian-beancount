@@ -81,15 +81,15 @@ describe('esbuild production bundle', () => {
 			// events behind completion and on-save alignment, the two editor
 			// suggests, the posting-indent Enter binding, the instant-alignment
 			// period binding, the diagnostics markers, the account hover
-			// tooltip, the outline view, and the cleanup for pending on-save
-			// work. Nothing else.
+			// tooltip, the fence language overlay, the outline view, and the
+			// cleanup for pending on-save work. Nothing else.
 			expect(commands.map((command) => command.id)).toEqual([
 				'align-decimal-points',
 				'insert-today-date',
 				'show-outline',
 			]);
 			expect(settingTabs).toBe(1);
-			expect(editorExtensions).toHaveLength(4);
+			expect(editorExtensions).toHaveLength(5);
 			expect(views.map((view) => view.type)).toEqual(['beancount-outline']);
 			expect(registrations).toEqual({
 				ribbonIcons: [],
