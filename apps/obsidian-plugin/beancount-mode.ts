@@ -381,9 +381,6 @@ export const beancountMode = {
 	}),
 	blankLine,
 	token,
-	// CM5 comment toggle, if anything in the overlay reads it. Cmd+/ in
-	// the markdown editor uses `languageData` via `fence-language.ts`.
-	lineComment: ';',
 	languageData: BEANCOUNT_LANGUAGE_DATA,
 };
 

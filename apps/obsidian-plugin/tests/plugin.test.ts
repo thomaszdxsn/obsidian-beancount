@@ -12,7 +12,7 @@ import type { MockHoverTooltip, MockKeymapExtension, MockLanguageDataExtension, 
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
-import { beancountMode } from '../beancount-mode';
+import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
 
@@ -198,7 +198,6 @@ describe('BeancountPlugin', () => {
 		expect(beancount.name).toBe('beancount');
 		expect(bean.name).toBe('bean');
 		expect(beancount.token).toBe(beancountMode.token);
-		expect(beancount.lineComment).toBe(';');
 		expect(beancountMode.name).toBe('beancount');
 	});
 
@@ -249,17 +248,16 @@ describe('BeancountPlugin', () => {
 
 	it('overlays beancount commentTokens inside markdown fence bodies', async () => {
 		const { plugin } = await loadPlugin();
-		const extension = plugin.registrations.editorExtensions[4] as [MockLanguageDataExtension, unknown];
+		const extension = plugin.registrations.editorExtensions[4] as Array<
+			MockKeymapExtension | MockLanguageDataExtension
+		>;
+		const keymapExt = extension.find((item): item is MockKeymapExtension => 'bindings' in item);
+		const lang = extension.find((item): item is MockLanguageDataExtension => 'languageData' in item);
+		expect(keymapExt?.bindings.map((binding) => binding.key)).toEqual(['Mod-/']);
 		const text = ['```beancount', '  Assets:Cash', '```', 'prose'].join('\n');
 		const state = { doc: { toString: () => text } };
-		expect(extension[0].languageData(state, text.indexOf('Assets'))).toEqual([
-			{
-				commentTokens: { line: ';' },
-				closeBrackets: { brackets: ['(', '[', '{', "'"] },
-				wordChars: ':',
-			},
-		]);
-		expect(extension[0].languageData(state, text.indexOf('prose'))).toEqual([]);
+		expect(lang?.languageData(state, text.indexOf('Assets'))).toEqual([BEANCOUNT_LANGUAGE_DATA]);
+		expect(lang?.languageData(state, text.indexOf('prose'))).toEqual([]);
 	});
 
 	it('shows a hover card on known accounts and stays quiet on unknown ones', async () => {

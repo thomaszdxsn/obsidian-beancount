@@ -7,10 +7,11 @@ This is a sample plugin for Obsidian (https://obsidian.md).
 - **Beancount syntax highlighting**: `beancount`/`bean` fenced code blocks get
   highlighting through a CodeMirror stream mode ported from
   `beancount.tmLanguage`. Inside those fences, Cmd+/ toggles `; ` line
-  comments, `{` `[` `(` and `'` auto-close (`"` does not — narration uses
-  it), and `;#region` / `;#endregion` fold. Matching-bracket highlight is
-  not available: Obsidian paints the fence with a CM5 overlay, so the CM6
-  tree has no inner bracket nodes.
+  comments (Obsidian's own command would wrap `%%` and break the ledger),
+  `{` `[` `(` and `'` auto-close (`"` does not — narration uses it), and
+  `;#region` / `;#endregion` fold. Matching-bracket highlight is not
+  available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
+  has no inner bracket nodes.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault. Names are
   extracted per file with a regex, cached, and invalidated when files are

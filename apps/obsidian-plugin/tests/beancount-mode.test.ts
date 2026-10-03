@@ -576,7 +576,6 @@ describe('beancountStreamLanguage', () => {
 describe('beancountMode languageData', () => {
 	it('exposes vscode-beancount comment, bracket and word tokens', () => {
 		expect(beancountMode.languageData).toBe(BEANCOUNT_LANGUAGE_DATA);
-		expect(beancountMode.lineComment).toBe(';');
 		expect(BEANCOUNT_LANGUAGE_DATA.commentTokens.line).toBe(';');
 		expect(BEANCOUNT_LANGUAGE_DATA.closeBrackets.brackets).toEqual(['(', '[', '{', "'"]);
 		expect(BEANCOUNT_LANGUAGE_DATA.closeBrackets.brackets.includes('"')).toBe(false);
