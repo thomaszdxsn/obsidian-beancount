@@ -63,35 +63,50 @@ describe('extractAccounts', () => {
 	});
 
 	it('requires a capitalized root and non-empty segments', () => {
-		expect([...extractAccounts('assets:cash Assets: Meeting:Notes')]).toEqual(['Meeting:Notes']);
+		expect([...extractAccounts('assets:cash Assets: Assets::Cash Meeting:Notes')]).toEqual(['Meeting:Notes']);
+	});
+
+	it('keeps a trailing underscore and drops a trailing dash', () => {
+		expect([...extractAccounts('Assets:Cash_ Assets:现金-')]).toEqual(['Assets:Cash_', 'Assets:现金']);
 	});
 
 	it('extracts names with non-ASCII segments', () => {
 		const content = [
 			'2026-09-30 open Expenses:餐饮:午饭 CNY',
 			'  Assets:现金  -30.00 CNY',
-			'  Assets:Café:Checking',
+			'  Expenses:食費:ランチ Assets:은행:2024',
 		].join('\n');
-		expect([...extractAccounts(content)].sort()).toEqual(['Assets:Café:Checking', 'Assets:现金', 'Expenses:餐饮:午饭']);
-	});
-
-	it('ends a non-ASCII name at CJK punctuation and keeps it out of longer tokens', () => {
-		expect([...extractAccounts('（见Expenses:餐饮，午饭）记到 Assets:现金。')]).toEqual(['Assets:现金']);
-		expect([...extractAccounts('（见 Expenses:餐饮，午饭）')]).toEqual(['Expenses:餐饮']);
-		expect([...extractAccounts('Expenses:餐饮：午饭 Assets:: Assets:现金-')]).toEqual(['Expenses:餐饮', 'Assets:现金']);
-	});
-
-	it('accepts kana, hangul and digits in segments and stops at emoji and spaces', () => {
-		expect([...extractAccounts('Expenses:食費:ランチ Assets:은행:2024 Expenses:咖啡☕ Assets:现金 记账')]).toEqual([
-			'Expenses:食費:ランチ',
-			'Assets:은행:2024',
-			'Expenses:咖啡',
+		expect([...extractAccounts(content)].sort()).toEqual([
 			'Assets:现金',
+			'Assets:은행:2024',
+			'Expenses:食費:ランチ',
+			'Expenses:餐饮:午饭',
 		]);
 	});
 
-	it('keeps dates and lowercase roots out even next to CJK text', () => {
-		expect([...extractAccounts('日期2026-09-30 时间12:30 备注:午饭 expenses:餐饮')]).toEqual([]);
+	it('keeps combining marks inside and at the end of a segment', () => {
+		// Decomposed `é` (e + U+0301) and Devanagari vowel signs are \p{M}.
+		expect([...extractAccounts('Expenses:Cafe\u0301:Bar Expenses:खर्च')]).toEqual([
+			'Expenses:Cafe\u0301:Bar',
+			'Expenses:खर्च',
+		]);
+	});
+
+	it('ends a name at CJK punctuation, fullwidth colon and symbols', () => {
+		expect([...extractAccounts('（Expenses:餐饮，午饭）记到 Assets:现金。')]).toEqual(['Expenses:餐饮', 'Assets:现金']);
+		expect([...extractAccounts('Expenses:餐饮：午饭')]).toEqual(['Expenses:餐饮']);
+		expect([...extractAccounts('Expenses:咖☕啡')]).toEqual(['Expenses:咖']);
+	});
+
+	it('does not leak a name glued to a preceding CJK letter', () => {
+		expect([...extractAccounts('见Expenses:餐饮 日期Assets:现金')]).toEqual([]);
+	});
+
+	it('keeps CJK middle dots inside a segment instead of cutting the name short', () => {
+		expect([...extractAccounts('  Expenses:カード・ローン  10 JPY\n  Assets:银行·招商')]).toEqual([
+			'Expenses:カード・ローン',
+			'Assets:银行·招商',
+		]);
 	});
 
 	it('returns an empty set for empty content', () => {

@@ -91,6 +91,14 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(trigger(suggest, '（Expenses:餐')).toMatchObject({ query: 'Expenses:餐', start: { line: 0, ch: 1 } });
 	});
 
+	it('stays quiet when the cursor sits inside a non-ASCII segment', async () => {
+		const { suggest } = setup({ 'a.md': '  Expenses:餐饮:午饭  30.00 CNY' });
+		await flush();
+		// Picking a suggestion here would replace `Expenses:餐` and leave `饮` behind.
+		expect(trigger(suggest, '  Expenses:餐饮  30 CNY', 12)).toBeNull();
+		expect(trigger(suggest, '  Expenses:カード・ローン', 14)).toBeNull();
+	});
+
 	it('stays quiet when editing inside a token', async () => {
 		const { suggest } = setup(ACCOUNTS);
 		await flush();

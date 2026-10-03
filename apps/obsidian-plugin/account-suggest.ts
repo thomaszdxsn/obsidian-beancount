@@ -8,7 +8,7 @@
  * open date and constrained currencies when the ledger declared them.
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { ACCOUNT_PREFIX_RE, describeAccount } from './account-index';
+import { ACCOUNT_CHAR_RE, ACCOUNT_PREFIX_RE, describeAccount } from './account-index';
 import type { AccountIndex } from './account-index';
 import { PAYEE_PREFIX_RE } from './payee-index';
 import { IndexSuggest } from './suggest';
@@ -30,10 +30,11 @@ export class AccountSuggest extends IndexSuggest {
 
 	onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
 		const line = editor.getLine(cursor.line);
-		// Mid-token edits (a word character right after the cursor) would make
-		// selection replace only the typed prefix and garble the rest.
+		// Mid-token edits (an account character right after the cursor, CJK
+		// included) would make selection replace only the typed prefix and
+		// garble the rest.
 		const after = line.charAt(cursor.ch);
-		if (after !== '' && /[A-Za-z0-9\-_:]/.test(after)) return null;
+		if (after !== '' && ACCOUNT_CHAR_RE.test(after)) return null;
 		const prefix = line.slice(0, cursor.ch);
 		// Inside a transaction's first quoted field the payee suggest owns the
 		// popup: `"Exp` there is payee text, not an account — the quote is an
