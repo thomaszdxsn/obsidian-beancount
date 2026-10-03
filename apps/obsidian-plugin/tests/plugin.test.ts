@@ -7,11 +7,12 @@ import type { BeanCheckRun, LineDiagnostic } from '../bean-check';
 import { parseBeanCheckErrors, toLineDiagnostics } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
-import { notices } from './mocks/obsidian';
-import type { MockHoverTooltip, MockKeymapExtension, MockView } from './mocks/codemirror';
+import { notices, shownMenus } from './mocks/obsidian';
+import type { MockGutterConfig, MockHoverTooltip, MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
+import { FLAG_OKAY_TITLE, FLAGGED_MESSAGE, PAD_TRANSACTION_TITLE, openAccountTitle } from '../code-actions';
 import { beancountMode } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
@@ -88,11 +89,34 @@ function published(editor: FakeEditor): LineDiagnostic[] {
 	return effect?.is(setLineDiagnostics) ? (effect.value as LineDiagnostic[]) : [];
 }
 
+function clickDiagnostic(
+	plugin: BeancountPlugin,
+	editor: FakeEditor,
+	line: number,
+	diagnostics: LineDiagnostic[]
+): boolean {
+	const extension = (plugin as unknown as RecordingPlugin).registrations.editorExtensions[2] as unknown[];
+	const gutter = extension[2] as MockGutterConfig;
+	const from = editor.lines.slice(0, line).reduce((sum, text) => sum + text.length + 1, 0);
+	Object.assign(editor.cm, {
+		state: {
+			doc: {
+				lineAt: () => ({ from, number: line + 1, text: editor.lines[line] }),
+			},
+			field: () => diagnostics,
+		},
+	});
+	const event = { preventDefault() {} } as MouseEvent;
+	return gutter.domEventHandlers?.mousedown?.(editor.cm, { from, to: from }, event) ?? false;
+}
+
+
 afterEach(() => {
 	delete host.CodeMirror;
 	beanCheckRuns.length = 0;
 	beanCheckResult = { stderr: '', missing: false };
 	notices.length = 0;
+	shownMenus.length = 0;
 });
 
 describe('BeancountPlugin', () => {
@@ -1458,4 +1482,134 @@ describe('BeancountPlugin', () => {
 		expect(beanCheckRuns).toEqual([]);
 		expect(notices).toEqual(['bean-check: entry ledger must be a vault file, not "/etc/passwd"']);
 	});
+
+	it('marks a clean ! transaction so Flag as okay has a gutter target', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 ! "Cafe"\n  Assets:Cash  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD']);
+		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = { stderr: '', missing: false };
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(published(editor)).toEqual([{ line: 0, message: FLAGGED_MESSAGE }]);
+	});
+
+	it('offers Flag as okay from the gutter and replaces the header flag', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 ! "Cafe"\n');
+		const editor = createEditor(['2026-10-01 ! "Cafe"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const diagnostics = [{ line: 0, message: FLAGGED_MESSAGE }];
+		clickDiagnostic(plugin, editor, 0, diagnostics);
+
+		expect(shownMenus.map((menu) => menu.titles)).toEqual([[FLAG_OKAY_TITLE]]);
+		shownMenus[0].items[0].click();
+		expect(editor.getValue()).toBe('2026-10-01 * "Cafe"');
+	});
+
+	it('inserts a balancing posting from two-leg history with the same payee', async () => {
+		const vault = new FakeVault();
+		vault.write(
+			'history.bean',
+			['2026-09-01 * "Cafe"', '  Expenses:Food  4.00 USD', '  Assets:Cash   -4.00 USD'].join('\n')
+		);
+		const file = vault.write('journal.bean', '2026-10-01 * "Cafe"\n  Expenses:Food  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		await flush();
+		clickDiagnostic(plugin, editor, 0, [{ line: 0, message: 'Transaction does not balance: (10.00 USD)' }]);
+
+		expect(shownMenus.map((menu) => menu.titles)).toEqual([[PAD_TRANSACTION_TITLE]]);
+		shownMenus[0].items[0].click();
+		expect(editor.getValue()).toBe(
+			['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
+		);
+	});
+
+	it('inserts an open directive into the vault file that already holds opens', async () => {
+		const vault = new FakeVault();
+		vault.write('accounts.bean', '2020-01-01 open Assets:Cash USD\n');
+		const file = vault.write(
+			'journal.bean',
+			['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash   -10.00 USD'].join('\n')
+		);
+		const editor = createEditor([
+			'2026-10-01 * "Cafe"',
+			'  Expenses:Food  10.00 USD',
+			'  Assets:Cash   -10.00 USD',
+		]);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		await flush();
+		clickDiagnostic(plugin, editor, 0, [
+			{ line: 0, message: "Invalid reference to unknown account 'Expenses:Food'" },
+		]);
+
+		expect(shownMenus.map((menu) => menu.titles)).toEqual([[openAccountTitle('Expenses:Food')]]);
+		shownMenus[0].items[0].click();
+		await flush();
+		expect(vault.contents.get('accounts.bean')).toBe(
+			'2020-01-01 open Assets:Cash USD\n2026-10-01 open Expenses:Food USD\n'
+		);
+	});
+
+	it('edits an open accounts file through its editor, not vault.modify', async () => {
+		const vault = new FakeVault();
+		const accounts = vault.write('accounts.bean', '2020-01-01 open Assets:Cash USD\n');
+		const file = vault.write('journal.bean', '2026-10-01 * "Cafe"\n  Expenses:Food  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD']);
+		const accountsEditor = createEditor(['2020-01-01 open Assets:Cash USD', '']);
+		const { plugin } = await loadPlugin(vault, null, [
+			{ view: { file, editor } },
+			{ view: { file: accounts, editor: accountsEditor } },
+		]);
+		await flush();
+		clickDiagnostic(plugin, editor, 0, [
+			{ line: 0, message: "Invalid reference to unknown account 'Expenses:Food'" },
+		]);
+		shownMenus[0].items[0].click();
+		expect(accountsEditor.getValue()).toBe(
+			'2020-01-01 open Assets:Cash USD\n2026-10-01 open Expenses:Food USD\n'
+		);
+		expect(vault.writes).toEqual([]);
+	});
+
+	it('stays quiet when the marked line has no fix', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', 'garbage\n');
+		const editor = createEditor(['garbage']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		expect(clickDiagnostic(plugin, editor, 0, [{ line: 0, message: "Invalid token: 'garbage'" }])).toBe(false);
+		expect(shownMenus).toEqual([]);
+		expect(clickDiagnostic(plugin, editor, 0, [])).toBe(false);
+		expect(plugin.onDiagnosticClick({} as never, 0, { preventDefault() {} } as MouseEvent)).toBe(false);
+	});
+
+	it('deletes a posting flag from the gutter via the active editor', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "Cafe"\n  ! Assets:Cash  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 * "Cafe"', '  ! Assets:Cash  10.00 USD']);
+		const { plugin } = await loadPlugin(vault, null, [], { file, editor });
+		expect(clickDiagnostic(plugin, editor, 1, [{ line: 1, message: FLAGGED_MESSAGE }])).toBe(true);
+		shownMenus[0].items[0].click();
+		expect(editor.getValue()).toBe('2026-10-01 * "Cafe"\n  Assets:Cash  10.00 USD');
+	});
+
+	it('opens an unknown account in the current file when the vault has no open file', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('journal.bean', '2026-10-01 * "Cafe"\n  Expenses:Food  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		await flush();
+		clickDiagnostic(plugin, editor, 0, [
+			{ line: 0, message: "Invalid reference to unknown account 'Expenses:Food'" },
+		]);
+		shownMenus[0].items[0].click();
+		expect(editor.getValue()).toBe(
+			['2026-10-01 open Expenses:Food USD', '2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD'].join('\n')
+		);
+	});
+
+
 });

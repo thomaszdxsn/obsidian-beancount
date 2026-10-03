@@ -5,6 +5,10 @@
 	text-decoration-skip-ink: none;
 }
 
+.cm-beancount-error-gutter {
+	cursor: pointer;
+}
+
 .cm-gutterElement.cm-beancount-error-gutter-marker::after {
 	content: '';
 	display: block;

@@ -1,5 +1,6 @@
-import { Notice, Plugin } from 'obsidian';
+import { Menu, Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
+import type { EditorView } from '@codemirror/view';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
@@ -18,7 +19,19 @@ import {
 	runBeanCheck,
 	toLineDiagnostics,
 } from './bean-check';
-import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
+import {
+	flagDiagnostics,
+	flagOkayEdit,
+	insertOpenDirective,
+	mergeDiagnostics,
+	OpenFileIndex,
+	padEdit,
+	PairingIndex,
+	quickFixesForLine,
+} from './code-actions';
+import type { QuickFix, TextEdit } from './code-actions';
+import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
+import type { DiagnosticClickHost } from './diagnostics';
 import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
@@ -193,10 +206,18 @@ function alignCommand(editor: Editor): void {
 	alignInEditor(editor, commandScope(editor, editorLines(editor)));
 }
 
-export default class BeancountPlugin extends Plugin {
+function applyEditorEdit(editor: Editor, edit: TextEdit): void {
+	editor.transaction({
+		changes: [{ from: { line: edit.line, ch: edit.fromCh }, to: { line: edit.line, ch: edit.toCh }, text: edit.text }],
+	});
+}
+
+export default class BeancountPlugin extends Plugin implements DiagnosticClickHost {
 	settings: BeancountSettings = { ...DEFAULT_SETTINGS };
 	/** How `bean-check` is started; tests swap in their own runner. */
 	beanCheckRunner: BeanCheckRunner = runBeanCheck;
+	private readonly pairings = new PairingIndex();
+	private readonly openFiles = new OpenFileIndex();
 	/** Pending on-save alignment per file path. */
 	private readonly alignTimers = new Map<string, NodeJS.Timeout>();
 	/** Pending on-save validation per run target. */
@@ -212,10 +233,11 @@ export default class BeancountPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
-		// One vault scan feeds both completion indexes.
+		// One vault scan feeds completion, balancing-account history, and
+		// the file that already holds `open` directives.
 		const accounts = new AccountIndex();
 		const payees = new VaultIndex(extractPayees);
-		registerVaultIndex(this, accounts, payees);
+		registerVaultIndex(this, accounts, payees, this.pairings, this.openFiles);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
 		const payeeSuggest = new PayeeSuggest(this.app, payees);
 		this.registerEditorSuggest(accountSuggest);
@@ -227,8 +249,9 @@ export default class BeancountPlugin extends Plugin {
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
 		// The markers on lines bean-check complains about: inline underline
-		// plus a gutter dot, styled by `styles.css`.
-		this.registerEditorExtension(diagnosticsExtension);
+		// plus a gutter dot. Clicking the dot offers the quick fixes that
+		// line can take.
+		this.registerEditorExtension(createDiagnosticsExtension(this));
 		this.registerEditorExtension(accountHoverTooltip(accounts));
 		this.addCommand({
 			id: 'align-decimal-points',
@@ -265,6 +288,96 @@ export default class BeancountPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+	}
+
+	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
+		const located = this.editorFileForView(view);
+		if (!located) return false;
+		const diagnostic = view.state.field(lineDiagnostics).find((entry) => entry.line === line);
+		if (!diagnostic) return false;
+		const { editor, file } = located;
+		const lines = editor.getValue().split('\n');
+		const openFile = this.openFiles.bestFile() ?? file.path;
+		const fixes = quickFixesForLine({
+			lines,
+			line,
+			message: diagnostic.message,
+			pairings: this.pairings.all(),
+			openFile,
+			currentPath: file.path,
+			openedAccounts: this.openFiles.openedIn(openFile),
+		});
+		if (fixes.length === 0) return false;
+		const menu = new Menu();
+		for (const fix of fixes) {
+			menu.addItem((item) =>
+				item.setTitle(fix.title).onClick(() => {
+					this.applyQuickFix(editor, file, lines, line, diagnostic.message, fix);
+				})
+			);
+		}
+		menu.showAtMouseEvent(event);
+		event.preventDefault();
+		return true;
+	}
+
+	private editorFileForView(view: EditorView): { editor: Editor; file: TFile } | null {
+		const matches = (editor: Editor | null | undefined, file: TFile | null | undefined) =>
+			editor !== undefined &&
+			editor !== null &&
+			file !== undefined &&
+			file !== null &&
+			(editor as Editor & { cm?: EditorView }).cm === view
+				? { editor, file }
+				: null;
+		const active = this.app.workspace.activeEditor;
+		const fromActive = matches(active?.editor ?? null, active?.file ?? null);
+		if (fromActive) return fromActive;
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+			const markdown = leaf.view as MarkdownView | null;
+			const found = matches(markdown?.editor ?? null, markdown?.file ?? null);
+			if (found) return found;
+		}
+		return null;
+	}
+
+	private applyQuickFix(
+		editor: Editor,
+		file: TFile,
+		lines: readonly string[],
+		line: number,
+		message: string,
+		fix: QuickFix
+	): void {
+		if (fix.kind === 'flag-okay') {
+			const edit = flagOkayEdit(lines, line);
+			if (edit) applyEditorEdit(editor, edit);
+			return;
+		}
+		if (fix.kind === 'pad') {
+			const edit = padEdit(lines, line, this.pairings.all(), message);
+			if (edit) applyEditorEdit(editor, edit);
+			return;
+		}
+		void this.applyOpenAccount(file, fix);
+	}
+
+	private async applyOpenAccount(
+		currentFile: TFile,
+		fix: Extract<QuickFix, { kind: 'open-account' }>
+	): Promise<void> {
+		const target = this.app.vault.getFiles().find((entry) => entry.path === fix.path) ?? currentFile;
+		const editor = openEditorFor(this.app, target);
+		const text = editor ? editor.getValue() : await this.app.vault.read(target);
+		const lines = text.split('\n');
+		const edit = insertOpenDirective(lines, fix.date, fix.account, fix.commodity);
+		if (editor) {
+			applyEditorEdit(editor, edit);
+			return;
+		}
+		const line = lines[edit.line] ?? '';
+		lines[edit.line] = line.slice(0, edit.fromCh) + edit.text + line.slice(edit.toCh);
+		await this.app.vault.modify(target, lines.join('\n'));
 	}
 
 	private onFileModified(file: TAbstractFile): void {
@@ -460,7 +573,13 @@ export default class BeancountPlugin extends Plugin {
 			// opened and its target is saved again.
 			if (!vaultFile) continue;
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
-				setEditorLineDiagnostics(editor, toLineDiagnostics(errorsByPath.get(path) ?? []));
+				setEditorLineDiagnostics(
+					editor,
+					mergeDiagnostics(
+						toLineDiagnostics(errorsByPath.get(path) ?? []),
+						flagDiagnostics(editor.getValue())
+					)
+				);
 			}
 		}
 	}

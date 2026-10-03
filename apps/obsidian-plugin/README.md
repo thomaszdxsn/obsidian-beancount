@@ -69,6 +69,14 @@ pip install beancount
   chain; a markdown save includes the entry first so the fence is checked
   against its opens and accounts. Without an entry ledger each saved file
   (or note's fences) is validated on its own.
+- **QuickFix**: clicking a diagnostic gutter dot opens the fixes that line
+  can take. `Flag as okay` turns a header `!` into `*` (or deletes a posting's
+  leading flag). An unbalanced one-leg, one-commodity transaction can insert
+  the posting that zeros it, inferring the other account from two-leg history
+  (same payee first). `Invalid reference to unknown account` inserts an
+  `open` directive — dated from the transaction, with the posting's commodity
+  when there is one — into the vault file that already holds the most `open`
+  lines.
 - **Outline**: the "Show outline" command opens a sidebar of the active
   ledger. Org-mode `*` section titles nest the same way vscode-beancount's
   DocumentSymbolProvider does (including `_` fillers for skipped levels).
