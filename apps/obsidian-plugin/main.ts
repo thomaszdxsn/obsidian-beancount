@@ -216,6 +216,12 @@ export default class BeancountPlugin extends Plugin {
 
 	async onload() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		// Ledger files open as notes: without this Obsidian shows them as
+		// unsupported, and nothing of the plugin (completion, alignment,
+		// validation) has an editor to work in. Registration is read at app
+		// start — a changed mapping needs an Obsidian restart, not just a
+		// plugin reload.
+		this.registerExtensions(['bean', 'beancount'], 'markdown');
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
 		// One vault scan feeds every completion index.

@@ -24,6 +24,7 @@ export interface Registrations {
 	editorSuggests: unknown[];
 	editorExtensions: unknown[];
 	views: Array<{ type: string; creator: (leaf: unknown) => unknown }>;
+	extensions: Array<{ extensions: string[]; viewType: string }>;
 	cleanups: Array<() => void>;
 }
 
@@ -39,6 +40,7 @@ export class Plugin {
 		editorSuggests: [],
 		editorExtensions: [],
 		views: [],
+		extensions: [],
 		cleanups: [],
 	};
 
@@ -96,6 +98,10 @@ export class Plugin {
 
 	registerView(type: string, creator: (leaf: unknown) => unknown): void {
 		this.registrations.views.push({ type, creator });
+	}
+
+	registerExtensions(extensions: readonly string[], viewType: string): void {
+		this.registrations.extensions.push({ extensions: [...extensions], viewType });
 	}
 
 	async loadData(): Promise<unknown> {
