@@ -36,6 +36,14 @@ describe('extractBeancountFences', () => {
 		expect(extractBeancountFences('```beancounter\nnope\n```\n')).toEqual([]);
 	});
 
+	it('ignores ledger examples nested inside another fenced block', () => {
+		const text = ['````text', '```bean', '2026-01-01 balance Assets:Cash 12 USD', '```', '````',
+			'~~~bean', '2026-01-02 balance Assets:Cash 14 USD', '~~~'].join('\n');
+		expect(extractBeancountFences(text)).toEqual([
+			{ startLine: 6, lines: ['2026-01-02 balance Assets:Cash 14 USD'] },
+		]);
+	});
+
 	it('takes the rest of the file when the closing fence is missing', () => {
 		expect(extractBeancountFences('```beancount\n2026-10-01 * "Open"\n  Assets:Cash')).toEqual([
 			{ startLine: 1, lines: ['2026-10-01 * "Open"', '  Assets:Cash'] },

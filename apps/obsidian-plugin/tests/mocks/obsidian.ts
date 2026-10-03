@@ -119,6 +119,12 @@ export class Modal {}
 export class MarkdownView {}
 export class Editor {}
 
+/**
+ * Obsidian's per-editor file field. Inlay hints import it; they only read it
+ * once a view exists, which these tests never build.
+ */
+export const editorInfoField = {};
+
 /** Sidebar content host: `empty`/`createDiv` match the Obsidian HTMLElement helpers. */
 export class ItemView {
 	app: { workspace: unknown };

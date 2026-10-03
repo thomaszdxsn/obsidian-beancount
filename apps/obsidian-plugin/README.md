@@ -21,6 +21,24 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   are in the vault. Names the vault has never seen produce no tooltip. Closed
   accounts still hover — the card is how their close date is visible.
   Balances are not computed here, for the same reason as completion.
+- **Balance inlay hints**: the **Balance inlay hints** setting is on by default.
+  A `balance` line shows `Δ asserted-minus-accumulated` without changing the
+  document; for example, `10.00 USD` accumulated and `12.50 USD` asserted
+  displays `Δ +2.50 USD`. The toggle updates all open editors immediately.
+  Hints update synchronously while typing, reuse their DOM, and coexist with
+  diagnostic underlines and gutter markers.
+  This is the single-commodity fallback, not a Beancount semantic engine:
+  automatic postings (`__automatic__`) are not inferred. It uses explicit
+  amounts in the current `.bean` / `.beancount` file, or all `bean` /
+  `beancount` fences in the current Markdown note. Account descendants are
+  included; transactions on the assertion date are excluded (start-of-day
+  balance), regardless of source order. Earlier assertions do not reset totals.
+  Unknown/inferred amounts, arithmetic expressions, costs/prices, multiple
+  commodities, padding, or amounts beyond exact scaled-integer precision
+  suppress affected hints. `include`, `plugin`, unsupported dated directives,
+  or a configured entry ledger disable this local calculation. The displayed
+  delta is not a tolerance-aware validation verdict; `bean-check` remains
+  authoritative.
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion

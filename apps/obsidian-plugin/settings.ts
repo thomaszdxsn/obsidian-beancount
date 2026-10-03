@@ -19,6 +19,11 @@ export interface BeancountSettings {
 	beanCheckPath: string;
 	/** Vault path of the ledger entry file; empty validates each saved file alone. */
 	entryLedger: string;
+	/**
+	 * Show single-commodity balance assertion deltas at the end of balance lines.
+	 * An entry ledger hides them: inventory outside this file is unknown.
+	 */
+	inlayHints: boolean;
 }
 
 export const DEFAULT_SETTINGS: BeancountSettings = {
@@ -27,6 +32,7 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 	separatorColumn: 50,
 	beanCheckPath: '',
 	entryLedger: '',
+	inlayHints: true,
 };
 
 /** What the settings tab needs from the plugin: state to edit, persistence. */
@@ -105,6 +111,17 @@ export class BeancountSettingTab extends PluginSettingTab {
 						this.host.settings.entryLedger = value;
 						await this.host.saveSettings();
 					})
+			);
+		new Setting(containerEl)
+			.setName('Balance inlay hints')
+			.setDesc(
+				'Show the single-commodity difference (asserted minus accumulated) at the end of balance lines. Hidden when an entry ledger is set, because postings outside this file are unknown.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.inlayHints).onChange(async (value) => {
+					this.host.settings.inlayHints = value;
+					await this.host.saveSettings();
+				})
 			);
 	}
 }

@@ -53,3 +53,12 @@
 .beancount-outline-date {
 	color: var(--text-muted);
 }
+
+.cm-beancount-balance-hint {
+	padding-left: 1.5em;
+	color: var(--text-muted);
+	font-style: italic;
+	white-space: pre;
+	pointer-events: none;
+	user-select: none;
+}
