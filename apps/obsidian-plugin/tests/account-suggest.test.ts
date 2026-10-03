@@ -117,6 +117,31 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(trigger(suggest, '2026-09-30 * "Expenses:Foo"', 26)).toBeNull();
 	});
 
+	it('stays quiet in the narration field', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Narnia:Bank' });
+		await flush();
+		// The narration suggest owns that field: `"Nar` prefixes the cached
+		// `Narnia:Bank` just the same — the ownership guard must decide.
+		expect(trigger(suggest, '2026-09-30 * "Shell" "Nar')).toBeNull();
+	});
+
+	it('stays quiet in tag and link positions', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Travel:Air' });
+		await flush();
+		// The tag/link suggests own those tokens: `#Tr`/`^Tr` prefix the
+		// cached `Travel:Air` just the same.
+		expect(trigger(suggest, '#Tr')).toBeNull();
+		expect(trigger(suggest, '^Tr')).toBeNull();
+	});
+
+	it('stays quiet in a posting commodity slot', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Uber:Rides' });
+		await flush();
+		// The commodity suggest owns the unit position: `10.00 U` prefixes
+		// the cached `Uber:Rides` just the same.
+		expect(trigger(suggest, '  Assets:Cash  10.00 U')).toBeNull();
+	});
+
 	it('stays quiet on lowercase prose, dates and amounts', async () => {
 		const { suggest } = setup(ACCOUNTS);
 		await flush();

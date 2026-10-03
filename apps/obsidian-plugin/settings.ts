@@ -24,6 +24,8 @@ export interface BeancountSettings {
 	 * An entry ledger hides them: inventory outside this file is unknown.
 	 */
 	inlayHints: boolean;
+	/** Complete the narration field of a transaction (second quoted string). */
+	completeNarration: boolean;
 }
 
 export const DEFAULT_SETTINGS: BeancountSettings = {
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 	beanCheckPath: '',
 	entryLedger: '',
 	inlayHints: true,
+	completeNarration: false,
 };
 
 /** What the settings tab needs from the plugin: state to edit, persistence. */
@@ -120,6 +123,17 @@ export class BeancountSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.host.settings.inlayHints).onChange(async (value) => {
 					this.host.settings.inlayHints = value;
+					await this.host.saveSettings();
+				})
+			);
+		new Setting(containerEl)
+			.setName('Complete narrations')
+			.setDesc(
+				'Typing the second quoted field of a transaction line ("payee" "na…) suggests narrations found in the vault, and picking one closes the field.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.completeNarration).onChange(async (value) => {
+					this.host.settings.completeNarration = value;
 					await this.host.saveSettings();
 				})
 			);

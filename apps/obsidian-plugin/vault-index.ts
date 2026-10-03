@@ -72,10 +72,15 @@ export class VaultIndex implements VaultCache {
 	/** Cached sorted union of `stringsByPath`, recomputed after each change. */
 	private sorted: readonly string[] | null = null;
 
-	constructor(private readonly extract: (content: string) => ReadonlySet<string>) {}
+	/**
+	 * The extractor takes the file's path too: token shapes that also occur
+	 * in markdown prose (tags, links, commodities) are extracted from
+	 * beancount fence bodies only, which the caller decides by extension.
+	 */
+	constructor(private readonly extract: (content: string, path: string) => ReadonlySet<string>) {}
 
 	setFileContent(path: string, content: string): void {
-		const extracted = this.extract(content);
+		const extracted = this.extract(content, path);
 		const strings = new Set<string>();
 		for (const value of extracted) {
 			if (value.length <= MAX_VALUE_LENGTH) strings.add(value);

@@ -20,3 +20,14 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   `entryLedger`. Requires `pip install beancount`.
 - **Show outline** sidebar (`*` sections, date groups, transactions,
   `open` / `close` / `balance`).
+- Balance assertion inlay hints (single-commodity delta at the end of
+  `balance` lines; hidden when an entry ledger is set). Setting:
+  `inlayHints`.
+- Commodity completion: typing a partial commodity after an amount
+  (`10.00 U`) or after the `price` / `commodity` keyword suggests
+  commodities found in those positions across the vault.
+- Tag completion (`#`) and link completion (`^`) inside ledger text —
+  `.bean` / `.beancount` files and beancount fences.
+- Narration completion: typing the second quoted field of a transaction
+  suggests vault narrations and closes the field on pick. Off by default
+  (`completeNarration`).

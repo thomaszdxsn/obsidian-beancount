@@ -25,6 +25,8 @@ import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
+import { extractCommodities, extractLinks, extractNarrations, extractTags } from './token-index';
+import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from './token-suggest';
 import { postingIndentExtension } from './posting-indent';
 import { fenceLanguageExtension } from './fence-language';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
@@ -216,17 +218,41 @@ export default class BeancountPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
-		// One vault scan feeds both completion indexes.
+		// One vault scan feeds every completion index.
 		const accounts = new AccountIndex();
 		const payees = new VaultIndex(extractPayees);
-		registerVaultIndex(this, accounts, payees);
+		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
+		// prose amounts (`- 10 GB`) collide with ledger token shapes, so on
+		// notes these extractors see only the beancount fence bodies; ledger
+		// files are scanned whole.
+		const ledgerText = (path: string, content: string): string =>
+			path.endsWith('.md')
+				? extractBeancountFences(content)
+						.map((fence) => fence.lines.join('\n'))
+						.join('\n')
+				: content;
+		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)));
+		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)));
+		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)));
+		const narrations = new VaultIndex(extractNarrations);
+		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
 		const payeeSuggest = new PayeeSuggest(this.app, payees);
+		const commoditySuggest = new CommoditySuggest(this.app, commodities);
+		const tagSuggest = new TagSuggest(this.app, tags);
+		const linkSuggest = new LinkSuggest(this.app, links);
+		const narrationSuggest = new NarrationSuggest(this.app, narrations, () => this.settings.completeNarration);
 		this.registerEditorSuggest(accountSuggest);
 		this.registerEditorSuggest(payeeSuggest);
+		this.registerEditorSuggest(commoditySuggest);
+		this.registerEditorSuggest(tagSuggest);
+		this.registerEditorSuggest(linkSuggest);
+		this.registerEditorSuggest(narrationSuggest);
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
-		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest]));
+		this.registerEditorExtension(
+			postingIndentExtension([accountSuggest, payeeSuggest, commoditySuggest, tagSuggest, linkSuggest, narrationSuggest])
+		);
 		// Typing `.` in a posting amount aligns that transaction block and
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
