@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { Editor } from 'obsidian';
 import type { LineDiagnostic } from '../bean-check';
 import {
+	createDiagnosticsExtension,
 	diagnosticDecorations,
 	diagnosticsExtension,
 	diagnosticsGutter,
@@ -200,6 +201,24 @@ describe('diagnostics gutter', () => {
 			gutterConfig.lineMarkerChange?.({ startState: clean.state, state: view.state })
 		).toBe(true);
 		expect(gutterConfig.lineMarkerChange?.({ startState: view.state, state: view.state })).toBe(false);
+	});
+});
+
+describe('createDiagnosticsExtension', () => {
+	it('forwards a gutter mousedown on a marked line to the host', () => {
+		const clicks: Array<{ line: number }> = [];
+		const extension = createDiagnosticsExtension({
+			onDiagnosticClick(_view, line) {
+				clicks.push({ line });
+				return true;
+			},
+		}) as unknown as unknown[];
+		const gutterConfig = extension[2] as MockGutterConfig;
+		const view = fakeView('one\ntwo\n', [{ line: 1, message: 'bad' }]);
+		expect(
+			gutterConfig.domEventHandlers?.mousedown?.(view, { from: 4, to: 7 }, {} as Event)
+		).toBe(true);
+		expect(clicks).toEqual([{ line: 1 }]);
 	});
 });
 
