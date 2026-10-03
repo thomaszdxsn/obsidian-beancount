@@ -69,6 +69,8 @@ const TXN_RE = new RegExp(
 const DATED_RE = /^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})[ \t]+([a-z][a-z0-9]*)(?![A-Za-z0-9])(.*)$/;
 const ACCOUNT_EXACT = new RegExp('^' + ACCOUNT_SRC + '$');
 const NUMBER_EXACT = new RegExp('^' + NUMBER_SRC + '$');
+const ACCOUNT_START = new RegExp('^' + ACCOUNT_SRC);
+const NUMBER_START = new RegExp('^' + NUMBER_SRC);
 const FLAG_EXACT = new RegExp('^[' + FLAG_CHARS + ']$');
 const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
 
@@ -103,13 +105,34 @@ const NO_UNIT: Record<string, true> = {
 	price: true,
 };
 
+interface Inventory {
+	qty: Qty;
+	commodity: string;
+}
+
 export function balanceHints(lines: readonly string[]): BalanceHint[] {
 	if (sourceDependent(lines) || unknownDirective(lines)) return [];
 	const parsed = collect(lines);
 	if (parsed === null) return [];
+	// One chronological sweep instead of rescanning all postings per assertion.
+	// Posting amounts enter after that day's balances; pad taints enter before.
+	const postings: Array<AmountPosting | TaintPosting> = [...parsed.postings, ...parsed.taints];
+	postings.sort((a, b) => a.date.localeCompare(b.date));
+	parsed.pads.sort((a, b) => a.date.localeCompare(b.date));
+	parsed.balances.sort((a, b) => a.date.localeCompare(b.date));
+	const inventory = new Map<string, Inventory | null>();
 	const hints: BalanceHint[] = [];
-	for (let i = 0; i < parsed.balances.length; i++) {
-		const hint = hintFor(parsed.balances[i], parsed.postings, parsed.taints, parsed.pads);
+	let postingIndex = 0;
+	let padIndex = 0;
+	for (const balance of parsed.balances) {
+		while (postingIndex < postings.length && postings[postingIndex].date < balance.date) {
+			accumulate(inventory, postings[postingIndex++]);
+		}
+		while (padIndex < parsed.pads.length && parsed.pads[padIndex].date <= balance.date) {
+			const pad = parsed.pads[padIndex++];
+			for (const account of pad.accounts) accumulate(inventory, { account, date: pad.date });
+		}
+		const hint = hintFor(balance, inventory.get(balance.account));
 		if (hint !== null) hints.push(hint);
 	}
 	hints.sort((a, b) => a.line - b.line);
@@ -210,49 +233,28 @@ function collect(lines: readonly string[]): Ledger | null {
 	return { postings, taints, pads, balances };
 }
 
-function hintFor(
-	balance: Balance,
-	postings: readonly AmountPosting[],
-	taints: readonly TaintPosting[],
-	pads: readonly Pad[]
-): BalanceHint | null {
-	for (let i = 0; i < pads.length; i++) {
-		if (pads[i].date > balance.date) continue;
-		for (let j = 0; j < pads[i].accounts.length; j++) {
-			if (inSubtree(balance.account, pads[i].accounts[j])) return null;
+/** Update the account and all ancestors once; null means inventory is unknown. */
+function accumulate(inventory: Map<string, Inventory | null>, posting: AmountPosting | TaintPosting): void {
+	for (let account = posting.account; account.includes(':'); account = account.slice(0, account.lastIndexOf(':'))) {
+		const current = inventory.get(account);
+		if (current === null) continue;
+		if (!('qty' in posting) || (current !== undefined && current.commodity !== posting.commodity)) {
+			inventory.set(account, null);
+			continue;
 		}
+		const qty = current === undefined ? posting.qty : add(current.qty, posting.qty);
+		inventory.set(account, qty === null ? null : { qty, commodity: posting.commodity });
 	}
-	for (let i = 0; i < taints.length; i++) {
-		if (taints[i].date >= balance.date) continue;
-		if (inSubtree(balance.account, taints[i].account)) return null;
-	}
-
-	let commodity: string | null = null;
-	let sum: Qty = { units: 0, scale: 0 };
-	let scale = balance.qty.scale;
-	for (let i = 0; i < postings.length; i++) {
-		const posting = postings[i];
-		if (posting.date >= balance.date) continue;
-		if (!inSubtree(balance.account, posting.account)) continue;
-		if (commodity === null) commodity = posting.commodity;
-		else if (commodity !== posting.commodity) return null;
-		const added = add(sum, posting.qty);
-		if (added === null) return null;
-		sum = added;
-		if (posting.qty.scale > scale) scale = posting.qty.scale;
-	}
-	if (commodity !== null && commodity !== balance.commodity) return null;
-
-	const delta = add(balance.qty, { units: sum.units === 0 ? 0 : -sum.units, scale: sum.scale });
-	if (delta === null) return null;
-	const body = formatQty(delta, scale);
-	if (body === null) return null;
-	return { line: balance.line, label: 'Δ ' + body + ' ' + balance.display };
 }
 
-
-function inSubtree(root: string, account: string): boolean {
-	return account === root || account.startsWith(root + ':');
+function hintFor(balance: Balance, inventory: Inventory | null | undefined): BalanceHint | null {
+	if (inventory === null || (inventory !== undefined && inventory.commodity !== balance.commodity)) return null;
+	const sum = inventory?.qty ?? { units: 0, scale: 0 };
+	const delta = add(balance.qty, { units: -sum.units, scale: sum.scale });
+	if (delta === null) return null;
+	const body = formatQty(delta, delta.scale);
+	if (body === null) return null;
+	return { line: balance.line, label: 'Δ ' + body + ' ' + balance.display };
 }
 
 function parseBalance(rest: string): { account: string; qty: Qty; display: string; commodity: string } | null {
@@ -325,7 +327,7 @@ function parsePosting(line: string): PostingParse {
 }
 
 function readAccount(text: string, i: number): { account: string; end: number } | null {
-	const match = new RegExp('^' + ACCOUNT_SRC).exec(text.slice(i));
+	const match = ACCOUNT_START.exec(text.slice(i));
 	if (match === null) return null;
 	const end = i + match[0].length;
 	if (end < text.length && text.charAt(end) !== ' ' && text.charAt(end) !== '\t') return null;
@@ -342,7 +344,7 @@ function readNumber(text: string, i: number): { qty: Qty; end: number } | null {
 
 /** End index of a number token. A discarded tolerance may exceed the safe range. */
 function readNumberSpan(text: string, i: number): number | null {
-	const match = new RegExp('^' + NUMBER_SRC).exec(text.slice(i));
+	const match = NUMBER_START.exec(text.slice(i));
 	if (match === null) return null;
 	const end = i + match[0].length;
 	const next = text.charAt(end);

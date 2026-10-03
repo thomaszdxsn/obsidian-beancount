@@ -123,4 +123,80 @@ describe('balance assertion hints', () => {
 			'2026-01-02 balance Assets:Cash 12 ~ 0.01 USD',
 		)).toEqual([{ line: 2, label: 'Δ +2 USD' }]);
 	});
+
+	it('does not let future unknown postings or unrelated pads hide earlier known inventory', () => {
+		expect(hints(
+			'2026-01-01 * "Deposit"',
+			'  Assets:Cash 10 USD',
+			'2026-01-03 * "Unknown later"',
+			'  Assets:Cash',
+			'2026-01-04 pad Assets:Cash Equity:Opening',
+			'2026-01-01 pad Assets:Other Equity:Other',
+			'2026-01-02 balance Assets:Cash 12 USD',
+			'2026-01-04 balance Assets:Cash 12 USD',
+		)).toEqual([{ line: 6, label: 'Δ +2 USD' }]);
+	});
+
+	it('retains fractional precision from postings when the assertion is integral', () => {
+		expect(hints(
+			'2026-01-01 * "Fraction"',
+			'  Assets:Cash 0.001 USD',
+			'2026-01-02 balance Assets:Cash 0 USD',
+			'2026-01-02 balance Assets:Cash 0.001 USD',
+		)).toEqual([
+			{ line: 2, label: 'Δ -0.001 USD' },
+			{ line: 3, label: 'Δ 0.000 USD' },
+		]);
+	});
+
+	it('does not infer conversion when the asserted currency differs', () => {
+		expect(hints(
+			'2026-01-01 * "Deposit"',
+			'  Assets:Cash 10 EUR',
+			'2026-01-02 balance Assets:Cash 12 USD',
+		)).toEqual([]);
+	});
+
+	it.each([
+		['9007199254740991', '0.1'],
+		['-9007199254740991', '0.1'],
+		['-9007199254740991', '9007199254740991'],
+	])('omits unsafe scale alignment or subtraction: %s against %s', (posting, assertion) => {
+		expect(hints(
+			'2026-01-01 * "Boundary"',
+			`  Assets:Cash ${posting} USD`,
+			`2026-01-02 balance Assets:Cash ${assertion} USD`,
+		)).toEqual([]);
+	});
+
+	it.each([
+		'Assets:Cash',
+		'Assets:Cash 1',
+		'Assets:Cash 1 EUR extra',
+		'Assets:Cash 1 ~ USD',
+		'Assets:Cash 1 ~ 0.1 USD ~ 0.1',
+		'Assets:Cash 1,23 USD',
+		'Assets:Cash 9007199254740992 USD',
+	])('never publishes an incomplete or malformed assertion: %s', (assertion) => {
+		expect(hints(`2026-01-02 balance ${assertion}`)).toEqual([]);
+	});
+
+	it.each([
+		'2026-01-01 unsupported Assets:Cash 12 USD',
+		'2026-01-01 pad Assets:Cash',
+	])('does not treat unknown inventory effects as zero: %s', (directive) => {
+		expect(hints(directive, '2026-01-02 balance Assets:Cash 12 USD')).toEqual([]);
+	});
+
+	it('ignores directive words inside metadata and quoted comments', () => {
+		expect(hints(
+			'* Cash',
+			'; include "other.bean"',
+			'2026/01/01 * "Deposit; \\"quoted\\""',
+			'  Assets:现金 10 USD',
+			'  include: "other.bean"',
+			'  plugin: "plugin"',
+			'2026/01/02 balance Assets:现金 12 USD\r',
+		)).toEqual([{ line: 6, label: 'Δ +2 USD' }]);
+	});
 });

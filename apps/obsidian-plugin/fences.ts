@@ -40,7 +40,7 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 	let i = 0;
 	while (i < lines.length) {
 		const open = OPEN_FENCE.exec(lines[i]);
-		if (!open) {
+		if (!open || (open[1][0] === '`' && open[2].includes('`'))) {
 			i += 1;
 			continue;
 		}

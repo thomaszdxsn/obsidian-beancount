@@ -44,6 +44,13 @@ describe('extractBeancountFences', () => {
 		]);
 	});
 
+	it('does not let inline backtick code swallow a following ledger fence', () => {
+		const text = ['```x```', '```bean', '2026-01-01 balance Assets:Cash 1 USD', '```'].join('\n');
+		expect(extractBeancountFences(text)).toEqual([
+			{ startLine: 2, lines: ['2026-01-01 balance Assets:Cash 1 USD'] },
+		]);
+	});
+
 	it('takes the rest of the file when the closing fence is missing', () => {
 		expect(extractBeancountFences('```beancount\n2026-10-01 * "Open"\n  Assets:Cash')).toEqual([
 			{ startLine: 1, lines: ['2026-10-01 * "Open"', '  Assets:Cash'] },
