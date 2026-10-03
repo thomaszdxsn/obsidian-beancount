@@ -8,11 +8,11 @@ import { parseBeanCheckErrors, toLineDiagnostics } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import { notices } from './mocks/obsidian';
-import type { MockHoverTooltip, MockKeymapExtension, MockView } from './mocks/codemirror';
+import type { MockHoverTooltip, MockKeymapExtension, MockLanguageDataExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
-import { beancountMode } from '../beancount-mode';
+import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
 
@@ -101,6 +101,7 @@ describe('BeancountPlugin', () => {
 		expect(plugin).toBeInstanceOf(Plugin);
 		expect(plugin.manifest.id).toBe('beancount-obsidian');
 	});
+
 
 	it('wires account and payee completion to the vault on load', async () => {
 		const vault = new FakeVault();
@@ -198,6 +199,20 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin();
 		expect(defined).toEqual(['beancount', 'bean']);
 		expect(() => plugin.registrations.cleanups[0]()).not.toThrow();
+	});
+
+	it('overlays beancount commentTokens inside markdown fence bodies', async () => {
+		const { plugin } = await loadPlugin();
+		const extension = plugin.registrations.editorExtensions[4] as Array<
+			MockKeymapExtension | MockLanguageDataExtension
+		>;
+		const keymapExt = extension.find((item): item is MockKeymapExtension => 'bindings' in item);
+		const lang = extension.find((item): item is MockLanguageDataExtension => 'languageData' in item);
+		expect(keymapExt?.bindings.map((binding) => binding.key)).toEqual(['Mod-/']);
+		const text = ['```beancount', '  Assets:Cash', '```', 'prose'].join('\n');
+		const state = { doc: { toString: () => text } };
+		expect(lang?.languageData(state, text.indexOf('Assets'))).toEqual([BEANCOUNT_LANGUAGE_DATA]);
+		expect(lang?.languageData(state, text.indexOf('prose'))).toEqual([]);
 	});
 
 	it('shows a hover card on known accounts and stays quiet on unknown ones', async () => {
