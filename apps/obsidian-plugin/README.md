@@ -61,6 +61,19 @@ pip install beancount
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
   indexes.
+- **Commodity completion**: typing a partial commodity where one carries an
+  amount — a posting's unit after the number, a cost or price annotation, a
+  `balance` amount, or after the `price` / `commodity` keyword of its
+  directive — suggests every commodity found in those positions across the
+  vault.
+- **Tag and link completion**: typing `#` or `^` inside ledger text — a
+  `.bean`/`.beancount` file, or a ```beancount / ```bean fence in a markdown
+  note — suggests every tag or link found in the vault; picking one replaces
+  the typed sigil and partial name in one step.
+- **Narration completion** (off by default): with "Complete narrations"
+  enabled, typing the second quoted field of a transaction line
+  (`2026-09-30 * "Payee" "na…`) suggests narrations found in the vault, and
+  picking one closes the field.
 - **Posting auto-indent**: pressing Enter inside a beancount entry opens the
   next line already indented two spaces — the first posting under a
   transaction header, or the next posting/metadata line while the entry

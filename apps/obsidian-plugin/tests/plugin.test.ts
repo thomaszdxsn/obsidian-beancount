@@ -103,21 +103,53 @@ describe('BeancountPlugin', () => {
 	});
 
 
-	it('wires account and payee completion to the vault on load', async () => {
+	it('wires every completion index to the vault on load', async () => {
 		const vault = new FakeVault();
 		vault.write(
 			'ledger.bean',
-			['2026-09-30 * "Whole Foods" "Groceries"', '  Expenses:Food  10.00 USD'].join('\n')
+			[
+				'2026-09-30 * "Whole Foods" "Groceries" #trip ^receipt',
+				'  Expenses:Food  10.00 USD',
+				'2026-09-30 price USD 1.10 CAD',
+			].join('\n')
 		);
 
 		const { plugin } = await loadPlugin(vault);
 		await flush();
 
-		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
+		const [accounts, payees, commodities, tags, links] = plugin.registrations.editorSuggests as Array<{
 			getSuggestions(context: { query: string }): string[];
 		}>;
 		expect(accounts.getSuggestions({ query: 'Expenses' })).toEqual(['Expenses:Food']);
 		expect(payees.getSuggestions({ query: 'Whole' })).toEqual(['Whole Foods']);
+		expect(commodities.getSuggestions({ query: 'US' })).toEqual(['USD']);
+		expect(tags.getSuggestions({ query: '#tr' })).toEqual(['#trip']);
+		expect(links.getSuggestions({ query: '^r' })).toEqual(['^receipt']);
+	});
+
+	it('offers narration completion only with the setting on', async () => {
+		const vault = new FakeVault();
+		vault.write('ledger.bean', '2026-09-30 * "Shell" "Fuel"');
+		const { plugin } = await loadPlugin(vault);
+		await flush();
+
+		const narrations = plugin.registrations.editorSuggests[5] as {
+			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+		};
+		const line = createEditor(['2026-09-30 * "Shell" "Fu']);
+		const cursor = { line: 0, ch: line.lines[0].length };
+		// Default settings leave the field alone…
+		expect(narrations.onTrigger(cursor, line, null)).toBeNull();
+		// …the toggle turns it on…
+		plugin.settings.completeNarration = true;
+		expect(narrations.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
+		// …and a stored true loads enabled.
+		const loaded = await loadPlugin(vault, { completeNarration: true });
+		await flush();
+		const enabled = loaded.plugin.registrations.editorSuggests[5] as {
+			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+		};
+		expect(enabled.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
 	});
 
 	it('leaves the payee field to the payee suggest', async () => {
@@ -739,8 +771,23 @@ describe('BeancountPlugin', () => {
 		tab.display();
 		const { settings } = tab.containerEl as unknown as FakeSettingContainer;
 
+		expect(settings.map((setting) => setting.name)).toEqual([
+			'Align amounts on save',
+			'Instant alignment',
+			'Separator column',
+			'Bean-check executable',
+			'Entry ledger',
+			'Balance inlay hints',
+			'Complete narrations',
+		]);
+		expect(settings[0].toggle?.value).toBe(false);
+		expect(settings[1].toggle?.value).toBe(true);
+		expect(settings[6].toggle?.value).toBe(false);
 		await settings[0].toggle?.onChangeHandler?.(true);
 		expect(plugin.savedData).toEqual([expect.objectContaining({ alignOnSave: true })]);
+		await settings[6].toggle?.onChangeHandler?.(true);
+		expect(plugin.settings.completeNarration).toBe(true);
+		expect(plugin.savedData?.at(-1)).toMatchObject({ completeNarration: true });
 
 		await settings[3].text?.onChangeHandler?.('/usr/local/bin/bean-check');
 		await settings[4].text?.onChangeHandler?.('ledger/main.bean');
@@ -752,6 +799,9 @@ describe('BeancountPlugin', () => {
 		expect(plugin.settings.separatorColumn).toBe(40);
 		await settings[2].text?.onChangeHandler?.('nope');
 		expect(plugin.settings.separatorColumn).toBe(40);
+		await settings[5].toggle?.onChangeHandler?.(true);
+		expect(plugin.settings.completeNarration).toBe(true);
+		expect(plugin.savedData?.at(-1)).toMatchObject({ completeNarration: true });
 
 		await vault.emit('modify', file);
 		await delay(600);

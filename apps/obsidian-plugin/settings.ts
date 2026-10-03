@@ -24,6 +24,8 @@ export interface BeancountSettings {
 	 * An entry ledger hides them: inventory outside this file is unknown.
 	 */
 	inlayHints: boolean;
+	/** Complete the narration field of a transaction (second quoted string). */
+	completeNarration: boolean;
 }
 
 export const DEFAULT_SETTINGS: BeancountSettings = {
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 	beanCheckPath: '',
 	entryLedger: '',
 	inlayHints: true,
+	completeNarration: false,
 };
 
 /** What the settings tab needs from the plugin: state to edit, persistence. */

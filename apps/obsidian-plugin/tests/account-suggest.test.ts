@@ -117,6 +117,31 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(trigger(suggest, '2026-09-30 * "Expenses:Foo"', 26)).toBeNull();
 	});
 
+	it('stays quiet in the narration field', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
+		// The narration suggest owns that field: `"Nar` prefixes `Assets`
+		// shaped tails just the same.
+		expect(trigger(suggest, '2026-09-30 * "Shell" "Nar')).toBeNull();
+	});
+
+	it('stays quiet in tag and link positions', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
+		// The tag/link suggests own those tokens: `#Tr`/`^Tr` prefix
+		// `Travel:…` shaped tails just the same.
+		expect(trigger(suggest, '#Tr')).toBeNull();
+		expect(trigger(suggest, '^Tr')).toBeNull();
+	});
+
+	it('stays quiet in a posting commodity slot', async () => {
+		const { suggest } = setup(ACCOUNTS);
+		await flush();
+		// The commodity suggest owns the unit position: `10.00 U` prefixes
+		// no account here, but a `Uber:…` account would race the currency.
+		expect(trigger(suggest, '  Assets:Cash  10.00 U')).toBeNull();
+	});
+
 	it('stays quiet on lowercase prose, dates and amounts', async () => {
 		const { suggest } = setup(ACCOUNTS);
 		await flush();
