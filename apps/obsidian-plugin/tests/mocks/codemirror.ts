@@ -3,9 +3,10 @@
  * (`esbuild` lists them as external): just the `keymap`/`Prec`/
  * `EditorSelection` pieces the posting-indent extension builds from, plus a
  * minimal `EditorView` double its Enter binding can be driven with — and the
- * `StateField`/`StateEffect`/`Decoration`/`ViewPlugin`/`gutter`/`hoverTooltip`
- * pieces the diagnostics and account-hover extensions build from, each
- * mirroring the real behaviour those calls rely on (effect identity via `is`,
+ * `StateField`/`StateEffect`/`Decoration`/`ViewPlugin`/`gutter`/`hoverTooltip`/
+ * `WidgetType` pieces the diagnostics, account-hover, and balance-hint
+ * extensions build from, each mirroring the real behaviour those calls rely on
+ * (effect identity via `is`,
  * decoration ranges, sorted sets, captured hover sources).
  */
 
@@ -217,3 +218,6 @@ export function hoverTooltip(
 ): MockHoverTooltip {
 	return { source, options };
 }
+
+/** Base the balance-hint widget extends; tests never draw it. */
+export class WidgetType {}

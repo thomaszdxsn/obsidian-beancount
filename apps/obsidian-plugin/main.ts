@@ -19,6 +19,7 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
+import { BalanceInlayController } from './inlay-hints';
 import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
@@ -208,6 +209,8 @@ export default class BeancountPlugin extends Plugin {
 	private readonly validateSeq = new Map<string, number>();
 	/** Notice texts shown this session: autosave must not stack them. */
 	private readonly noticesShown = new Set<string>();
+	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
+	private readonly balanceInlays = new BalanceInlayController(this);
 
 	async onload() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -236,6 +239,9 @@ export default class BeancountPlugin extends Plugin {
 		// wins because the fence highlighter is a CM5 overlay, not a nested
 		// CM6 language.
 		this.registerEditorExtension(fenceLanguageExtension());
+		// Balance assertion deltas at the end of balance lines. Independent of
+		// the diagnostic markers; a setting change reapplies them without an edit.
+		this.registerEditorExtension(this.balanceInlays.extension);
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
@@ -264,6 +270,7 @@ export default class BeancountPlugin extends Plugin {
 			this.alignTimers.clear();
 			for (const timer of this.validateTimers.values()) clearTimeout(timer);
 			this.validateTimers.clear();
+			this.balanceInlays.destroy();
 		});
 	}
 
@@ -271,6 +278,7 @@ export default class BeancountPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.balanceInlays.refresh();
 	}
 
 	private onFileModified(file: TAbstractFile): void {
