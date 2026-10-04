@@ -30,6 +30,7 @@ async function loadPlugin(
 			workspace: {
 				getLeavesOfType: () => [],
 				activeEditor: null,
+				onLayoutReady: (cb: () => void) => cb(),
 				getActiveFile: () =>
 					activePath ? vault.api.getFiles().find((file) => file.path === activePath) ?? null : null,
 			},
@@ -112,6 +113,14 @@ describe('issue 29 commands and Fava', () => {
 
 	it('notices when no ledger file is available', async () => {
 		const plugin = await loadPlugin();
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
+		await command?.callback?.();
+		expect(favaRuns).toEqual([]);
+		expect(notices).toEqual(['No valid bean file is available.']);
+	});
+
+	it('refuses an entry ledger outside the vault', async () => {
+		const plugin = await loadPlugin(new FakeVault(), { entryLedger: '../outside.bean' });
 		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
 		await command?.callback?.();
 		expect(favaRuns).toEqual([]);

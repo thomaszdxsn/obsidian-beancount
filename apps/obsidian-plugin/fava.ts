@@ -3,6 +3,7 @@
  * location holding `fava` — and nothing else: a hostile synced `data.json`
  * must not turn the spawn into "run this program on the ledger".
  */
+import type { ChildProcess } from 'child_process';
 import { spawn } from 'child_process';
 
 /** Failures that mean "no such program" — everything else is a tool problem. */
@@ -17,20 +18,23 @@ export function isFavaBinary(command: string): boolean {
 /**
  * How the plugin starts Fava: `command` is the configured path or the bare
  * `fava` (the OS then resolves it through PATH), `args` its arguments.
+ * `child` is the live process when spawn succeeded, so the plugin can kill it.
  */
-export type FavaRunner = (command: string, args: readonly string[]) => Promise<{ missing: boolean }>;
+export type FavaRunner = (
+	command: string,
+	args: readonly string[]
+) => Promise<{ missing: boolean; child?: ChildProcess }>;
 
 export const runFavaProcess: FavaRunner = (command, args) =>
 	new Promise((resolve) => {
 		try {
-			const child = spawn(command, [...args], { detached: true, stdio: 'ignore' });
+			const child = spawn(command, [...args], { stdio: 'ignore' });
 			child.once('error', (err) => {
 				const code = (err as NodeJS.ErrnoException).code;
 				resolve({ missing: SPAWN_FAILURES.has(code ?? '') });
 			});
 			child.once('spawn', () => {
-				child.unref();
-				resolve({ missing: false });
+				resolve({ missing: false, child });
 			});
 		} catch {
 			resolve({ missing: true });

@@ -1,6 +1,7 @@
 import { Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { alignText, blockRangeAt, computeAlignment } from './align';
@@ -221,6 +222,8 @@ export default class BeancountPlugin extends Plugin {
 	private readonly flagWarnings = new FlagWarningController(this);
 	/** How Fava is started; tests swap in their own runner. */
 	favaRunner: FavaRunner = runFavaProcess;
+	/** Live Fava child, killed when the plugin unloads. */
+	private favaChild: ChildProcess | null = null;
 
 	async onload() {
 		this.settings = mergeSettings(await this.loadData());
@@ -320,11 +323,14 @@ export default class BeancountPlugin extends Plugin {
 			for (const timer of this.alignTimers.values()) clearTimeout(timer);
 			this.alignTimers.clear();
 			for (const timer of this.validateTimers.values()) clearTimeout(timer);
-			this.validateTimers.clear();
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
+			this.favaChild?.kill();
+			this.favaChild = null;
 		});
-		if (this.settings.runFavaOnActivate) void this.launchFava(false);
+		if (this.settings.runFavaOnActivate) {
+			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
+		}
 	}
 
 	onunload() {}
@@ -336,21 +342,38 @@ export default class BeancountPlugin extends Plugin {
 	}
 
 	private async launchFava(announce: boolean): Promise<void> {
+		if (this.favaChild && this.favaChild.exitCode === null) {
+			if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
+			return;
+		}
 		const command = this.settings.favaPath.trim() || 'fava';
 		if (!isFavaBinary(command)) {
 			new Notice(MISSING_FAVA_NOTICE);
 			return;
 		}
-		const relative = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
-		if (!relative.endsWith('.bean') && !relative.endsWith('.beancount')) {
+		const requested = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
+		if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
 			new Notice('No valid bean file is available.');
 			return;
 		}
 		const adapter = this.app.vault.adapter as FileSystemAdapter;
-		const result = await this.favaRunner(command, ['-H', FAVA_HOST, adapter.getFullPath(relative)]);
+		const root = vaultRoot(adapter.getBasePath());
+		const confined = resolve(root, requested);
+		const rel = relative(root, confined);
+		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
+			new Notice('No valid bean file is available.');
+			return;
+		}
+		const result = await this.favaRunner(command, ['-H', FAVA_HOST, confined]);
 		if (result.missing) {
 			new Notice(MISSING_FAVA_NOTICE);
 			return;
+		}
+		this.favaChild = result.child ?? null;
+		if (this.favaChild) {
+			this.favaChild.once('exit', () => {
+				this.favaChild = null;
+			});
 		}
 		if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
 	}
