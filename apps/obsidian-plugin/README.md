@@ -141,6 +141,7 @@ as the language. Saving a note extracts those bodies for `bean-check`.
 | Complete payees | `completePayee` | `true` |
 | Complete narrations | `completeNarration` | `false` |
 | Fava executable | `favaPath` | `""` (PATH) |
+| Fava port | `favaPort` | `5000` |
 | Run Fava on activate | `runFavaOnActivate` | `false` |
 | Incomplete transactions (!) | `flagWarnings["!"]` | `"warning"` |
 | Cleared transactions (*) | `flagWarnings["*"]` | `null` (none) |

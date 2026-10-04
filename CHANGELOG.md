@@ -37,4 +37,4 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
 - Transaction flag markers (`flagWarnings`): `!` is a warning by default, `*`
   is unmarked, so mixed incomplete/cleared ledgers get distinct underline
   styles. Settings tab groups Alignment / Validation / Completion / Fava /
-  Flag warnings. **Run Fava** command (`favaPath`, `runFavaOnActivate`).
+  Flag warnings. **Start Fava** / **Stop Fava** (`favaPath`, `favaPort`, `runFavaOnActivate`).

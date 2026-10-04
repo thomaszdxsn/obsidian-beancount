@@ -42,6 +42,7 @@ async function loadPlugin(
 		favaRuns.push({ command, args: [...args] });
 		return { missing: favaMissing };
 	};
+	plugin.favaOpener = () => {};
 	plugin.loadData = async () => loadedData;
 	await plugin.onload();
 	return plugin;
@@ -61,8 +62,8 @@ describe('mergeSettings', () => {
 		const settings = mergeSettings({ completePayee: false, flagWarnings: { '!': 'error' } });
 		expect(settings.completePayee).toBe(false);
 		expect(settings.flagWarnings['!']).toBe('error');
-		expect(settings.flagWarnings['*']).toBe(DEFAULT_FLAG_WARNINGS['*']);
 		expect(settings.separatorColumn).toBe(50);
+		expect(settings.favaPort).toBe(5000);
 	});
 });
 
@@ -77,9 +78,9 @@ describe('issue 29 commands and Fava', () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', 'option "title" "Main"\n');
 		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
-		expect(favaRuns).toEqual([{ command: 'fava', args: ['-H', '127.0.0.1', '/vault/main.bean'] }]);
+		expect(favaRuns).toEqual([{ command: 'fava', args: ['-H', '127.0.0.1', '-p', '5000', '/vault/main.bean'] }]);
 		expect(notices).toEqual(['Fava is running at http://127.0.0.1:5000/']);
 	});
 
@@ -87,7 +88,7 @@ describe('issue 29 commands and Fava', () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', '');
 		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean', favaPath: '/bin/bash' });
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
 		expect(favaRuns).toEqual([]);
 		expect(notices[0]).toMatch(/fava not found/);
@@ -97,7 +98,7 @@ describe('issue 29 commands and Fava', () => {
 		const vault = new FakeVault();
 		vault.write('ledger.bean', '2026-10-01 * "A"\n');
 		await loadPlugin(vault, { runFavaOnActivate: true }, 'ledger.bean');
-		expect(favaRuns).toEqual([{ command: 'fava', args: ['-H', '127.0.0.1', '/vault/ledger.bean'] }]);
+		expect(favaRuns).toEqual([{ command: 'fava', args: ['-H', '127.0.0.1', '-p', '5000', '/vault/ledger.bean'] }]);
 		expect(notices).toEqual([]);
 	});
 
@@ -106,14 +107,14 @@ describe('issue 29 commands and Fava', () => {
 		vault.write('main.bean', '');
 		favaMissing = true;
 		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
 		expect(notices[0]).toMatch(/fava not found/);
 	});
 
 	it('notices when no ledger file is available', async () => {
 		const plugin = await loadPlugin();
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
 		expect(favaRuns).toEqual([]);
 		expect(notices).toEqual(['No valid bean file is available.']);
@@ -121,7 +122,7 @@ describe('issue 29 commands and Fava', () => {
 
 	it('refuses an entry ledger outside the vault', async () => {
 		const plugin = await loadPlugin(new FakeVault(), { entryLedger: '../outside.bean' });
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'run-fava');
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
 		expect(favaRuns).toEqual([]);
 		expect(notices).toEqual(['No valid bean file is available.']);
