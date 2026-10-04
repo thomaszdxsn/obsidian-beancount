@@ -265,6 +265,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly validateTimers = new Map<string, NodeJS.Timeout>();
 	/** Which run (its target path) last marked each vault file, so its next run clears them. */
 	private readonly markOwners = new Map<string, string>();
+	/** Open files this extra loop last stamped with flag markers. */
+	private readonly extraFlagged = new Set<string>();
+
 	/** Newest run per target; older runs finishing later must not report. */
 	private readonly validateSeq = new Map<string, number>();
 	/** False after cleanup; in-flight bean-check must not publish. */
@@ -824,15 +827,19 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			if (published.has(file.path)) continue;
 			const flags = flagsFor(file.path, editor.getValue());
 			if (flags.length === 0) {
-				const view = (editor as Editor & { cm?: EditorView }).cm;
-				const field = view?.state?.field?.(lineDiagnostics);
-				// FakeCm has no field: skip so an empty merge cannot wipe a
-				// neighbour's bean-check marks. A real editor that still
-				// shows FLAGGED after the last `!` was edited must republish.
-				if (!field?.some((diagnostic) => diagnostic.message === FLAGGED_MESSAGE)) continue;
-				setEditorLineDiagnostics(editor, beanDiagnosticsOn(editor));
+				if (!this.extraFlagged.has(file.path)) continue;
+				this.extraFlagged.delete(file.path);
+				// Another target owns bean-check marks: drop only FLAGGED.
+				// Unpublished journals have flags only — an empty list is the
+				// clear. Do not read `state.field` (Obsidian returns undefined).
+				if (this.markOwners.has(file.path)) {
+					setEditorLineDiagnostics(editor, beanDiagnosticsOn(editor));
+				} else {
+					setEditorLineDiagnostics(editor, []);
+				}
 				continue;
 			}
+			this.extraFlagged.add(file.path);
 			setEditorLineDiagnostics(
 				editor,
 				mergeDiagnostics(beanDiagnosticsOn(editor), flags)
