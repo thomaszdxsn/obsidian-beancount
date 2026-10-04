@@ -199,6 +199,9 @@ export interface MockGutterConfig {
 	class?: string;
 	lineMarker?: (view: unknown, block: MockBlockInfo, otherMarkers: readonly unknown[]) => GutterMarker | null;
 	lineMarkerChange?: (update: unknown) => boolean;
+	domEventHandlers?: {
+		mousedown?: (view: unknown, line: MockBlockInfo, event: Event) => boolean;
+	};
 }
 
 export const gutter = (config: MockGutterConfig): MockGutterConfig => config;

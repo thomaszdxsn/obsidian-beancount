@@ -121,6 +121,37 @@ export class Notice {
 		notices.push(String(message));
 	}
 }
+
+/** Menus shown via `showAtMouseEvent`, newest last. Tests clear between cases. */
+export const shownMenus: Array<{ titles: string[]; items: Array<{ title: string; click: () => unknown }> }> = [];
+
+export class Menu {
+	private readonly items: Array<{ title: string; click: () => unknown }> = [];
+
+	addItem(configure: (item: {
+		setTitle(title: string): unknown;
+		onClick(click: () => unknown): unknown;
+	}) => void): this {
+		const item = { title: '', click: () => undefined as unknown };
+		configure({
+			setTitle(title: string) {
+				item.title = title;
+				return this;
+			},
+			onClick(click: () => unknown) {
+				item.click = click;
+				return this;
+			},
+		});
+		this.items.push(item);
+		return this;
+	}
+
+	showAtMouseEvent(): void {
+		shownMenus.push({ titles: this.items.map((item) => item.title), items: this.items });
+	}
+}
+
 export class Modal {}
 export class MarkdownView {}
 export class Editor {}

@@ -1,5 +1,6 @@
-import { Notice, Plugin } from 'obsidian';
+import { Menu, Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
+import type { EditorView } from '@codemirror/view';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
@@ -10,7 +11,7 @@ import { beancountMode } from './beancount-mode';
 import { AccountIndex } from './account-index';
 import { AccountSuggest } from './account-suggest';
 import { accountHoverTooltip } from './account-hover';
-import type { BeanCheckError, BeanCheckRunner } from './bean-check';
+import type { BeanCheckError, BeanCheckRunner, LineDiagnostic } from './bean-check';
 import {
 	clipText,
 	isBeanCheckBinary,
@@ -19,7 +20,21 @@ import {
 	runBeanCheck,
 	toLineDiagnostics,
 } from './bean-check';
-import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
+import {
+	FLAGGED_MESSAGE,
+	flagDiagnostics,
+	flagDiagnosticsFromFences,
+	flagOkayEdit,
+	insertOpenDirective,
+	mergeDiagnostics,
+	OpenFileIndex,
+	padEdit,
+	PairingIndex,
+	quickFixesForLine,
+} from './code-actions';
+import type { QuickFix, TextEdit } from './code-actions';
+import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
+import type { DiagnosticClickHost } from './diagnostics';
 import { FAVA_HOST, favaUrl, isFavaBinary, normalizeFavaPort, openFavaUrl, runFavaProcess } from './fava';
 import type { FavaOpener, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
@@ -115,6 +130,34 @@ function openEditorsFor(app: App, file: TFile): Editor[] {
 	return editors;
 }
 
+function openEditorFiles(app: App): Array<{ file: TFile; editor: Editor }> {
+	const found: Array<{ file: TFile; editor: Editor }> = [];
+	const add = (file: TFile | null | undefined, editor: Editor | null | undefined) => {
+		if (!file || !editor) return;
+		if (found.some((entry) => entry.editor === editor)) return;
+		found.push({ file, editor });
+	};
+	const active = app.workspace.activeEditor;
+	add(active?.file ?? null, active?.editor ?? null);
+	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
+		const view = leaf.view as MarkdownView | null;
+		add(view?.file ?? null, view?.editor ?? null);
+	}
+	return found;
+}
+
+function flagsFor(path: string, text: string): LineDiagnostic[] {
+	return path.endsWith('.md') ? flagDiagnosticsFromFences(extractBeancountFences(text)) : flagDiagnostics(text);
+}
+
+function beanDiagnosticsOn(editor: Editor): LineDiagnostic[] {
+	const view = (editor as Editor & { cm?: EditorView }).cm;
+	const field = view?.state?.field?.(lineDiagnostics);
+	if (!field) return [];
+	return field.filter((diagnostic) => diagnostic.message !== FLAGGED_MESSAGE);
+}
+
+
 /**
  * The vault base as bean-check reports files under it: the real path (its
  * loader resolves symlinks), `/`-separated, with a trailing slash.
@@ -204,10 +247,18 @@ function alignCommand(editor: Editor): void {
 	alignInEditor(editor, commandScope(editor, editorLines(editor)));
 }
 
-export default class BeancountPlugin extends Plugin {
+function applyEditorEdit(editor: Editor, edit: TextEdit): void {
+	editor.transaction({
+		changes: [{ from: { line: edit.line, ch: edit.fromCh }, to: { line: edit.line, ch: edit.toCh }, text: edit.text }],
+	});
+}
+
+export default class BeancountPlugin extends Plugin implements DiagnosticClickHost {
 	settings: BeancountSettings = { ...DEFAULT_SETTINGS };
 	/** How `bean-check` is started; tests swap in their own runner. */
 	beanCheckRunner: BeanCheckRunner = runBeanCheck;
+	private readonly pairings = new PairingIndex();
+	private readonly openFiles = new OpenFileIndex();
 	/** Pending on-save alignment per file path. */
 	private readonly alignTimers = new Map<string, NodeJS.Timeout>();
 	/** Pending on-save validation per run target. */
@@ -256,7 +307,8 @@ export default class BeancountPlugin extends Plugin {
 		this.registerExtensions(['bean', 'beancount'], 'markdown');
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
-		// One vault scan feeds every completion index.
+		// One vault scan feeds every completion index, balancing-account
+		// history, and the file that already holds `open` directives.
 		const accounts = new AccountIndex(this.usage);
 		const payees = new VaultIndex(extractPayees, this.usage);
 		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
@@ -273,7 +325,7 @@ export default class BeancountPlugin extends Plugin {
 		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)), this.usage);
 		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)), this.usage);
 		const narrations = new VaultIndex(extractNarrations, this.usage);
-		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations);
+		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations, this.pairings, this.openFiles);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
 		const payeeSuggest = new PayeeSuggest(this.app, payees, () => this.settings.completePayee);
 		const commoditySuggest = new CommoditySuggest(this.app, commodities);
@@ -305,8 +357,9 @@ export default class BeancountPlugin extends Plugin {
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
 		// The markers on lines bean-check complains about: inline underline
-		// plus a gutter dot, styled by `styles.css`.
-		this.registerEditorExtension(diagnosticsExtension);
+		// plus a gutter dot. Clicking the dot offers the quick fixes that
+		// line can take.
+		this.registerEditorExtension(createDiagnosticsExtension(this));
 		this.registerEditorExtension(accountHoverTooltip(accounts));
 		// Cmd+/ comments, auto-close brackets, and ;#region folds inside
 		// ```beancount / ```bean fences — markdown's languageData otherwise
@@ -470,6 +523,95 @@ export default class BeancountPlugin extends Plugin {
 			}
 		});
 		return true;
+	}
+
+	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
+		const located = this.editorFileForView(view);
+		if (!located) return false;
+		const diagnostic = view.state.field(lineDiagnostics).find((entry) => entry.line === line);
+		if (!diagnostic) return false;
+		const { editor, file } = located;
+		const lines = editor.getValue().split('\n');
+		const openFile = this.openFiles.bestFile() ?? (file.extension === 'md' ? null : file.path);
+		const fixes = quickFixesForLine({
+			lines,
+			line,
+			message: diagnostic.message,
+			pairings: this.pairings.all(),
+			openFile,
+			openedAccounts: openFile ? this.openFiles.openedIn(openFile) : new Set(),
+		});
+		if (fixes.length === 0) return false;
+		const menu = new Menu();
+		for (const fix of fixes) {
+			menu.addItem((item) =>
+				item.setTitle(fix.title).onClick(() => {
+					this.applyQuickFix(editor, file, lines, line, diagnostic.message, fix);
+				})
+			);
+		}
+		menu.showAtMouseEvent(event);
+		event.preventDefault();
+		return true;
+	}
+
+	private editorFileForView(view: EditorView): { editor: Editor; file: TFile } | null {
+		const matches = (editor: Editor | null | undefined, file: TFile | null | undefined) =>
+			editor !== undefined &&
+			editor !== null &&
+			file !== undefined &&
+			file !== null &&
+			(editor as Editor & { cm?: EditorView }).cm === view
+				? { editor, file }
+				: null;
+		const active = this.app.workspace.activeEditor;
+		const fromActive = matches(active?.editor ?? null, active?.file ?? null);
+		if (fromActive) return fromActive;
+		for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+			const markdown = leaf.view as MarkdownView | null;
+			const found = matches(markdown?.editor ?? null, markdown?.file ?? null);
+			if (found) return found;
+		}
+		return null;
+	}
+
+	private applyQuickFix(
+		editor: Editor,
+		file: TFile,
+		lines: readonly string[],
+		line: number,
+		message: string,
+		fix: QuickFix
+	): void {
+		if (fix.kind === 'flag-okay') {
+			const edit = flagOkayEdit(lines, line);
+			if (edit) applyEditorEdit(editor, edit);
+			return;
+		}
+		if (fix.kind === 'pad') {
+			const edit = padEdit(lines, line, this.pairings.all(), message);
+			if (edit) applyEditorEdit(editor, edit);
+			return;
+		}
+		void this.applyOpenAccount(file, fix);
+	}
+
+	private async applyOpenAccount(
+		currentFile: TFile,
+		fix: Extract<QuickFix, { kind: 'open-account' }>
+	): Promise<void> {
+		const target = this.app.vault.getFiles().find((entry) => entry.path === fix.path) ?? currentFile;
+		const editor = openEditorFor(this.app, target);
+		const text = editor ? editor.getValue() : await this.app.vault.read(target);
+		const lines = text.split('\n');
+		const edit = insertOpenDirective(lines, fix.date, fix.account, fix.commodity);
+		if (editor) {
+			applyEditorEdit(editor, edit);
+			return;
+		}
+		const line = lines[edit.line] ?? '';
+		lines[edit.line] = line.slice(0, edit.fromCh) + edit.text + line.slice(edit.toCh);
+		await this.app.vault.modify(target, lines.join('\n'));
 	}
 
 	private onFileModified(file: TAbstractFile): void {
@@ -660,6 +802,7 @@ export default class BeancountPlugin extends Plugin {
 		const previouslyOwned = [...this.markOwners.entries()]
 			.filter(([, owner]) => owner === target)
 			.map(([path]) => path);
+		const published = new Set<string>();
 		for (const path of new Set([...reported, ...previouslyOwned, target])) {
 			if (reported.has(path)) this.markOwners.set(path, target);
 			else this.markOwners.delete(path);
@@ -667,9 +810,33 @@ export default class BeancountPlugin extends Plugin {
 			// No editor, no markers: a background file is marked when it is
 			// opened and its target is saved again.
 			if (!vaultFile) continue;
+			published.add(path);
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
-				setEditorLineDiagnostics(editor, toLineDiagnostics(errorsByPath.get(path) ?? []));
+				setEditorLineDiagnostics(
+					editor,
+					mergeDiagnostics(toLineDiagnostics(errorsByPath.get(path) ?? []), flagsFor(path, editor.getValue()))
+				);
 			}
+		}
+		// Flag markers do not need bean-check: a clean journal under an entry
+		// ledger is never `target`, so it would otherwise stay unmarked.
+		for (const { file, editor } of openEditorFiles(this.app)) {
+			if (published.has(file.path)) continue;
+			const flags = flagsFor(file.path, editor.getValue());
+			if (flags.length === 0) {
+				const view = (editor as Editor & { cm?: EditorView }).cm;
+				const field = view?.state?.field?.(lineDiagnostics);
+				// FakeCm has no field: skip so an empty merge cannot wipe a
+				// neighbour's bean-check marks. A real editor that still
+				// shows FLAGGED after the last `!` was edited must republish.
+				if (!field?.some((diagnostic) => diagnostic.message === FLAGGED_MESSAGE)) continue;
+				setEditorLineDiagnostics(editor, beanDiagnosticsOn(editor));
+				continue;
+			}
+			setEditorLineDiagnostics(
+				editor,
+				mergeDiagnostics(beanDiagnosticsOn(editor), flags)
+			);
 		}
 	}
 
