@@ -97,6 +97,10 @@ A missing or rejected `bean-check` shows:
   may hold non-ASCII letters and CJK middle dots (`Expenses:餐饮:午饭`,
   `Expenses:カード・ローン`); other punctuation and symbols (`，`, `：`, `☕`) end a
   name, so CJK prose does not index whole clauses.
+  Suggestions rank prefix matches first, then case-insensitive subsequence
+  matches; within a rank, names picked more often / more recently float to
+  the top. Pick counts persist in the plugin `data.json` (`completionUsage`);
+  a corrupt bag is ignored so the plugin still starts.
   An account with a `close` directive
   is omitted unless a later `open` reopens it. The popup shows the latest
   open date and constrained currencies when those directives are present.
@@ -110,8 +114,9 @@ A missing or rejected `bean-check` shows:
   Balances are not computed here, for the same reason as completion.
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
-  of every historical transaction. One vault scan feeds both completion
-  indexes.
+  of every historical transaction. Ranking matches account completion
+  (prefix, then subsequence, then frecency). One vault scan feeds both
+  completion indexes.
 - **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
   `balance`, …) offers the vscode-beancount templates. `txn` expands to
   `YYYY-MM-DD * "" ""` with the caret in the payee quotes, so payee completion
