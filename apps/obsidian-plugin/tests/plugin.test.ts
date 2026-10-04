@@ -1639,6 +1639,23 @@ describe('BeancountPlugin', () => {
 		expect(published(editor)).toEqual([{ line: 2, message: FLAGGED_MESSAGE }]);
 	});
 
+	it('does not offer Open account on a markdown note when no ledger holds opens', async () => {
+		const vault = new FakeVault();
+		const note = ['```beancount', '2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD', '```'].join('\n');
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		await flush();
+
+		expect(
+			clickDiagnostic(plugin, editor, 1, [
+				{ line: 1, message: "Invalid reference to unknown account 'Expenses:Food'" },
+			])
+		).toBe(false);
+		expect(shownMenus).toEqual([]);
+	});
+
+
 
 
 });

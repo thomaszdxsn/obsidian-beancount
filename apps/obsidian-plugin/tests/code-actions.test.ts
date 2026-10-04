@@ -404,5 +404,98 @@ describe('edge postings and residuals', () => {
 		).toEqual([{ line: 2, message: FLAGGED_MESSAGE }]);
 		expect(flagDiagnostics('Wow! not a flag\n!nope')).toEqual([]);
 	});
+
+	it('prefers the counterpart with the later date when counts tie', () => {
+		expect(
+			inferBalancingAccount('Expenses:Food', undefined, [
+				{ date: '2026-09-01', payee: undefined, accounts: ['Expenses:Food', 'Assets:Zoo'] },
+				{ date: '2026-09-02', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
+			])
+		).toBe('Assets:Cash');
+	});
+
+	it('keeps the newer date when an older pairing for the same counterpart arrives later', () => {
+		expect(
+			inferBalancingAccount('Expenses:Food', undefined, [
+				{ date: '2026-09-02', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
+				{ date: '2026-09-01', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
+			])
+		).toBe('Assets:Cash');
+	});
+
+	it('skips indented comments and account lines whose rest is not an amount', () => {
+		expect(
+			extractPairings(
+				['2026-10-01 * "Cafe"', '  ; not a posting', '  Assets:Cash  leftover', '  Expenses:Food  10.00 USD'].join(
+					'\n'
+				)
+			)
+		).toEqual([]);
+		expect(
+			padEdit(
+				['2026-10-01 * "Cafe"', '  Expenses:Food  leftover'],
+				0,
+				[{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }],
+				'Transaction does not balance'
+			)
+		).toBeNull();
+	});
+
+	it('pads a quoted commodity and negates a residual that starts with +', () => {
+		const history: Pairing[] = [
+			{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		];
+		const lines = ['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 "HOOL"'];
+		expect(padEdit(lines, 0, history, 'Transaction does not balance: (+10.00 "HOOL")')?.text).toBe(
+			'\n  Assets:Cash  -10.00 "HOOL"'
+		);
+	});
+
+	it('indexes a txn header and reports a duplicate unknown account once', () => {
+		expect(
+			extractPairings(
+				['2026-10-01 txn "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
+			)
+		).toEqual([{ date: '2026-10-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
+		expect(
+			quickFixesForLine(
+				context({
+					lines: ['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD'],
+					line: 0,
+					message:
+						"Invalid reference to unknown account 'Expenses:Food'\nInvalid reference to unknown account 'Expenses:Food'",
+				})
+			)
+		).toHaveLength(1);
+	});
+
+	it('returns false when OpenFileIndex rename misses, and maps empty fences to no flags', () => {
+		const index = new OpenFileIndex();
+		expect(index.renameFile('gone.bean', 'x.bean')).toBe(false);
+		expect(flagDiagnosticsFromFences([])).toEqual([]);
+	});
+
+	it('pads from the posting when the residual text is not an amount', () => {
+		const lines = ['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD'];
+		expect(
+			padEdit(
+				lines,
+				0,
+				[{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }],
+				'Transaction does not balance: (???)'
+			)?.text
+		).toBe('\n  Assets:Cash  -10.00 USD');
+	});
+
+	it('keeps the alphabetically first counterpart when a later name ties on count and date', () => {
+		expect(
+			inferBalancingAccount('Expenses:Food', undefined, [
+				{ date: '2026-09-01', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
+				{ date: '2026-09-01', payee: undefined, accounts: ['Expenses:Food', 'Assets:Zoo'] },
+			])
+		).toBe('Assets:Cash');
+	});
+
+
 });
 
