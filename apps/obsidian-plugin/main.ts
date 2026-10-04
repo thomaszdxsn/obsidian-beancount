@@ -215,6 +215,8 @@ export default class BeancountPlugin extends Plugin {
 	private readonly markOwners = new Map<string, string>();
 	/** Newest run per target; older runs finishing later must not report. */
 	private readonly validateSeq = new Map<string, number>();
+	/** False after cleanup; in-flight bean-check must not publish. */
+	private validateLive = true;
 	/** Notice texts shown this session: autosave must not stack them. */
 	private readonly noticesShown = new Set<string>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
@@ -333,9 +335,12 @@ export default class BeancountPlugin extends Plugin {
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
 		this.register(() => {
+			this.validateLive = false;
+			this.validateSeq.clear();
 			for (const timer of this.alignTimers.values()) clearTimeout(timer);
 			this.alignTimers.clear();
 			for (const timer of this.validateTimers.values()) clearTimeout(timer);
+			this.validateTimers.clear();
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
 			this.favaChild?.kill();
@@ -435,6 +440,7 @@ export default class BeancountPlugin extends Plugin {
 	 * temp ledger of its fences, with lines mapped back onto the note.
 	 */
 	private async validateFile(file: TFile): Promise<void> {
+		if (!this.validateLive) return;
 		const markdown = file.extension === 'md';
 		// An entry ledger turns a ledger-file save into a check of its whole
 		// include chain. A markdown save always owns its own run: the fences
@@ -443,14 +449,15 @@ export default class BeancountPlugin extends Plugin {
 		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
 		// Only the newest run for a target may report: bean-check speed varies
 		// with its cache, and an older run finishing last must not overwrite
-		// the newer report.
+		// the newer report. Unload shares this gate: cleanup flips
+		// `validateLive` so a started runner cannot publish after teardown.
 		const seq = (this.validateSeq.get(target) ?? 0) + 1;
 		this.validateSeq.set(target, seq);
 
 		let fences: BeancountFence[] | undefined;
 		if (markdown) {
 			const text = await this.app.vault.read(file);
-			if (this.validateSeq.get(target) !== seq) return;
+			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 			fences = extractBeancountFences(text);
 			if (fences.length === 0) {
 				this.markErrors(target, [], root);
@@ -512,7 +519,7 @@ export default class BeancountPlugin extends Plugin {
 			}
 
 			const run = await this.beanCheckRunner(command, [checkPath]);
-			if (this.validateSeq.get(target) !== seq) return;
+			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 			if (run.missing) {
 				this.notify(MISSING_BEAN_CHECK_NOTICE);
 				return;
@@ -549,6 +556,7 @@ export default class BeancountPlugin extends Plugin {
 	 * before. A file another target marked is left for that target's next run.
 	 */
 	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): void {
+		if (!this.validateLive) return;
 		const vaultFiles = this.app.vault.getFiles();
 		const errorsByPath = new Map<string, BeanCheckError[]>();
 		const unmapped: BeanCheckError[] = [];
@@ -594,6 +602,7 @@ export default class BeancountPlugin extends Plugin {
 	 * problem re-arms every few seconds and must not stack toasts.
 	 */
 	private notify(text: string): void {
+		if (!this.validateLive) return;
 		if (this.noticesShown.has(text)) return;
 		this.noticesShown.add(text);
 		new Notice(text);

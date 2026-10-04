@@ -76,6 +76,23 @@ async function loadPlugin(
 	return { plugin, vault };
 }
 
+/** Completes the in-flight `bean-check` when the test calls the returned function. */
+function holdBeanCheck(plugin: BeancountPlugin): (run: BeanCheckRun) => void {
+	let release: (run: BeanCheckRun) => void = () => undefined;
+	plugin.beanCheckRunner = async (command, args) => {
+		beanCheckRuns.push({ command, args: [...args] });
+		return await new Promise<BeanCheckRun>((resolve) => {
+			release = resolve;
+		});
+	};
+	return (run) => release(run);
+}
+
+async function unloadPlugin(plugin: BeancountPlugin & RecordingPlugin): Promise<void> {
+	await plugin.onunload();
+	for (const cleanup of plugin.registrations.cleanups) cleanup();
+}
+
 /** An open leaf whose view shows `file` in `editor`. */
 interface FakeLeaf {
 	view: { file: FakeFile | null; editor: FakeEditor | null };
@@ -782,13 +799,134 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault, { alignOnSave: true });
 
 		await vault.emit('modify', file);
-		await plugin.onunload();
-		for (const cleanup of plugin.registrations.cleanups) cleanup();
+		await unloadPlugin(plugin);
 		await delay(600);
 
 		expect(vault.writes).toEqual([]);
 		// The validation the same save scheduled is dropped with it.
 		expect(beanCheckRuns).toEqual([]);
+	});
+
+	it('discards an in-flight error report after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({ stderr: '/vault/ledger.bean:1:       late result\n', missing: false });
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('discards an in-flight clean report after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({ stderr: '', missing: false });
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice a missing bean-check after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({ stderr: '', missing: true });
+		await flush();
+
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice a bean-check failure after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({
+			stderr: "Traceback (most recent call last):\nModuleNotFoundError: No module named 'beancount'\n",
+			missing: false,
+		});
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice an unmapped report after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', 'include "gone.bean"\n');
+		const editor = createEditor(['include "gone.bean"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({
+			stderr: '<load>:0:       File "/vault/gone.bean" does not exist\n',
+			missing: false,
+		});
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('discards an in-flight fence report after unload', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({
+			stderr: `${beanCheckRuns[0].args[0]}:1:       late fence\n`,
+			missing: false,
+		});
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
 	});
 
 	it('persists the on-save toggle and honors it', async () => {
