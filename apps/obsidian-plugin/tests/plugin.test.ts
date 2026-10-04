@@ -1625,6 +1625,27 @@ describe('BeancountPlugin', () => {
 		expect(published(editor)).toEqual([{ line: 0, message: FLAGGED_MESSAGE }]);
 	});
 
+	it('clears a stale flag marker on an included journal after the bang is gone', async () => {
+		const vault = new FakeVault();
+		vault.write('main.bean', 'include "journal.bean"\n');
+		const journal = vault.write('journal.bean', '2026-10-01 ! "Cafe"\n  Assets:Cash  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD']);
+		await loadPlugin(vault, { entryLedger: 'main.bean' }, [{ view: { file: journal, editor } }]);
+		beanCheckResult = { stderr: '', missing: false };
+
+		await vault.emit('modify', journal);
+		await delay(600);
+		expect(published(editor)).toEqual([{ line: 0, message: FLAGGED_MESSAGE }]);
+
+		Object.assign(editor.cm, { state: { field: () => published(editor) } });
+		editor.lines[0] = '2026-10-01 * "Cafe"';
+		await vault.emit('modify', journal);
+		await delay(600);
+
+		expect(published(editor)).toEqual([]);
+	});
+
+
 	it('flags a markdown fence and ignores a bang in the prose around it', async () => {
 		const vault = new FakeVault();
 		const note = ['Wow!', '```beancount', '2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD', '```', ''].join('\n');

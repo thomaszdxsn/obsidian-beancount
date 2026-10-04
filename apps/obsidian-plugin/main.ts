@@ -615,7 +615,16 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		for (const { file, editor } of openEditorFiles(this.app)) {
 			if (published.has(file.path)) continue;
 			const flags = flagsFor(file.path, editor.getValue());
-			if (flags.length === 0) continue;
+			if (flags.length === 0) {
+				const view = (editor as Editor & { cm?: EditorView }).cm;
+				const field = view?.state?.field?.(lineDiagnostics);
+				// FakeCm has no field: skip so an empty merge cannot wipe a
+				// neighbour's bean-check marks. A real editor that still
+				// shows FLAGGED after the last `!` was edited must republish.
+				if (!field?.some((diagnostic) => diagnostic.message === FLAGGED_MESSAGE)) continue;
+				setEditorLineDiagnostics(editor, beanDiagnosticsOn(editor));
+				continue;
+			}
 			setEditorLineDiagnostics(
 				editor,
 				mergeDiagnostics(beanDiagnosticsOn(editor), flags)

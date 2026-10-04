@@ -417,8 +417,10 @@ describe('edge postings and residuals', () => {
 	it('keeps the newer date when an older pairing for the same counterpart arrives later', () => {
 		expect(
 			inferBalancingAccount('Expenses:Food', undefined, [
-				{ date: '2026-09-02', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
+				{ date: '2026-09-03', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
 				{ date: '2026-09-01', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
+				{ date: '2026-09-02', payee: undefined, accounts: ['Expenses:Food', 'Assets:Zoo'] },
+				{ date: '2026-09-02', payee: undefined, accounts: ['Expenses:Food', 'Assets:Zoo'] },
 			])
 		).toBe('Assets:Cash');
 	});
