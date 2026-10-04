@@ -19,6 +19,9 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import { diagnosticsExtension, setEditorLineDiagnostics } from './diagnostics';
+import { FAVA_HOST, FAVA_URL, isFavaBinary, runFavaProcess } from './fava';
+import type { FavaRunner } from './fava';
+import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
 import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
@@ -32,7 +35,7 @@ import { fenceLanguageExtension } from './fence-language';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { instantAlignmentExtension } from './instant-alignment';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
-import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
+import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 
 /**
  * Obsidian highlights fenced code blocks through its bundled CodeMirror 5
@@ -77,13 +80,14 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 /** Delay before on-save alignment, so a burst of edits aligns once. */
 const ALIGN_DEBOUNCE_MS = 500;
 
-/** The hint for a missing or rejected bean-check. */
 const MISSING_BEAN_CHECK_NOTICE =
 	'bean-check not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.';
 
+const MISSING_FAVA_NOTICE =
+	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
+
 /** Delay before on-save validation, so a burst of saves checks once. */
 const VALIDATE_DEBOUNCE_MS = 500;
-
 /** The editor of a leaf showing `file`, if any. */
 function openEditorFor(app: App, file: TFile): Editor | null {
 	return openEditorsFor(app, file)[0] ?? null;
@@ -213,9 +217,13 @@ export default class BeancountPlugin extends Plugin {
 	private readonly noticesShown = new Set<string>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
 	private readonly balanceInlays = new BalanceInlayController(this);
+	/** Transaction-flag markers; refreshed when flagWarnings change. */
+	private readonly flagWarnings = new FlagWarningController(this);
+	/** How Fava is started; tests swap in their own runner. */
+	favaRunner: FavaRunner = runFavaProcess;
 
 	async onload() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = mergeSettings(await this.loadData());
 		// Ledger files open as notes: without this Obsidian shows them as
 		// unsupported, and nothing of the plugin (completion, alignment,
 		// validation) has an editor to work in. Registration is read at app
@@ -243,7 +251,7 @@ export default class BeancountPlugin extends Plugin {
 		const narrations = new VaultIndex(extractNarrations);
 		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
-		const payeeSuggest = new PayeeSuggest(this.app, payees);
+		const payeeSuggest = new PayeeSuggest(this.app, payees, () => this.settings.completePayee);
 		const commoditySuggest = new CommoditySuggest(this.app, commodities);
 		const tagSuggest = new TagSuggest(this.app, tags);
 		const linkSuggest = new LinkSuggest(this.app, links);
@@ -274,10 +282,14 @@ export default class BeancountPlugin extends Plugin {
 		// Balance assertion deltas at the end of balance lines. Independent of
 		// the diagnostic markers; a setting change reapplies them without an edit.
 		this.registerEditorExtension(this.balanceInlays.extension);
+		this.registerEditorExtension(this.flagWarnings.extension);
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
 			editorCallback: alignCommand,
+			// Instant alignment covers typing `.`; this chord is the command
+			// until then. Obsidian has no default Mod+Shift+. binding.
+			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '.' }],
 		});
 		this.addCommand({
 			id: 'insert-today-date',
@@ -295,6 +307,13 @@ export default class BeancountPlugin extends Plugin {
 			name: 'Show outline',
 			callback: () => revealOutlineView(this.app),
 		});
+		this.addCommand({
+			id: 'run-fava',
+			name: 'Run Fava',
+			callback: () => {
+				void this.launchFava(true);
+			},
+		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
 		this.register(() => {
@@ -303,7 +322,9 @@ export default class BeancountPlugin extends Plugin {
 			for (const timer of this.validateTimers.values()) clearTimeout(timer);
 			this.validateTimers.clear();
 			this.balanceInlays.destroy();
+			this.flagWarnings.destroy();
 		});
+		if (this.settings.runFavaOnActivate) void this.launchFava(false);
 	}
 
 	onunload() {}
@@ -311,6 +332,27 @@ export default class BeancountPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		this.balanceInlays.refresh();
+		this.flagWarnings.refresh();
+	}
+
+	private async launchFava(announce: boolean): Promise<void> {
+		const command = this.settings.favaPath.trim() || 'fava';
+		if (!isFavaBinary(command)) {
+			new Notice(MISSING_FAVA_NOTICE);
+			return;
+		}
+		const relative = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
+		if (!relative.endsWith('.bean') && !relative.endsWith('.beancount')) {
+			new Notice('No valid bean file is available.');
+			return;
+		}
+		const adapter = this.app.vault.adapter as FileSystemAdapter;
+		const result = await this.favaRunner(command, ['-H', FAVA_HOST, adapter.getFullPath(relative)]);
+		if (result.missing) {
+			new Notice(MISSING_FAVA_NOTICE);
+			return;
+		}
+		if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
 	}
 
 	private onFileModified(file: TAbstractFile): void {

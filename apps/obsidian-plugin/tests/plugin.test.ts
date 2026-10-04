@@ -774,36 +774,53 @@ describe('BeancountPlugin', () => {
 		const { settings } = tab.containerEl as unknown as FakeSettingContainer;
 
 		expect(settings.map((setting) => setting.name)).toEqual([
+			'Alignment',
 			'Align amounts on save',
 			'Instant alignment',
 			'Separator column',
+			'Validation',
 			'Bean-check executable',
 			'Entry ledger',
 			'Balance inlay hints',
+			'Completion',
+			'Complete payees',
 			'Complete narrations',
+			'Fava',
+			'Fava executable',
+			'Run Fava on activate',
+			'Flag warnings',
+			'Incomplete transactions (!)',
+			'Cleared transactions (*)',
 		]);
-		expect(settings[0].toggle?.value).toBe(false);
-		expect(settings[1].toggle?.value).toBe(true);
-		expect(settings[6].toggle?.value).toBe(false);
-		await settings[0].toggle?.onChangeHandler?.(true);
+		const named = Object.fromEntries(settings.map((setting) => [setting.name, setting]));
+		expect(named['Align amounts on save']?.toggle?.value).toBe(false);
+		expect(named['Instant alignment']?.toggle?.value).toBe(true);
+		expect(named['Complete narrations']?.toggle?.value).toBe(false);
+		expect(named['Complete payees']?.toggle?.value).toBe(true);
+		expect(named['Incomplete transactions (!)']?.dropdown?.value).toBe('warning');
+		expect(named['Cleared transactions (*)']?.dropdown?.value).toBe('none');
+		await named['Align amounts on save']?.toggle?.onChangeHandler?.(true);
 		expect(plugin.savedData).toEqual([expect.objectContaining({ alignOnSave: true })]);
-		await settings[6].toggle?.onChangeHandler?.(true);
+		await named['Complete narrations']?.toggle?.onChangeHandler?.(true);
 		expect(plugin.settings.completeNarration).toBe(true);
 		expect(plugin.savedData?.at(-1)).toMatchObject({ completeNarration: true });
 
-		await settings[3].text?.onChangeHandler?.('/usr/local/bin/bean-check');
-		await settings[4].text?.onChangeHandler?.('ledger/main.bean');
+		await named['Bean-check executable']?.text?.onChangeHandler?.('/usr/local/bin/bean-check');
+		await named['Entry ledger']?.text?.onChangeHandler?.('ledger/main.bean');
 		expect(plugin.settings.beanCheckPath).toBe('/usr/local/bin/bean-check');
 		expect(plugin.settings.entryLedger).toBe('ledger/main.bean');
-		await settings[1].toggle?.onChangeHandler?.(false);
+		await named['Instant alignment']?.toggle?.onChangeHandler?.(false);
 		expect(plugin.settings.instantAlignment).toBe(false);
-		await settings[2].text?.onChangeHandler?.('40');
+		await named['Separator column']?.text?.onChangeHandler?.('40');
 		expect(plugin.settings.separatorColumn).toBe(40);
-		await settings[2].text?.onChangeHandler?.('nope');
+		await named['Separator column']?.text?.onChangeHandler?.('nope');
 		expect(plugin.settings.separatorColumn).toBe(40);
-		await settings[5].toggle?.onChangeHandler?.(true);
-		expect(plugin.settings.completeNarration).toBe(true);
-		expect(plugin.savedData?.at(-1)).toMatchObject({ completeNarration: true });
+		await named['Complete payees']?.toggle?.onChangeHandler?.(false);
+		expect(plugin.settings.completePayee).toBe(false);
+		await named['Incomplete transactions (!)']?.dropdown?.onChangeHandler?.('error');
+		expect(plugin.settings.flagWarnings['!']).toBe('error');
+		await named['Fava executable']?.text?.onChangeHandler?.('/opt/homebrew/bin/fava');
+		expect(plugin.settings.favaPath).toBe('/opt/homebrew/bin/fava');
 
 		await vault.emit('modify', file);
 		await delay(600);

@@ -48,6 +48,12 @@ Configured in **Settings → Beancount**. Keys match `data.json`.
 | Separator column | `separatorColumn` | `50` | 1-based display column of the decimal point for instant alignment (wide accounts still push past it). |
 | Bean-check executable | `beanCheckPath` | empty | Path to `bean-check`; empty runs `bean-check` from `PATH`. |
 | Entry ledger | `entryLedger` | empty | Vault path of the ledger entry file (e.g. `main.bean`). |
+| Complete payees | `completePayee` | on | Suggest historical payees in the first quoted field. |
+| Complete narrations | `completeNarration` | off | Suggest vault narrations in the second quoted field. |
+| Fava executable | `favaPath` | empty | Path to `fava`; empty runs `fava` from `PATH`. Only a program named `fava` is accepted. |
+| Run Fava on activate | `runFavaOnActivate` | off | Start Fava against the entry ledger (or the active ledger file) when the plugin loads. |
+| Incomplete transactions (!) | `flagWarnings["!"]` | warning | Marker style for `!` transactions (`none` / `warning` / `error`). |
+| Cleared transactions (*) | `flagWarnings["*"]` | none | Marker style for `*` / `txn` transactions. |
 
 **`entryLedger` behaviour**
 
@@ -68,9 +74,10 @@ A missing or rejected `bean-check` shows:
 
 | Command | Notes |
 | --- | --- |
-| Align decimal points | Current transaction block, or the selection when there is one. |
+| Align decimal points | Current transaction block, or the selection when there is one. Default hotkey `Mod+Shift+.` (Obsidian has no default for that chord). |
 | Insert today's date | `YYYY-MM-DD` at the cursor. Default hotkey `Mod+Shift+D`. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
+| Run Fava | Starts Fava (`-H 127.0.0.1`) on the entry ledger or the active `.bean` file. |
 
 ## Features
 
