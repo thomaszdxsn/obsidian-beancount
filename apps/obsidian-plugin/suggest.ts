@@ -1,8 +1,8 @@
 /**
  * Shared behaviour for completion popovers over vault strings (accounts,
- * payees, …): prefix-match candidates from an index with `match`, and
- * picking one replaces the typed query in place. Subclasses only decide
- * when a line and cursor open a completable field (`onTrigger`).
+ * payees, …): rank candidates from an index with `match`, and picking one
+ * replaces the typed query in place. Subclasses only decide when a line
+ * and cursor open a completable field (`onTrigger`).
  */
 import { EditorSuggest } from 'obsidian';
 import type {
@@ -14,9 +14,10 @@ import type {
 	TFile,
 } from 'obsidian';
 
-/** Anything `IndexSuggest` can prefix-match against. */
+/** Anything `IndexSuggest` can rank against. */
 export interface CompletionIndex {
 	match(query: string): string[];
+	remember?(value: string): void;
 }
 
 export abstract class IndexSuggest extends EditorSuggest<string> {
@@ -41,6 +42,7 @@ export abstract class IndexSuggest extends EditorSuggest<string> {
 		const context = this.context;
 		if (!context) return;
 		context.editor.replaceRange(value, context.start, context.end);
+		this.index.remember?.(value);
 		// The suggestion chooser does not dismiss the popover itself; left
 		// open it would re-trigger on the replacement and reuse the stale
 		// range on a second pick. `close()` nulls `context`, hence the copy.

@@ -76,6 +76,23 @@ async function loadPlugin(
 	return { plugin, vault };
 }
 
+/** Completes the in-flight `bean-check` when the test calls the returned function. */
+function holdBeanCheck(plugin: BeancountPlugin): (run: BeanCheckRun) => void {
+	let release: (run: BeanCheckRun) => void = () => undefined;
+	plugin.beanCheckRunner = async (command, args) => {
+		beanCheckRuns.push({ command, args: [...args] });
+		return await new Promise<BeanCheckRun>((resolve) => {
+			release = resolve;
+		});
+	};
+	return (run) => release(run);
+}
+
+async function unloadPlugin(plugin: BeancountPlugin & RecordingPlugin): Promise<void> {
+	await plugin.onunload();
+	for (const cleanup of plugin.registrations.cleanups) cleanup();
+}
+
 /** An open leaf whose view shows `file` in `editor`. */
 interface FakeLeaf {
 	view: { file: FakeFile | null; editor: FakeEditor | null };
@@ -128,6 +145,62 @@ describe('BeancountPlugin', () => {
 		expect(links.getSuggestions({ query: '^r' })).toEqual(['^receipt']);
 	});
 
+	it('ranks a stored frecency pick first after reload', async () => {
+		const vault = new FakeVault();
+		vault.write('ledger.bean', 'Assets:Broker Assets:Cash');
+		const { plugin } = await loadPlugin(vault);
+		await flush();
+		const accounts = plugin.registrations.editorSuggests[0] as {
+			getSuggestions(context: { query: string }): string[];
+			selectSuggestion(value: string, evt: MouseEvent): void;
+			context: {
+				start: { line: number; ch: number };
+				end: { line: number; ch: number };
+				query: string;
+				editor: unknown;
+				file: unknown;
+			} | null;
+		};
+		expect(accounts.getSuggestions({ query: 'Assets:' })).toEqual(['Assets:Broker', 'Assets:Cash']);
+		const editor = createEditor(['Assets:']);
+		accounts.context = {
+			start: { line: 0, ch: 0 },
+			end: { line: 0, ch: 7 },
+			query: 'Assets:',
+			editor,
+			file: {},
+		};
+		accounts.selectSuggestion('Assets:Cash', {} as MouseEvent);
+		expect(plugin.savedData.at(-1)).toMatchObject({
+			completionUsage: { 'Assets:Cash': { count: 1, lastUsed: expect.any(Number) } },
+		});
+
+		const reloaded = await loadPlugin(vault, plugin.savedData.at(-1));
+		await flush();
+		const again = reloaded.plugin.registrations.editorSuggests[0] as {
+			getSuggestions(context: { query: string }): string[];
+		};
+		expect(again.getSuggestions({ query: 'Assets:' })).toEqual(['Assets:Cash', 'Assets:Broker']);
+	});
+
+	it('starts with defaults when data.json cannot be read', async () => {
+		const plugin = new BeancountPlugin({ vault: new FakeVault().api, workspace: { getLeavesOfType: () => [], activeEditor: null } } as unknown as App, manifest);
+		plugin.loadData = async () => {
+			throw new Error('corrupt');
+		};
+		await plugin.onload();
+		expect(plugin.settings.alignOnSave).toBe(false);
+		expect(plugin.settings.instantAlignment).toBe(true);
+	});
+
+	it('ignores a corrupt completionUsage bag and still loads settings', async () => {
+		const { plugin } = await loadPlugin(new FakeVault(), {
+			alignOnSave: true,
+			completionUsage: 'not-an-object',
+		});
+		expect(plugin.settings.alignOnSave).toBe(true);
+		expect('completionUsage' in plugin.settings).toBe(false);
+	});
 	it('offers narration completion only with the setting on', async () => {
 		const vault = new FakeVault();
 		vault.write('ledger.bean', '2026-09-30 * "Shell" "Fuel"');
@@ -782,13 +855,134 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault, { alignOnSave: true });
 
 		await vault.emit('modify', file);
-		await plugin.onunload();
-		for (const cleanup of plugin.registrations.cleanups) cleanup();
+		await unloadPlugin(plugin);
 		await delay(600);
 
 		expect(vault.writes).toEqual([]);
 		// The validation the same save scheduled is dropped with it.
 		expect(beanCheckRuns).toEqual([]);
+	});
+
+	it('discards an in-flight error report after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({ stderr: '/vault/ledger.bean:1:       late result\n', missing: false });
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('discards an in-flight clean report after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({ stderr: '', missing: false });
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice a missing bean-check after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({ stderr: '', missing: true });
+		await flush();
+
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice a bean-check failure after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({
+			stderr: "Traceback (most recent call last):\nModuleNotFoundError: No module named 'beancount'\n",
+			missing: false,
+		});
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('does not notice an unmapped report after unload', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', 'include "gone.bean"\n');
+		const editor = createEditor(['include "gone.bean"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({
+			stderr: '<load>:0:       File "/vault/gone.bean" does not exist\n',
+			missing: false,
+		});
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('discards an in-flight fence report after unload', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const release = holdBeanCheck(plugin);
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(beanCheckRuns).toHaveLength(1);
+
+		await unloadPlugin(plugin);
+		release({
+			stderr: `${beanCheckRuns[0].args[0]}:1:       late fence\n`,
+			missing: false,
+		});
+		await flush();
+
+		expect(editor.cm.dispatched).toEqual([]);
+		expect(notices).toEqual([]);
 	});
 
 	it('persists the on-save toggle and honors it', async () => {

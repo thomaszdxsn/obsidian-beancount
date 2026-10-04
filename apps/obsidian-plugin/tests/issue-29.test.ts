@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import type { App, PluginManifest } from 'obsidian';
 import { afterEach, describe, expect, it } from 'vitest';
 import { notices } from './mocks/obsidian';
@@ -40,7 +41,17 @@ async function loadPlugin(
 	plugin.beanCheckRunner = async () => ({ stderr: '', missing: false });
 	plugin.favaRunner = async (command, args) => {
 		favaRuns.push({ command, args: [...args] });
-		return { missing: favaMissing };
+		if (favaMissing) return { missing: true };
+		const child = {
+			exitCode: null,
+			once() {
+				return child;
+			},
+			kill() {
+				return true;
+			},
+		};
+		return { missing: false, child: child as unknown as ChildProcess };
 	};
 	plugin.favaOpener = () => {};
 	plugin.loadData = async () => loadedData;
@@ -62,8 +73,24 @@ describe('mergeSettings', () => {
 		const settings = mergeSettings({ completePayee: false, flagWarnings: { '!': 'error' } });
 		expect(settings.completePayee).toBe(false);
 		expect(settings.flagWarnings['!']).toBe('error');
+		expect(settings.flagWarnings['*']).toBe(DEFAULT_FLAG_WARNINGS['*']);
 		expect(settings.separatorColumn).toBe(50);
 		expect(settings.favaPort).toBe(5000);
+	});
+
+	it('drops completionUsage so pick history is not a setting', () => {
+		const settings = mergeSettings({
+			alignOnSave: true,
+			completionUsage: { 'Assets:Cash': { count: 3, lastUsed: 1 } },
+		});
+		expect(settings.alignOnSave).toBe(true);
+		expect('completionUsage' in settings).toBe(false);
+	});
+
+	it('treats a non-object store as defaults', () => {
+		expect(mergeSettings(null).alignOnSave).toBe(false);
+		expect(mergeSettings([]).instantAlignment).toBe(true);
+		expect(mergeSettings('nope').separatorColumn).toBe(50);
 	});
 });
 

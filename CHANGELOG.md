@@ -10,6 +10,9 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   (CodeMirror stream mode from `beancount.tmLanguage`).
 - Account completion and hover from vault `open` / `close` directives
   (CJK account segments; closed accounts omitted from completion).
+- Completion ranking: prefix matches first, then subsequence fuzzy match;
+  pick count and recency (`completionUsage` in `data.json`) float frequent
+  accounts/payees to the top. A corrupt usage bag does not block startup.
 - Payee completion from historical transaction payees.
 - Directive snippets (vscode-beancount prefixes plus `txn`): type a prefix at
   column 0 to expand; `txn` → `YYYY-MM-DD * "" ""` with the caret in the payee
@@ -38,3 +41,8 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   is unmarked, so mixed incomplete/cleared ledgers get distinct underline
   styles. Settings tab groups Alignment / Validation / Completion / Fava /
   Flag warnings. **Start Fava** / **Stop Fava** (`favaPath`, `favaPort`, `runFavaOnActivate`).
+
+### Fixed
+
+- In-flight `bean-check` results are discarded when the plugin unloads, so a
+  late report cannot mark the editor or raise a Notice.

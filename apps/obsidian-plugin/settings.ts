@@ -61,14 +61,20 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 
 /** Fold stored `data.json` onto defaults, including the nested flag map. */
 export function mergeSettings(stored: unknown): BeancountSettings {
-	const data = stored && typeof stored === 'object' ? (stored as Partial<BeancountSettings>) : {};
+	if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+		return { ...DEFAULT_SETTINGS, flagWarnings: { ...DEFAULT_FLAG_WARNINGS } };
+	}
+	const data: Record<string, unknown> = { ...(stored as Record<string, unknown>) };
+	delete data.completionUsage;
 	const flagStored =
-		data.flagWarnings && typeof data.flagWarnings === 'object' ? data.flagWarnings : {};
+		data.flagWarnings && typeof data.flagWarnings === 'object' && !Array.isArray(data.flagWarnings)
+			? data.flagWarnings
+			: {};
 	return {
 		...DEFAULT_SETTINGS,
-		...data,
+		...(data as Partial<BeancountSettings>),
 		favaPort: normalizeFavaPort(data.favaPort ?? DEFAULT_SETTINGS.favaPort),
-		flagWarnings: { ...DEFAULT_FLAG_WARNINGS, ...flagStored },
+		flagWarnings: { ...DEFAULT_FLAG_WARNINGS, ...(flagStored as BeancountSettings['flagWarnings']) },
 	};
 }
 

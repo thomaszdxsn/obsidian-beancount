@@ -37,6 +37,7 @@ import { fenceLanguageExtension } from './fence-language';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { instantAlignmentExtension } from './instant-alignment';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { CompletionUsage } from './completion-rank';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 
 /**
@@ -215,6 +216,8 @@ export default class BeancountPlugin extends Plugin {
 	private readonly markOwners = new Map<string, string>();
 	/** Newest run per target; older runs finishing later must not report. */
 	private readonly validateSeq = new Map<string, number>();
+	/** False after cleanup; in-flight bean-check must not publish. */
+	private validateLive = true;
 	/** Notice texts shown this session: autosave must not stack them. */
 	private readonly noticesShown = new Set<string>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
@@ -227,11 +230,24 @@ export default class BeancountPlugin extends Plugin {
 	favaOpener: FavaOpener = openFavaUrl;
 	/** Live Fava child, killed when the plugin unloads. */
 	private favaChild: ChildProcess | null = null;
+	/** Port the live child was started with; reuse must open this URL. */
+	private favaBoundPort: number | null = null;
 	/** In-flight start so a second command cannot spawn another process. */
 	private favaStart: Promise<boolean> | null = null;
+	/** Completion pick counts persisted beside settings in data.json. */
+	private usage: CompletionUsage = CompletionUsage.parse(null);
 
 	async onload() {
-		this.settings = mergeSettings(await this.loadData());
+		let stored: unknown = null;
+		try {
+			stored = await this.loadData();
+		} catch {
+			stored = null;
+		}
+		this.settings = mergeSettings(stored);
+		this.usage = CompletionUsage.parse(stored, Date.now, () => {
+			void this.writePluginData();
+		});
 		// Ledger files open as notes: without this Obsidian shows them as
 		// unsupported, and nothing of the plugin (completion, alignment,
 		// validation) has an editor to work in. Registration is read at app
@@ -241,8 +257,8 @@ export default class BeancountPlugin extends Plugin {
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
 		// One vault scan feeds every completion index.
-		const accounts = new AccountIndex();
-		const payees = new VaultIndex(extractPayees);
+		const accounts = new AccountIndex(this.usage);
+		const payees = new VaultIndex(extractPayees, this.usage);
 		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
 		// prose amounts (`- 10 GB`) collide with ledger token shapes, so on
 		// notes these extractors see only the beancount fence bodies; ledger
@@ -253,10 +269,10 @@ export default class BeancountPlugin extends Plugin {
 						.map((fence) => fence.lines.join('\n'))
 						.join('\n')
 				: content;
-		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)));
-		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)));
-		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)));
-		const narrations = new VaultIndex(extractNarrations);
+		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)), this.usage);
+		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)), this.usage);
+		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)), this.usage);
+		const narrations = new VaultIndex(extractNarrations, this.usage);
 		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
 		const payeeSuggest = new PayeeSuggest(this.app, payees, () => this.settings.completePayee);
@@ -342,13 +358,17 @@ export default class BeancountPlugin extends Plugin {
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
 		this.register(() => {
+			this.validateLive = false;
+			this.validateSeq.clear();
 			for (const timer of this.alignTimers.values()) clearTimeout(timer);
 			this.alignTimers.clear();
 			for (const timer of this.validateTimers.values()) clearTimeout(timer);
+			this.validateTimers.clear();
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
 			this.favaChild?.kill();
 			this.favaChild = null;
+			this.favaBoundPort = null;
 		});
 		if (this.settings.runFavaOnActivate) {
 			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
@@ -356,11 +376,19 @@ export default class BeancountPlugin extends Plugin {
 	}
 
 	onunload() {}
-
 	async saveSettings(): Promise<void> {
-		await this.saveData(this.settings);
+		await this.writePluginData();
 		this.balanceInlays.refresh();
 		this.flagWarnings.refresh();
+	}
+
+	private async writePluginData(): Promise<void> {
+		const usage = this.usage.toJSON();
+		if (Object.keys(usage).length === 0) {
+			await this.saveData({ ...this.settings });
+			return;
+		}
+		await this.saveData({ ...this.settings, completionUsage: usage });
 	}
 
 	private isFavaRunning(): boolean {
@@ -369,7 +397,7 @@ export default class BeancountPlugin extends Plugin {
 
 	private revealFava(announce: boolean): void {
 		if (!announce) return;
-		const url = favaUrl(normalizeFavaPort(this.settings.favaPort));
+		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
 		this.favaOpener(url);
 		new Notice(`Fava is running at ${url}`);
 	}
@@ -377,11 +405,13 @@ export default class BeancountPlugin extends Plugin {
 	private stopFava(): void {
 		if (!this.isFavaRunning()) {
 			this.favaChild = null;
+			this.favaBoundPort = null;
 			new Notice('Fava is not running.');
 			return;
 		}
 		this.favaChild?.kill();
 		this.favaChild = null;
+		this.favaBoundPort = null;
 		new Notice('Fava stopped.');
 	}
 
@@ -398,7 +428,7 @@ export default class BeancountPlugin extends Plugin {
 		this.favaStart = this.startFavaProcess();
 		try {
 			const started = await this.favaStart;
-			if (started) this.revealFava(announce);
+			if (started && this.isFavaRunning()) this.revealFava(announce);
 		} finally {
 			this.favaStart = null;
 		}
@@ -430,12 +460,15 @@ export default class BeancountPlugin extends Plugin {
 			return false;
 		}
 		const child = result.child ?? null;
+		if (!child) return false;
 		this.favaChild = child;
-		if (child) {
-			child.once('exit', () => {
-				if (this.favaChild === child) this.favaChild = null;
-			});
-		}
+		this.favaBoundPort = port;
+		child.once('exit', () => {
+			if (this.favaChild === child) {
+				this.favaChild = null;
+				this.favaBoundPort = null;
+			}
+		});
 		return true;
 	}
 
@@ -483,6 +516,7 @@ export default class BeancountPlugin extends Plugin {
 	 * temp ledger of its fences, with lines mapped back onto the note.
 	 */
 	private async validateFile(file: TFile): Promise<void> {
+		if (!this.validateLive) return;
 		const markdown = file.extension === 'md';
 		// An entry ledger turns a ledger-file save into a check of its whole
 		// include chain. A markdown save always owns its own run: the fences
@@ -491,14 +525,15 @@ export default class BeancountPlugin extends Plugin {
 		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
 		// Only the newest run for a target may report: bean-check speed varies
 		// with its cache, and an older run finishing last must not overwrite
-		// the newer report.
+		// the newer report. Unload shares this gate: cleanup flips
+		// `validateLive` so a started runner cannot publish after teardown.
 		const seq = (this.validateSeq.get(target) ?? 0) + 1;
 		this.validateSeq.set(target, seq);
 
 		let fences: BeancountFence[] | undefined;
 		if (markdown) {
 			const text = await this.app.vault.read(file);
-			if (this.validateSeq.get(target) !== seq) return;
+			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 			fences = extractBeancountFences(text);
 			if (fences.length === 0) {
 				this.markErrors(target, [], root);
@@ -560,7 +595,7 @@ export default class BeancountPlugin extends Plugin {
 			}
 
 			const run = await this.beanCheckRunner(command, [checkPath]);
-			if (this.validateSeq.get(target) !== seq) return;
+			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 			if (run.missing) {
 				this.notify(MISSING_BEAN_CHECK_NOTICE);
 				return;
@@ -597,6 +632,7 @@ export default class BeancountPlugin extends Plugin {
 	 * before. A file another target marked is left for that target's next run.
 	 */
 	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): void {
+		if (!this.validateLive) return;
 		const vaultFiles = this.app.vault.getFiles();
 		const errorsByPath = new Map<string, BeanCheckError[]>();
 		const unmapped: BeanCheckError[] = [];
@@ -642,6 +678,7 @@ export default class BeancountPlugin extends Plugin {
 	 * problem re-arms every few seconds and must not stack toasts.
 	 */
 	private notify(text: string): void {
+		if (!this.validateLive) return;
 		if (this.noticesShown.has(text)) return;
 		this.noticesShown.add(text);
 		new Notice(text);

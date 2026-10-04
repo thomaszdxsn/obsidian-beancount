@@ -211,6 +211,21 @@ describe('Start Fava / Stop Fava', () => {
 		]);
 	});
 
+	it('reopens the bound port after the setting changes', async () => {
+		const vault = new FakeVault();
+		vault.write('main.bean', '');
+		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean', favaPort: 5000 });
+		const start = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
+		await start?.callback?.();
+		plugin.settings.favaPort = 8080;
+		opened.length = 0;
+		notices.length = 0;
+		await start?.callback?.();
+		expect(favaRuns).toHaveLength(1);
+		expect(opened).toEqual(['http://127.0.0.1:5000/']);
+		expect(notices).toEqual(['Fava is running at http://127.0.0.1:5000/']);
+	});
+
 	it('does not spawn twice when two starts overlap', async () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', '');

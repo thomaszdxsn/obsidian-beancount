@@ -12,17 +12,18 @@
  * longer than `MAX_VALUE_LENGTH` is junk (a whole line captured as a "name",
  * not a real one) and is not cached, and `match` returns at most
  * `MAX_SUGGESTIONS` — the popup window Obsidian renders (its `limit` is 50).
+ * Matches are prefix-first, then subsequence, then frecency.
  * Per-file count and read-size budgets are deliberately not imposed: the
  * union is bounded by the user's own vault, which the host already read.
  */
 import type { Plugin, TAbstractFile, TFile } from 'obsidian';
+import { rankCompletions } from './completion-rank';
+import type { CompletionUsage } from './completion-rank';
+
+export { MAX_SUGGESTIONS } from './completion-rank';
 
 /** Longest cached string; longer ones are noise, not names. */
 const MAX_VALUE_LENGTH = 256;
-
-/** Most strings `match` returns — the suggestion popup window. */
-export const MAX_SUGGESTIONS = 50;
-
 /** File extensions whose text is read: scanned for names, rewritten on align. */
 export const TEXT_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
 
@@ -77,7 +78,10 @@ export class VaultIndex implements VaultCache {
 	 * in markdown prose (tags, links, commodities) are extracted from
 	 * beancount fence bodies only, which the caller decides by extension.
 	 */
-	constructor(private readonly extract: (content: string, path: string) => ReadonlySet<string>) {}
+	constructor(
+		private readonly extract: (content: string, path: string) => ReadonlySet<string>,
+		private readonly usage?: CompletionUsage
+	) {}
 
 	setFileContent(path: string, content: string): void {
 		const extracted = this.extract(content, path);
@@ -128,16 +132,13 @@ export class VaultIndex implements VaultCache {
 		return this.sorted;
 	}
 
-	/** Case-insensitive prefix match, bounded to the popup window. */
+	/** Prefix, then subsequence; frecency-ranked; bounded to the popup window. */
 	match(query: string): string[] {
-		const needle = query.toLowerCase();
-		const matches: string[] = [];
-		for (const value of this.values()) {
-			if (!value.toLowerCase().startsWith(needle)) continue;
-			matches.push(value);
-			if (matches.length >= MAX_SUGGESTIONS) break;
-		}
-		return matches;
+		return rankCompletions(this.values(), query, this.usage);
+	}
+
+	remember(value: string): void {
+		this.usage?.remember(value);
 	}
 }
 
