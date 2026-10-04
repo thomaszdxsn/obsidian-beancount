@@ -146,7 +146,10 @@ A missing or rejected `bean-check` shows:
   optional entry ledger. A `.bean` save checks that entry's whole `include`
   chain; a markdown save includes the entry first so the fence is checked
   against its opens and accounts. Without an entry ledger each saved file
-  (or note's fences) is validated on its own.
+  (or note's fences) is validated on its own. Unloading the plugin cancels
+  pending timers and drops in-flight `bean-check` results: they do not mark
+  the editor or raise a Notice. The process is not killed; only the report
+  is discarded.
 - **Outline**: the "Show outline" command opens a sidebar of the active
   ledger. Org-mode `*` section titles nest the same way vscode-beancount's
   DocumentSymbolProvider does (including `_` fillers for skipped levels).

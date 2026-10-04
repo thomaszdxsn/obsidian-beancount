@@ -38,3 +38,8 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   is unmarked, so mixed incomplete/cleared ledgers get distinct underline
   styles. Settings tab groups Alignment / Validation / Completion / Fava /
   Flag warnings. **Run Fava** command (`favaPath`, `runFavaOnActivate`).
+
+### Fixed
+
+- In-flight `bean-check` results are discarded when the plugin unloads, so a
+  late report cannot mark the editor or raise a Notice.
