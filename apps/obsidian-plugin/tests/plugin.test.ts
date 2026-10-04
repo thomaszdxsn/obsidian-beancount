@@ -799,8 +799,7 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault, { alignOnSave: true });
 
 		await vault.emit('modify', file);
-		await plugin.onunload();
-		for (const cleanup of plugin.registrations.cleanups) cleanup();
+		await unloadPlugin(plugin);
 		await delay(600);
 
 		expect(vault.writes).toEqual([]);
