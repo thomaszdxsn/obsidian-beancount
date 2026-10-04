@@ -131,17 +131,24 @@ describe('rankCompletions', () => {
 		const usage = CompletionUsage.parse(
 			{
 				completionUsage: {
-					'Assets:A': { count: 1, lastUsed: now },
-					'Assets:B': { count: 1, lastUsed: now - 5 * HOUR },
-					'Assets:C': { count: 1, lastUsed: now - 2 * 24 * HOUR },
-					'Assets:D': { count: 1, lastUsed: now - 4 * 24 * HOUR },
-					'Assets:E': { count: 1, lastUsed: now - 10 * 24 * HOUR },
-					'Assets:F': { count: 1, lastUsed: 0 },
+					'Assets:A': { count: 1, lastUsed: 0 },
+					'Assets:B': { count: 1, lastUsed: now - 10 * 24 * HOUR },
+					'Assets:C': { count: 1, lastUsed: now - 4 * 24 * HOUR },
+					'Assets:D': { count: 1, lastUsed: now - 2 * 24 * HOUR },
+					'Assets:E': { count: 1, lastUsed: now - 5 * HOUR },
+					'Assets:F': { count: 1, lastUsed: now },
 				},
 			},
 			() => now
 		);
-		expect(rankCompletions(names, 'Assets:', usage)).toEqual(names);
+		expect(rankCompletions(names, 'Assets:', usage)).toEqual([
+			'Assets:F',
+			'Assets:E',
+			'Assets:D',
+			'Assets:C',
+			'Assets:B',
+			'Assets:A',
+		]);
 	});
 	it('lets a hot name surface inside the popup cap', () => {
 		const accounts = Array.from({ length: 60 }, (_, i) => `Assets:A${String(i).padStart(2, '0')}`);
