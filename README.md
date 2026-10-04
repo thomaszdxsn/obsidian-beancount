@@ -49,6 +49,12 @@ Configured in **Settings → Beancount**. Keys match `data.json`.
 | Separator column | `separatorColumn` | `50` | 1-based display column of the decimal point for instant alignment (wide accounts still push past it). |
 | Bean-check executable | `beanCheckPath` | empty | Path to `bean-check`; empty runs `bean-check` from `PATH`. |
 | Entry ledger | `entryLedger` | empty | Vault path of the ledger entry file (e.g. `main.bean`). |
+| Complete payees | `completePayee` | on | Suggest historical payees in the first quoted field. |
+| Complete narrations | `completeNarration` | off | Suggest vault narrations in the second quoted field. |
+| Fava executable | `favaPath` | empty | Path to `fava`; empty runs `fava` from `PATH`. Only a program named `fava` is accepted. |
+| Run Fava on activate | `runFavaOnActivate` | off | Start Fava against the entry ledger (or the active ledger file) when the plugin loads. |
+| Incomplete transactions (!) | `flagWarnings["!"]` | warning | Marker style for `!` transactions (`none` / `warning` / `error`). |
+| Cleared transactions (*) | `flagWarnings["*"]` | none | Marker style for `*` / `txn` transactions. |
 
 **`entryLedger` behaviour**
 
@@ -69,15 +75,21 @@ A missing or rejected `bean-check` shows:
 
 | Command | Notes |
 | --- | --- |
-| Align decimal points | Current transaction block, or the selection when there is one. |
+| Align decimal points | Current transaction block, or the selection when there is one. Default hotkey `Mod+Shift+.` (Obsidian has no default for that chord). |
 | Insert today's date | `YYYY-MM-DD` at the cursor. Default hotkey `Mod+Shift+D`. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
+| Run Fava | Starts Fava (`-H 127.0.0.1`) on the entry ledger or the active `.bean` file. |
 
 ## Features
 
 - **Beancount syntax highlighting**: `beancount`/`bean` fenced code blocks get
   highlighting through a CodeMirror stream mode ported from
-  `beancount.tmLanguage`.
+  `beancount.tmLanguage`. Inside those fences, Cmd+/ toggles `; ` line
+  comments (Obsidian's own command would wrap `%%` and break the ledger),
+  `{` `[` `(` and `'` auto-close (`"` does not — narration uses it), and
+  `;#region` / `;#endregion` fold. Matching-bracket highlight is not
+  available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
+  has no inner bracket nodes.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault. Names are
   extracted per file with a regex, cached, and invalidated when files are

@@ -72,6 +72,7 @@ describe('esbuild production bundle', () => {
 				id: 'beancount-obsidian',
 			} as PluginManifest);
 			await instance.onload();
+
 			await instance.onunload();
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });

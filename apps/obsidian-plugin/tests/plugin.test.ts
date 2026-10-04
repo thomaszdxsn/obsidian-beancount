@@ -8,11 +8,11 @@ import { parseBeanCheckErrors, toLineDiagnostics } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import { notices } from './mocks/obsidian';
-import type { MockHoverTooltip, MockKeymapExtension, MockView } from './mocks/codemirror';
+import type { MockHoverTooltip, MockKeymapExtension, MockLanguageDataExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
-import { beancountMode } from '../beancount-mode';
+import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
 
@@ -102,21 +102,55 @@ describe('BeancountPlugin', () => {
 		expect(plugin.manifest.id).toBe('beancount-obsidian');
 	});
 
-	it('wires account and payee completion to the vault on load', async () => {
+
+
+	it('wires every completion index to the vault on load', async () => {
 		const vault = new FakeVault();
 		vault.write(
 			'ledger.bean',
-			['2026-09-30 * "Whole Foods" "Groceries"', '  Expenses:Food  10.00 USD'].join('\n')
+			[
+				'2026-09-30 * "Whole Foods" "Groceries" #trip ^receipt',
+				'  Expenses:Food  10.00 USD',
+				'2026-09-30 price USD 1.10 CAD',
+			].join('\n')
 		);
 
 		const { plugin } = await loadPlugin(vault);
 		await flush();
 
-		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
+		const [accounts, payees, commodities, tags, links] = plugin.registrations.editorSuggests as Array<{
 			getSuggestions(context: { query: string }): string[];
 		}>;
 		expect(accounts.getSuggestions({ query: 'Expenses' })).toEqual(['Expenses:Food']);
 		expect(payees.getSuggestions({ query: 'Whole' })).toEqual(['Whole Foods']);
+		expect(commodities.getSuggestions({ query: 'US' })).toEqual(['USD']);
+		expect(tags.getSuggestions({ query: '#tr' })).toEqual(['#trip']);
+		expect(links.getSuggestions({ query: '^r' })).toEqual(['^receipt']);
+	});
+
+	it('offers narration completion only with the setting on', async () => {
+		const vault = new FakeVault();
+		vault.write('ledger.bean', '2026-09-30 * "Shell" "Fuel"');
+		const { plugin } = await loadPlugin(vault);
+		await flush();
+
+		const narrations = plugin.registrations.editorSuggests[5] as {
+			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+		};
+		const line = createEditor(['2026-09-30 * "Shell" "Fu']);
+		const cursor = { line: 0, ch: line.lines[0].length };
+		// Default settings leave the field alone…
+		expect(narrations.onTrigger(cursor, line, null)).toBeNull();
+		// …the toggle turns it on…
+		plugin.settings.completeNarration = true;
+		expect(narrations.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
+		// …and a stored true loads enabled.
+		const loaded = await loadPlugin(vault, { completeNarration: true });
+		await flush();
+		const enabled = loaded.plugin.registrations.editorSuggests[5] as {
+			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+		};
+		expect(enabled.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
 	});
 
 	it('leaves the payee field to the payee suggest', async () => {
@@ -145,7 +179,12 @@ describe('BeancountPlugin', () => {
 
 	it('offers directive snippets from a prefix at column 0', async () => {
 		const { plugin } = await loadPlugin();
-		const snippets = plugin.registrations.editorSuggests[2] as {
+		const snippets = plugin.registrations.editorSuggests.find((suggest) => {
+			const items = (
+				suggest as { getSuggestions(context: { query: string }): Array<{ prefix?: string }> }
+			).getSuggestions({ query: 'txn' });
+			return items[0]?.prefix === 'txn';
+		}) as {
 			onTrigger: (
 				cursor: { line: number; ch: number },
 				editor: unknown,
@@ -221,6 +260,20 @@ describe('BeancountPlugin', () => {
 		expect(() => plugin.registrations.cleanups[0]()).not.toThrow();
 	});
 
+	it('overlays beancount commentTokens inside markdown fence bodies', async () => {
+		const { plugin } = await loadPlugin();
+		const extension = plugin.registrations.editorExtensions[4] as Array<
+			MockKeymapExtension | MockLanguageDataExtension
+		>;
+		const keymapExt = extension.find((item): item is MockKeymapExtension => 'bindings' in item);
+		const lang = extension.find((item): item is MockLanguageDataExtension => 'languageData' in item);
+		expect(keymapExt?.bindings.map((binding) => binding.key)).toEqual(['Mod-/']);
+		const text = ['```beancount', '  Assets:Cash', '```', 'prose'].join('\n');
+		const state = { doc: { toString: () => text } };
+		expect(lang?.languageData(state, text.indexOf('Assets'))).toEqual([BEANCOUNT_LANGUAGE_DATA]);
+		expect(lang?.languageData(state, text.indexOf('prose'))).toEqual([]);
+	});
+
 	it('shows a hover card on known accounts and stays quiet on unknown ones', async () => {
 		const vault = new FakeVault();
 		vault.write(
@@ -247,15 +300,16 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin();
 		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
 		const run = extension.bindings[0].run as unknown as (view: MockView) => boolean;
-		const suggest = plugin.registrations.editorSuggests[0] as { context: unknown };
+		const suggests = plugin.registrations.editorSuggests as Array<{ context: unknown }>;
+		for (const suggest of suggests) {
+			// A popup is open: Enter accepts the suggestion, never indents.
+			suggest.context = {};
+			const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+			expect(run(open)).toBe(false);
+			expect(open.dispatched).toEqual([]);
 
-		// A popup is open: Enter accepts the suggestion, never indents.
-		suggest.context = {};
-		const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
-		expect(run(open)).toBe(false);
-		expect(open.dispatched).toEqual([]);
-
-		suggest.context = null;
+			suggest.context = null;
+		}
 		const closed = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
 		expect(run(closed)).toBe(true);
 		expect(closed.dispatched).toHaveLength(1);
@@ -745,19 +799,54 @@ describe('BeancountPlugin', () => {
 		tab.display();
 		const { settings } = tab.containerEl as unknown as FakeSettingContainer;
 
-		await settings[0].toggle?.onChangeHandler?.(true);
+		expect(settings.map((setting) => setting.name)).toEqual([
+			'Alignment',
+			'Align amounts on save',
+			'Instant alignment',
+			'Separator column',
+			'Validation',
+			'Bean-check executable',
+			'Entry ledger',
+			'Balance inlay hints',
+			'Completion',
+			'Complete payees',
+			'Complete narrations',
+			'Fava',
+			'Fava executable',
+			'Run Fava on activate',
+			'Flag warnings',
+			'Incomplete transactions (!)',
+			'Cleared transactions (*)',
+		]);
+		const named = Object.fromEntries(settings.map((setting) => [setting.name, setting]));
+		expect(named['Align amounts on save']?.toggle?.value).toBe(false);
+		expect(named['Instant alignment']?.toggle?.value).toBe(true);
+		expect(named['Complete narrations']?.toggle?.value).toBe(false);
+		expect(named['Complete payees']?.toggle?.value).toBe(true);
+		expect(named['Incomplete transactions (!)']?.dropdown?.value).toBe('warning');
+		expect(named['Cleared transactions (*)']?.dropdown?.value).toBe('none');
+		await named['Align amounts on save']?.toggle?.onChangeHandler?.(true);
 		expect(plugin.savedData).toEqual([expect.objectContaining({ alignOnSave: true })]);
+		await named['Complete narrations']?.toggle?.onChangeHandler?.(true);
+		expect(plugin.settings.completeNarration).toBe(true);
+		expect(plugin.savedData?.at(-1)).toMatchObject({ completeNarration: true });
 
-		await settings[3].text?.onChangeHandler?.('/usr/local/bin/bean-check');
-		await settings[4].text?.onChangeHandler?.('ledger/main.bean');
+		await named['Bean-check executable']?.text?.onChangeHandler?.('/usr/local/bin/bean-check');
+		await named['Entry ledger']?.text?.onChangeHandler?.('ledger/main.bean');
 		expect(plugin.settings.beanCheckPath).toBe('/usr/local/bin/bean-check');
 		expect(plugin.settings.entryLedger).toBe('ledger/main.bean');
-		await settings[1].toggle?.onChangeHandler?.(false);
+		await named['Instant alignment']?.toggle?.onChangeHandler?.(false);
 		expect(plugin.settings.instantAlignment).toBe(false);
-		await settings[2].text?.onChangeHandler?.('40');
+		await named['Separator column']?.text?.onChangeHandler?.('40');
 		expect(plugin.settings.separatorColumn).toBe(40);
-		await settings[2].text?.onChangeHandler?.('nope');
+		await named['Separator column']?.text?.onChangeHandler?.('nope');
 		expect(plugin.settings.separatorColumn).toBe(40);
+		await named['Complete payees']?.toggle?.onChangeHandler?.(false);
+		expect(plugin.settings.completePayee).toBe(false);
+		await named['Incomplete transactions (!)']?.dropdown?.onChangeHandler?.('error');
+		expect(plugin.settings.flagWarnings['!']).toBe('error');
+		await named['Fava executable']?.text?.onChangeHandler?.('/opt/homebrew/bin/fava');
+		expect(plugin.settings.favaPath).toBe('/opt/homebrew/bin/fava');
 
 		await vault.emit('modify', file);
 		await delay(600);

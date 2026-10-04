@@ -15,7 +15,12 @@ pip install beancount
 
 - **Beancount syntax highlighting**: `beancount`/`bean` fenced code blocks get
   highlighting through a CodeMirror stream mode ported from
-  `beancount.tmLanguage`.
+  `beancount.tmLanguage`. Inside those fences, Cmd+/ toggles `; ` line
+  comments (Obsidian's own command would wrap `%%` and break the ledger),
+  `{` `[` `(` and `'` auto-close (`"` does not — narration uses it), and
+  `;#region` / `;#endregion` fold. Matching-bracket highlight is not
+  available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
+  has no inner bracket nodes.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault. Names are
   extracted per file with a regex, cached, and invalidated when files are
@@ -55,12 +60,25 @@ pip install beancount
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
-  indexes.
+  indexes. Turn it off with **Complete payees**.
 - **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
   `balance`, …) in a `.bean` / `.beancount` file or a `beancount`/`bean` fence
   offers the vscode-beancount templates. `txn` expands to `YYYY-MM-DD * "" ""`
   with the caret in the payee quotes, so payee completion still runs. Tab walks
   `$1`-style stops; today's date fills `$CURRENT_*`.
+- **Commodity completion**: typing a partial commodity where one carries an
+  amount — a posting's unit after the number, a cost or price annotation, a
+  `balance` amount, or after the `price` / `commodity` keyword of its
+  directive — suggests every commodity found in those positions across the
+  vault.
+- **Tag and link completion**: typing `#` or `^` inside ledger text — a
+  `.bean`/`.beancount` file, or a ```beancount / ```bean fence in a markdown
+  note — suggests every tag or link found in the vault; picking one replaces
+  the typed sigil and partial name in one step.
+- **Narration completion** (off by default): with "Complete narrations"
+  enabled, typing the second quoted field of a transaction line
+  (`2026-09-30 * "Payee" "na…`) suggests narrations found in the vault, and
+  picking one closes the field.
 - **Posting auto-indent**: pressing Enter inside a beancount entry opens the
   next line already indented two spaces — the first posting under a
   transaction header, or the next posting/metadata line while the entry
@@ -120,6 +138,12 @@ as the language. Saving a note extracts those bodies for `bean-check`.
 | Separator column | `separatorColumn` | `50` |
 | Bean-check executable | `beanCheckPath` | `""` (PATH) |
 | Entry ledger | `entryLedger` | `""` (check the saved file / fences alone) |
+| Complete payees | `completePayee` | `true` |
+| Complete narrations | `completeNarration` | `false` |
+| Fava executable | `favaPath` | `""` (PATH) |
+| Run Fava on activate | `runFavaOnActivate` | `false` |
+| Incomplete transactions (!) | `flagWarnings["!"]` | `"warning"` |
+| Cleared transactions (*) | `flagWarnings["*"]` | `null` (none) |
 
 `entryLedger` is a vault path such as `main.bean`. With it set, a `.bean`
 save checks that file's `include` chain; markdown fences are validated as if

@@ -359,6 +359,12 @@ function token(stream: StringStream, state: BeancountState): string | null {
 	return state.entry === 'none' ? null : 'error';
 }
 
+export const BEANCOUNT_LANGUAGE_DATA = {
+	commentTokens: { line: ';' },
+	closeBrackets: { brackets: ['(', '[', '{', "'"] },
+	wordChars: ':',
+};
+
 export const beancountMode = {
 	name: 'beancount',
 	startState: (): BeancountState => ({
@@ -375,7 +381,7 @@ export const beancountMode = {
 	}),
 	blankLine,
 	token,
-	languageData: { commentTokens: { line: ';' } },
+	languageData: BEANCOUNT_LANGUAGE_DATA,
 };
 
 /** The port as a CM6 `Language`, for consumers that parse whole documents. */

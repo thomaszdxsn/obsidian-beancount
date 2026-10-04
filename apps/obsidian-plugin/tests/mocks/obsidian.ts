@@ -24,6 +24,7 @@ export interface Registrations {
 	editorSuggests: unknown[];
 	editorExtensions: unknown[];
 	views: Array<{ type: string; creator: (leaf: unknown) => unknown }>;
+	extensions: Array<{ extensions: string[]; viewType: string }>;
 	cleanups: Array<() => void>;
 }
 
@@ -39,6 +40,7 @@ export class Plugin {
 		editorSuggests: [],
 		editorExtensions: [],
 		views: [],
+		extensions: [],
 		cleanups: [],
 	};
 
@@ -96,6 +98,10 @@ export class Plugin {
 
 	registerView(type: string, creator: (leaf: unknown) => unknown): void {
 		this.registrations.views.push({ type, creator });
+	}
+
+	registerExtensions(extensions: readonly string[], viewType: string): void {
+		this.registrations.extensions.push({ extensions: [...extensions], viewType });
 	}
 
 	async loadData(): Promise<unknown> {
@@ -178,12 +184,24 @@ export interface FakeText {
 	onChange(callback: (value: string) => unknown): FakeText;
 }
 
+/** The dropdown a `Setting.addDropdown` callback configures. */
+export interface FakeDropdown {
+	value: string;
+	options: Array<{ value: string; label: string }>;
+	onChangeHandler: ((value: string) => unknown) | null;
+	addOption(value: string, label: string): FakeDropdown;
+	setValue(value: string): FakeDropdown;
+	onChange(callback: (value: string) => unknown): FakeDropdown;
+}
+
 /** A recorded `Setting`; tests reach it through the tab's container. */
 export interface FakeSetting {
 	name: string;
 	desc: string;
+	heading: boolean;
 	toggle: FakeToggle | null;
 	text: FakeText | null;
+	dropdown: FakeDropdown | null;
 }
 
 /** The container a `PluginSettingTab` hands to each `Setting`. */
@@ -214,8 +232,10 @@ export class PluginSettingTab {
 export class Setting {
 	name = '';
 	desc = '';
+	heading = false;
 	toggle: FakeToggle | null = null;
 	text: FakeText | null = null;
+	dropdown: FakeDropdown | null = null;
 
 	constructor(container: FakeSettingContainer) {
 		container.settings.push(this);
@@ -228,6 +248,11 @@ export class Setting {
 
 	setDesc(desc: string): this {
 		this.desc = desc;
+		return this;
+	}
+
+	setHeading(): this {
+		this.heading = true;
 		return this;
 	}
 
@@ -269,6 +294,29 @@ export class Setting {
 		};
 		this.text = text;
 		configure(text);
+		return this;
+	}
+
+	addDropdown(configure: (dropdown: FakeDropdown) => unknown): this {
+		const dropdown: FakeDropdown = {
+			value: '',
+			options: [],
+			onChangeHandler: null,
+			addOption(value: string, label: string): FakeDropdown {
+				this.options.push({ value, label });
+				return this;
+			},
+			setValue(value: string): FakeDropdown {
+				this.value = value;
+				return this;
+			},
+			onChange(callback: (value: string) => unknown): FakeDropdown {
+				this.onChangeHandler = callback;
+				return this;
+			},
+		};
+		this.dropdown = dropdown;
+		configure(dropdown);
 		return this;
 	}
 }
