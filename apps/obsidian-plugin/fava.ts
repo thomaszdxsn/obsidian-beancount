@@ -25,6 +25,15 @@ export type FavaRunner = (
 	args: readonly string[]
 ) => Promise<{ missing: boolean; child?: ChildProcess }>;
 
+/** Opens the Fava UI; tests swap this so Node never needs `window`. */
+export type FavaOpener = (url: string) => void;
+
+export const openFavaUrl: FavaOpener = (url) => {
+	if (typeof window !== 'undefined' && typeof window.open === 'function') {
+		window.open(url);
+	}
+};
+
 export const runFavaProcess: FavaRunner = (command, args) =>
 	new Promise((resolve) => {
 		try {
@@ -43,4 +52,20 @@ export const runFavaProcess: FavaRunner = (command, args) =>
 
 /** Default Fava bind, matching vscode-beancount. */
 export const FAVA_HOST = '127.0.0.1';
-export const FAVA_URL = `http://${FAVA_HOST}:5000/`;
+export const DEFAULT_FAVA_PORT = 5000;
+
+/** Bind port Fava `-p` accepts: integer 1–65535, else the default. */
+export function normalizeFavaPort(value: unknown): number {
+	const n =
+		typeof value === 'number'
+			? value
+			: typeof value === 'string'
+				? Number.parseInt(value, 10)
+				: NaN;
+	if (!Number.isInteger(n) || n < 1 || n > 65535) return DEFAULT_FAVA_PORT;
+	return n;
+}
+
+export function favaUrl(port: number): string {
+	return `http://${FAVA_HOST}:${normalizeFavaPort(port)}/`;
+}

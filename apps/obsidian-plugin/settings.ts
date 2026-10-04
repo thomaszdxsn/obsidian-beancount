@@ -6,6 +6,7 @@
 import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { DEFAULT_FLAG_WARNINGS } from './flag-warnings';
 import type { FlagWarningLevel } from './flag-warnings';
+import { DEFAULT_FAVA_PORT, normalizeFavaPort } from './fava';
 
 export interface BeancountSettings {
 	/** Re-align posting amounts whenever a ledger file is saved. */
@@ -32,6 +33,8 @@ export interface BeancountSettings {
 	completeNarration: boolean;
 	/** Path to the Fava executable; empty takes `fava` from PATH. */
 	favaPath: string;
+	/** TCP port Fava binds (`-p`); default 5000. */
+	favaPort: number;
 	/** Start Fava against the entry ledger when the plugin loads. */
 	runFavaOnActivate: boolean;
 	/**
@@ -51,6 +54,7 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 	completePayee: true,
 	completeNarration: false,
 	favaPath: '',
+	favaPort: DEFAULT_FAVA_PORT,
 	runFavaOnActivate: false,
 	flagWarnings: { ...DEFAULT_FLAG_WARNINGS },
 };
@@ -69,6 +73,7 @@ export function mergeSettings(stored: unknown): BeancountSettings {
 	return {
 		...DEFAULT_SETTINGS,
 		...(data as Partial<BeancountSettings>),
+		favaPort: normalizeFavaPort(data.favaPort ?? DEFAULT_SETTINGS.favaPort),
 		flagWarnings: { ...DEFAULT_FLAG_WARNINGS, ...(flagStored as BeancountSettings['flagWarnings']) },
 	};
 }
@@ -211,6 +216,20 @@ export class BeancountSettingTab extends PluginSettingTab {
 					.setValue(this.host.settings.favaPath)
 					.onChange(async (value) => {
 						this.host.settings.favaPath = value;
+						await this.host.saveSettings();
+					})
+			);
+		new Setting(containerEl)
+			.setName('Fava port')
+			.setDesc('TCP port Fava binds on 127.0.0.1. Default 5000.')
+			.addText((text) =>
+				text
+					.setPlaceholder(String(DEFAULT_FAVA_PORT))
+					.setValue(String(this.host.settings.favaPort))
+					.onChange(async (value) => {
+						const port = Number.parseInt(value, 10);
+						if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+						this.host.settings.favaPort = port;
 						await this.host.saveSettings();
 					})
 			);

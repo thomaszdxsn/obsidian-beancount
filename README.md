@@ -52,6 +52,7 @@ Configured in **Settings → Beancount**. Keys match `data.json`.
 | Complete payees | `completePayee` | on | Suggest historical payees in the first quoted field. |
 | Complete narrations | `completeNarration` | off | Suggest vault narrations in the second quoted field. |
 | Fava executable | `favaPath` | empty | Path to `fava`; empty runs `fava` from `PATH`. Only a program named `fava` is accepted. |
+| Fava port | `favaPort` | `5000` | TCP port Fava binds on `127.0.0.1` (`-p`). |
 | Run Fava on activate | `runFavaOnActivate` | off | Start Fava against the entry ledger (or the active ledger file) when the plugin loads. |
 | Incomplete transactions (!) | `flagWarnings["!"]` | warning | Marker style for `!` transactions (`none` / `warning` / `error`). |
 | Cleared transactions (*) | `flagWarnings["*"]` | none | Marker style for `*` / `txn` transactions. |
@@ -78,7 +79,8 @@ A missing or rejected `bean-check` shows:
 | Align decimal points | Current transaction block, or the selection when there is one. Default hotkey `Mod+Shift+.` (Obsidian has no default for that chord). |
 | Insert today's date | `YYYY-MM-DD` at the cursor. Default hotkey `Mod+Shift+D`. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
-| Run Fava | Starts Fava (`-H 127.0.0.1`) on the entry ledger or the active `.bean` file. |
+| Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
+| Stop Fava | Kills the Fava process started by this plugin. |
 
 ## Features
 

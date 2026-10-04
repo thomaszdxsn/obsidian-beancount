@@ -35,8 +35,8 @@ import {
 import type { QuickFix, TextEdit } from './code-actions';
 import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
-import { FAVA_HOST, FAVA_URL, isFavaBinary, runFavaProcess } from './fava';
-import type { FavaRunner } from './fava';
+import { FAVA_HOST, favaUrl, isFavaBinary, normalizeFavaPort, openFavaUrl, runFavaProcess } from './fava';
+import type { FavaOpener, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
 import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
@@ -277,8 +277,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly flagWarnings = new FlagWarningController(this);
 	/** How Fava is started; tests swap in their own runner. */
 	favaRunner: FavaRunner = runFavaProcess;
+	/** Opens the Fava UI after start or reuse; tests swap this. */
+	favaOpener: FavaOpener = openFavaUrl;
 	/** Live Fava child, killed when the plugin unloads. */
 	private favaChild: ChildProcess | null = null;
+	/** Port the live child was started with; reuse must open this URL. */
+	private favaBoundPort: number | null = null;
+	/** In-flight start so a second command cannot spawn another process. */
+	private favaStart: Promise<boolean> | null = null;
 	/** Completion pick counts persisted beside settings in data.json. */
 	private usage: CompletionUsage = CompletionUsage.parse(null);
 
@@ -391,10 +397,15 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			callback: () => revealOutlineView(this.app),
 		});
 		this.addCommand({
-			id: 'run-fava',
-			name: 'Run Fava',
+			id: 'start-fava',
+			name: 'Start Fava',
+			callback: () => this.launchFava(true),
+		});
+		this.addCommand({
+			id: 'stop-fava',
+			name: 'Stop Fava',
 			callback: () => {
-				void this.launchFava(true);
+				this.stopFava();
 			},
 		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
@@ -410,6 +421,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			this.flagWarnings.destroy();
 			this.favaChild?.kill();
 			this.favaChild = null;
+			this.favaBoundPort = null;
 		});
 		if (this.settings.runFavaOnActivate) {
 			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
@@ -432,20 +444,59 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		await this.saveData({ ...this.settings, completionUsage: usage });
 	}
 
-	private async launchFava(announce: boolean): Promise<void> {
-		if (this.favaChild && this.favaChild.exitCode === null) {
-			if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
+	private isFavaRunning(): boolean {
+		return this.favaChild != null && this.favaChild.exitCode === null;
+	}
+
+	private revealFava(announce: boolean): void {
+		if (!announce) return;
+		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
+		this.favaOpener(url);
+		new Notice(`Fava is running at ${url}`);
+	}
+
+	private stopFava(): void {
+		if (!this.isFavaRunning()) {
+			this.favaChild = null;
+			this.favaBoundPort = null;
+			new Notice('Fava is not running.');
 			return;
 		}
+		this.favaChild?.kill();
+		this.favaChild = null;
+		this.favaBoundPort = null;
+		new Notice('Fava stopped.');
+	}
+
+	private async launchFava(announce: boolean): Promise<void> {
+		if (this.isFavaRunning()) {
+			this.revealFava(announce);
+			return;
+		}
+		if (this.favaStart) {
+			const started = await this.favaStart;
+			if (started && this.isFavaRunning()) this.revealFava(announce);
+			return;
+		}
+		this.favaStart = this.startFavaProcess();
+		try {
+			const started = await this.favaStart;
+			if (started && this.isFavaRunning()) this.revealFava(announce);
+		} finally {
+			this.favaStart = null;
+		}
+	}
+
+	private async startFavaProcess(): Promise<boolean> {
 		const command = this.settings.favaPath.trim() || 'fava';
 		if (!isFavaBinary(command)) {
 			new Notice(MISSING_FAVA_NOTICE);
-			return;
+			return false;
 		}
 		const requested = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
 		if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
 			new Notice('No valid bean file is available.');
-			return;
+			return false;
 		}
 		const adapter = this.app.vault.adapter as FileSystemAdapter;
 		const root = vaultRoot(adapter.getBasePath());
@@ -453,20 +504,25 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const rel = relative(root, confined);
 		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
 			new Notice('No valid bean file is available.');
-			return;
+			return false;
 		}
-		const result = await this.favaRunner(command, ['-H', FAVA_HOST, confined]);
+		const port = normalizeFavaPort(this.settings.favaPort);
+		const result = await this.favaRunner(command, ['-H', FAVA_HOST, '-p', String(port), confined]);
 		if (result.missing) {
 			new Notice(MISSING_FAVA_NOTICE);
-			return;
+			return false;
 		}
-		this.favaChild = result.child ?? null;
-		if (this.favaChild) {
-			this.favaChild.once('exit', () => {
+		const child = result.child ?? null;
+		if (!child) return false;
+		this.favaChild = child;
+		this.favaBoundPort = port;
+		child.once('exit', () => {
+			if (this.favaChild === child) {
 				this.favaChild = null;
-			});
-		}
-		if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
+				this.favaBoundPort = null;
+			}
+		});
+		return true;
 	}
 
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {

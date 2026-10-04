@@ -1031,6 +1031,7 @@ describe('BeancountPlugin', () => {
 			'Complete narrations',
 			'Fava',
 			'Fava executable',
+			'Fava port',
 			'Run Fava on activate',
 			'Flag warnings',
 			'Incomplete transactions (!)',
@@ -1065,6 +1066,10 @@ describe('BeancountPlugin', () => {
 		expect(plugin.settings.flagWarnings['!']).toBe('error');
 		await named['Fava executable']?.text?.onChangeHandler?.('/opt/homebrew/bin/fava');
 		expect(plugin.settings.favaPath).toBe('/opt/homebrew/bin/fava');
+		await named['Fava port']?.text?.onChangeHandler?.('8080');
+		expect(plugin.settings.favaPort).toBe(8080);
+		await named['Fava port']?.text?.onChangeHandler?.('nope');
+		expect(plugin.settings.favaPort).toBe(8080);
 
 		await vault.emit('modify', file);
 		await delay(600);
