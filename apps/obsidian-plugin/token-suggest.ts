@@ -152,6 +152,7 @@ export class NarrationSuggest extends IndexSuggest {
 		const after = context.editor.getLine(context.end.line).charAt(context.end.ch);
 		const insert = after === '"' ? value : `${value}" `;
 		context.editor.replaceRange(insert, context.start, context.end);
+		this.index.remember?.(value);
 		this.close();
 	}
 }

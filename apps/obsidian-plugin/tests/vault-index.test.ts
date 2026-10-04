@@ -101,8 +101,15 @@ describe('VaultIndex', () => {
 		const accounts = Array.from({ length: 60 }, (_, i) => `Assets:A${String(i).padStart(2, '0')}`);
 		index.setFileContent('a.md', accounts.join(' '));
 		expect(index.match('Assets:')).toEqual(accounts.slice(0, 50));
-		// A narrower query still returns everything under the window.
-		expect(index.match('Assets:A5')).toHaveLength(10);
+		// Prefix hits (A50–A59) rank ahead of subsequence hits (A05, A15, …).
+		expect(index.match('Assets:A5')).toEqual([
+			...accounts.slice(50, 60),
+			'Assets:A05',
+			'Assets:A15',
+			'Assets:A25',
+			'Assets:A35',
+			'Assets:A45',
+		]);
 	});
 
 	it('drops values longer than a name could be', () => {

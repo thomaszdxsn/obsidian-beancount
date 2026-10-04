@@ -145,6 +145,62 @@ describe('BeancountPlugin', () => {
 		expect(links.getSuggestions({ query: '^r' })).toEqual(['^receipt']);
 	});
 
+	it('ranks a stored frecency pick first after reload', async () => {
+		const vault = new FakeVault();
+		vault.write('ledger.bean', 'Assets:Broker Assets:Cash');
+		const { plugin } = await loadPlugin(vault);
+		await flush();
+		const accounts = plugin.registrations.editorSuggests[0] as {
+			getSuggestions(context: { query: string }): string[];
+			selectSuggestion(value: string, evt: MouseEvent): void;
+			context: {
+				start: { line: number; ch: number };
+				end: { line: number; ch: number };
+				query: string;
+				editor: unknown;
+				file: unknown;
+			} | null;
+		};
+		expect(accounts.getSuggestions({ query: 'Assets:' })).toEqual(['Assets:Broker', 'Assets:Cash']);
+		const editor = createEditor(['Assets:']);
+		accounts.context = {
+			start: { line: 0, ch: 0 },
+			end: { line: 0, ch: 7 },
+			query: 'Assets:',
+			editor,
+			file: {},
+		};
+		accounts.selectSuggestion('Assets:Cash', {} as MouseEvent);
+		expect(plugin.savedData.at(-1)).toMatchObject({
+			completionUsage: { 'Assets:Cash': { count: 1, lastUsed: expect.any(Number) } },
+		});
+
+		const reloaded = await loadPlugin(vault, plugin.savedData.at(-1));
+		await flush();
+		const again = reloaded.plugin.registrations.editorSuggests[0] as {
+			getSuggestions(context: { query: string }): string[];
+		};
+		expect(again.getSuggestions({ query: 'Assets:' })).toEqual(['Assets:Cash', 'Assets:Broker']);
+	});
+
+	it('starts with defaults when data.json cannot be read', async () => {
+		const plugin = new BeancountPlugin({ vault: new FakeVault().api, workspace: { getLeavesOfType: () => [], activeEditor: null } } as unknown as App, manifest);
+		plugin.loadData = async () => {
+			throw new Error('corrupt');
+		};
+		await plugin.onload();
+		expect(plugin.settings.alignOnSave).toBe(false);
+		expect(plugin.settings.instantAlignment).toBe(true);
+	});
+
+	it('ignores a corrupt completionUsage bag and still loads settings', async () => {
+		const { plugin } = await loadPlugin(new FakeVault(), {
+			alignOnSave: true,
+			completionUsage: 'not-an-object',
+		});
+		expect(plugin.settings.alignOnSave).toBe(true);
+		expect('completionUsage' in plugin.settings).toBe(false);
+	});
 	it('offers narration completion only with the setting on', async () => {
 		const vault = new FakeVault();
 		vault.write('ledger.bean', '2026-09-30 * "Shell" "Fuel"');
