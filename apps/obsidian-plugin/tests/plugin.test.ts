@@ -149,12 +149,14 @@ describe('BeancountPlugin', () => {
 			onTrigger: (
 				cursor: { line: number; ch: number },
 				editor: unknown,
-				file: null
+				file: { extension: string }
 			) => unknown;
 			getSuggestions(context: { query: string }): Array<{ prefix: string }>;
 		};
 		const editor = createEditor(['txn']);
-		expect(snippets.onTrigger({ line: 0, ch: 3 }, editor, null)).toMatchObject({ query: 'txn' });
+		expect(snippets.onTrigger({ line: 0, ch: 3 }, editor, { extension: 'bean' })).toMatchObject({
+			query: 'txn',
+		});
 		expect(snippets.getSuggestions({ query: 'txn' }).map((entry) => entry.prefix)).toEqual([
 			'txn',
 			'txn!',

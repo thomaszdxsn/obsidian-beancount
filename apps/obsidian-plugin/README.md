@@ -56,6 +56,11 @@ pip install beancount
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
   indexes.
+- **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
+  `balance`, …) in a `.bean` / `.beancount` file or a `beancount`/`bean` fence
+  offers the vscode-beancount templates. `txn` expands to `YYYY-MM-DD * "" ""`
+  with the caret in the payee quotes, so payee completion still runs. Tab walks
+  `$1`-style stops; today's date fills `$CURRENT_*`.
 - **Posting auto-indent**: pressing Enter inside a beancount entry opens the
   next line already indented two spaces — the first posting under a
   transaction header, or the next posting/metadata line while the entry

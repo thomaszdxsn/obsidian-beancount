@@ -227,9 +227,10 @@ export default class BeancountPlugin extends Plugin {
 		this.registerEditorSuggest(accountSuggest);
 		this.registerEditorSuggest(payeeSuggest);
 		this.registerEditorSuggest(snippetSuggest);
+		const popovers = [accountSuggest, payeeSuggest, snippetSuggest];
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
-		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest, snippetSuggest]));
+		this.registerEditorExtension(postingIndentExtension(popovers));
 		// Typing `.` in a posting amount aligns that transaction block and
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
@@ -240,7 +241,8 @@ export default class BeancountPlugin extends Plugin {
 		// Balance assertion deltas at the end of balance lines. Independent of
 		// the diagnostic markers; a setting change reapplies them without an edit.
 		this.registerEditorExtension(this.balanceInlays.extension);
-		this.registerEditorExtension(snippetTabExtension(snippetSession, [accountSuggest, payeeSuggest, snippetSuggest]));
+		// Tab walks snippet stops; yields while a completion popover is open.
+		this.registerEditorExtension(snippetTabExtension(snippetSession, popovers));
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',

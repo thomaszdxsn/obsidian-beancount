@@ -2,10 +2,11 @@
  * Snippet completion: an `EditorSuggest` over `SNIPPETS`.
  *
  * A prefix at column 0 that starts a snippet name (`txn`, `open`, …)
- * opens the popup; picking one replaces the prefix with the expanded
- * body, parks the caret on `$1`, and starts a Tab session so later
- * stops are reachable. While another of the plugin's popovers is open
- * (payee completion after `txn`), Tab stays with that popover.
+ * opens the popup in a ledger file or a `beancount`/`bean` fence; picking
+ * one replaces the prefix with the expanded body, parks the caret on `$1`,
+ * and starts a Tab session so later stops are reachable. While another of
+ * the plugin's popovers is open (payee completion after `txn`), Tab stays
+ * with that popover. The session is bound to the editor that expanded it.
  */
 import { EditorSelection, Prec } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
@@ -13,6 +14,7 @@ import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
+import { extractBeancountFences } from './fences';
 import { expandSnippet, matchSnippets, SNIPPETS } from './snippets';
 import type { Expansion, Snippet, TabStop } from './snippets';
 
@@ -26,30 +28,35 @@ export class SnippetSession {
 	private origin = 0;
 	private stops: TabStop[] = [];
 	private index = 0;
+	private owner: unknown = null;
 
 	/** True while a stop is still waiting for Tab. */
 	get active(): boolean {
 		return this.index < this.stops.length;
 	}
 
-	start(origin: number, expansion: Expansion): void {
+	start(origin: number, expansion: Expansion, owner: unknown = null): void {
 		this.origin = origin;
 		this.stops = expansion.stops.map((stop) => ({ ...stop }));
 		this.index = 0;
+		this.owner = owner;
 	}
 
 	clear(): void {
 		this.stops = [];
 		this.index = 0;
+		this.owner = null;
 	}
 
 	/**
 	 * Next stop after the one the cursor is finishing. Typing in the
 	 * current stop shifts later ranges by the extra (or missing) length.
-	 * A cursor that moved before the current stop ends the session.
+	 * A cursor that moved before the current stop ends the session. Tab in
+	 * a different editor is ignored and leaves this session intact.
 	 */
-	advance(cursorOffset: number): { from: number; to: number } | null {
+	advance(cursorOffset: number, owner: unknown = null): { from: number; to: number } | null {
 		if (this.index >= this.stops.length) return null;
+		if (this.owner != null && owner != null && owner !== this.owner) return null;
 		const current = this.stops[this.index];
 		const currentFrom = this.origin + current.from;
 		const currentTo = this.origin + current.to;
@@ -80,13 +87,14 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 		super(app);
 	}
 
-	onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
+	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
+		if (!inSnippetContext(editor, cursor.line, file)) return null;
 		const line = editor.getLine(cursor.line);
 		const after = line.charAt(cursor.ch);
 		if (after !== '' && after !== ' ' && after !== '\t') return null;
 		const query = line.slice(0, cursor.ch);
 		if (query.length === 0) return null;
-		// Directives live at column 0; indented text is a posting, not a prefix.
+		// Directives live at column 0 of the ledger (or fence) line.
 		if (query.includes(' ') || query.includes('\t')) return null;
 		if (!SNIPPETS.some((snippet) => snippet.prefix.startsWith(query))) return null;
 		return {
@@ -116,7 +124,9 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 			positionFrom(context.start, expansion.text, first.from),
 			positionFrom(context.start, expansion.text, first.to)
 		);
-		this.session.start(origin, expansion);
+		// Obsidian's Editor wraps the CodeMirror view as undeclared `cm`.
+		const host = context.editor as Editor & { cm?: unknown };
+		this.session.start(origin, expansion, host.cm ?? host);
 		this.close();
 	}
 }
@@ -130,8 +140,16 @@ export function snippetTabExtension(session: SnippetSession, suggests: readonly 
 		if (suggests.some((suggest) => suggest.context !== null)) return false;
 		if (!session.active) return false;
 		const cursor = view.state.selection.ranges[0].head;
-		const next = session.advance(cursor);
+		if (cursor > view.state.doc.toString().length) {
+			session.clear();
+			return false;
+		}
+		const next = session.advance(cursor, view);
 		if (next === null) return false;
+		if (next.from > view.state.doc.toString().length || next.to > view.state.doc.toString().length) {
+			session.clear();
+			return false;
+		}
 		view.dispatch({
 			selection: EditorSelection.create([
 				next.from === next.to ? EditorSelection.cursor(next.from) : EditorSelection.range(next.from, next.to),
@@ -140,6 +158,16 @@ export function snippetTabExtension(session: SnippetSession, suggests: readonly 
 		return true;
 	};
 	return Prec.high(keymap.of([{ key: 'Tab', run }]));
+}
+
+/** Ledger files, or the body of a `beancount`/`bean` fence in markdown. */
+function inSnippetContext(editor: Editor, line: number, file: TFile | null): boolean {
+	if (!file) return false;
+	if (file.extension === 'bean' || file.extension === 'beancount') return true;
+	if (file.extension !== 'md') return false;
+	return extractBeancountFences(editor.getValue()).some(
+		(fence) => line >= fence.startLine && line < fence.startLine + fence.lines.length
+	);
 }
 
 /** Flat-buffer offset of `pos`, counting the newline before each line. */

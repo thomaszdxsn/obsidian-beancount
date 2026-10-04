@@ -23,9 +23,11 @@ function setup() {
 	return { session, suggest: new SnippetSuggest({} as App, session) };
 }
 
-function trigger(suggest: SnippetSuggest, line: string, ch = line.length) {
+const LEDGER = { extension: 'bean' } as TFile;
+
+function trigger(suggest: SnippetSuggest, line: string, ch = line.length, file: TFile | null = LEDGER) {
 	const editor = createEditor([line]);
-	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, null);
+	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, file);
 }
 
 function txnSnippet() {
@@ -61,6 +63,22 @@ describe('SnippetSuggest.onTrigger', () => {
 	it('triggers when the caret sits before trailing whitespace', () => {
 		const { suggest } = setup();
 		expect(trigger(suggest, 'txn ', 3)).toMatchObject({ query: 'txn' });
+	});
+
+	it('stays quiet in markdown prose and outside fences', () => {
+		const { suggest } = setup();
+		expect(trigger(suggest, 'txn', 3, { extension: 'md' } as TFile)).toBeNull();
+		expect(trigger(suggest, 'txn', 3, null)).toBeNull();
+	});
+
+	it('triggers inside a beancount fence in markdown', () => {
+		const { suggest } = setup();
+		const editor = createEditor(['```beancount', 'txn', '```']);
+		const file = { extension: 'md' } as TFile;
+		expect(suggest.onTrigger({ line: 1, ch: 3 }, editor as unknown as Editor, file)).toMatchObject({
+			query: 'txn',
+		});
+		expect(suggest.onTrigger({ line: 0, ch: 3 }, editor as unknown as Editor, file)).toBeNull();
 	});
 });
 
@@ -272,5 +290,19 @@ describe('snippetTabExtension', () => {
 		const view = createView('head\nbody', [{ anchor: 4 }]);
 		expect(run(view as unknown as EditorView)).toBe(true);
 		expect(view.dispatched).toEqual([{ selection: { ranges: [{ anchor: 5, head: 9 }] } }]);
+	});
+
+	it('ignores Tab in a different editor and keeps the session', () => {
+		const session = new SnippetSession();
+		session.start(
+			0,
+			{ text: 'x y', stops: [{ index: 1, from: 0, to: 1 }, { index: 2, from: 2, to: 3 }] },
+			'ledger-editor'
+		);
+		const run = tabRun(session);
+		const view = createView('x y', [{ anchor: 1 }]);
+		expect(run(view as unknown as EditorView)).toBe(false);
+		expect(view.dispatched).toEqual([]);
+		expect(session.active).toBe(true);
 	});
 });
