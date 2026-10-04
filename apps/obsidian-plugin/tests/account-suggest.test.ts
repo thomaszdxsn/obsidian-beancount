@@ -3,6 +3,7 @@ import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile }
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
 import { AccountIndex } from '../account-index';
 import { AccountSuggest } from '../account-suggest';
+import { CompletionUsage } from '../completion-rank';
 import { registerVaultIndex } from '../vault-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
@@ -267,6 +268,33 @@ describe('AccountSuggest suggestions', () => {
 		expect(close).toHaveBeenCalledOnce();
 	});
 
+	it('remembers a pick so later prefix ties rank it first', () => {
+		const usage = CompletionUsage.parse({}, () => 1);
+		const index = new AccountIndex(usage);
+		index.setFileContent('a.bean', '2020-01-01 open Assets:Broker\n2020-01-01 open Assets:Cash');
+		const suggest = new AccountSuggest({} as App, index);
+		const editor = createEditor(['  Assets:']);
+		suggest.context = {
+			start: { line: 0, ch: 2 },
+			end: { line: 0, ch: 10 },
+			query: 'Assets:',
+			editor: editor as unknown as Editor,
+			file: {} as TFile,
+		} as EditorSuggestContext;
+		expect(index.match('Assets:')).toEqual(['Assets:Broker', 'Assets:Cash']);
+		suggest.selectSuggestion('Assets:Cash', {} as MouseEvent);
+		expect(index.match('Assets:')).toEqual(['Assets:Cash', 'Assets:Broker']);
+	});
+
+	it('does not remember a pick when no context is active', () => {
+		const usage = CompletionUsage.parse({}, () => 1);
+		const index = new AccountIndex(usage);
+		index.setFileContent('a.bean', '2020-01-01 open Assets:Broker\n2020-01-01 open Assets:Cash');
+		const suggest = new AccountSuggest({} as App, index);
+		suggest.context = null;
+		suggest.selectSuggestion('Assets:Cash', {} as MouseEvent);
+		expect(index.match('Assets:')).toEqual(['Assets:Broker', 'Assets:Cash']);
+	});
 	it('does nothing when no context is active', () => {
 		const { suggest } = setup();
 		const editor = createEditor(['  Assets:Ca']);

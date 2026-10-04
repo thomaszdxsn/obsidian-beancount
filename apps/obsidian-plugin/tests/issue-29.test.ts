@@ -64,6 +64,21 @@ describe('mergeSettings', () => {
 		expect(settings.flagWarnings['*']).toBe(DEFAULT_FLAG_WARNINGS['*']);
 		expect(settings.separatorColumn).toBe(50);
 	});
+
+	it('drops completionUsage so pick history is not a setting', () => {
+		const settings = mergeSettings({
+			alignOnSave: true,
+			completionUsage: { 'Assets:Cash': { count: 3, lastUsed: 1 } },
+		});
+		expect(settings.alignOnSave).toBe(true);
+		expect('completionUsage' in settings).toBe(false);
+	});
+
+	it('treats a non-object store as defaults', () => {
+		expect(mergeSettings(null).alignOnSave).toBe(false);
+		expect(mergeSettings([]).instantAlignment).toBe(true);
+		expect(mergeSettings('nope').separatorColumn).toBe(50);
+	});
 });
 
 describe('issue 29 commands and Fava', () => {

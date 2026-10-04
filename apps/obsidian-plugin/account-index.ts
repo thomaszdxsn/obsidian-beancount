@@ -5,7 +5,9 @@
  * (`extractAccountDirectives`) used to hide closed accounts from
  * completion and to fill the hover card. The vault-wide cache is `AccountIndex`.
  */
-import { MAX_SUGGESTIONS, VaultIndex } from './vault-index';
+import { rankCompletions } from './completion-rank';
+import type { CompletionUsage } from './completion-rank';
+import { VaultIndex } from './vault-index';
 import type { VaultCache } from './vault-index';
 
 /**
@@ -138,13 +140,17 @@ export function accountHoverCard(
 
 /**
  * Vault-wide account names plus their open/close lifecycle. `match` hides
- * closed accounts and caps the popup window after that filter, so a vault
- * of closed names cannot crowd out still-open ones.
+ * closed accounts and then ranks the rest (prefix, subsequence, frecency),
+ * so a vault of closed names cannot crowd out still-open ones.
  */
 export class AccountIndex implements VaultCache {
-	private readonly names = new VaultIndex(extractAccounts);
+	private readonly names: VaultIndex;
 	private readonly directivesByPath = new Map<string, ReadonlyMap<string, AccountRecord>>();
 	private merged: ReadonlyMap<string, AccountRecord> | null = null;
+
+	constructor(private readonly usage?: CompletionUsage) {
+		this.names = new VaultIndex(extractAccounts, usage);
+	}
 
 	setFileContent(path: string, content: string): void {
 		this.names.setFileContent(path, content);
@@ -177,23 +183,24 @@ export class AccountIndex implements VaultCache {
 		return this.lifecycle().get(name);
 	}
 
+	remember(value: string): void {
+		this.usage?.remember(value);
+	}
+
 	/** Whether `name` has been seen in the vault, open or closed. */
 	has(name: string): boolean {
 		return this.names.values().includes(name);
 	}
 
-	/** Case-insensitive prefix match of still-open accounts. */
+	/** Ranked match of still-open accounts. */
 	match(query: string): string[] {
-		const needle = query.toLowerCase();
-		const matches: string[] = [];
 		const lifecycle = this.lifecycle();
+		const open: string[] = [];
 		for (const value of this.names.values()) {
-			if (!value.toLowerCase().startsWith(needle)) continue;
 			if (isAccountClosed(lifecycle.get(value))) continue;
-			matches.push(value);
-			if (matches.length >= MAX_SUGGESTIONS) break;
+			open.push(value);
 		}
-		return matches;
+		return rankCompletions(open, query, this.usage);
 	}
 
 	private lifecycle(): ReadonlyMap<string, AccountRecord> {

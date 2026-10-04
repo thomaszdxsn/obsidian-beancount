@@ -52,6 +52,7 @@ import { fenceLanguageExtension } from './fence-language';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { instantAlignmentExtension } from './instant-alignment';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { CompletionUsage } from './completion-rank';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 
 /**
@@ -278,9 +279,20 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	favaRunner: FavaRunner = runFavaProcess;
 	/** Live Fava child, killed when the plugin unloads. */
 	private favaChild: ChildProcess | null = null;
+	/** Completion pick counts persisted beside settings in data.json. */
+	private usage: CompletionUsage = CompletionUsage.parse(null);
 
 	async onload() {
-		this.settings = mergeSettings(await this.loadData());
+		let stored: unknown = null;
+		try {
+			stored = await this.loadData();
+		} catch {
+			stored = null;
+		}
+		this.settings = mergeSettings(stored);
+		this.usage = CompletionUsage.parse(stored, Date.now, () => {
+			void this.writePluginData();
+		});
 		// Ledger files open as notes: without this Obsidian shows them as
 		// unsupported, and nothing of the plugin (completion, alignment,
 		// validation) has an editor to work in. Registration is read at app
@@ -291,8 +303,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (uninstall) this.register(uninstall);
 		// One vault scan feeds every completion index, balancing-account
 		// history, and the file that already holds `open` directives.
-		const accounts = new AccountIndex();
-		const payees = new VaultIndex(extractPayees);
+		const accounts = new AccountIndex(this.usage);
+		const payees = new VaultIndex(extractPayees, this.usage);
 		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
 		// prose amounts (`- 10 GB`) collide with ledger token shapes, so on
 		// notes these extractors see only the beancount fence bodies; ledger
@@ -303,10 +315,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 						.map((fence) => fence.lines.join('\n'))
 						.join('\n')
 				: content;
-		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)));
-		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)));
-		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)));
-		const narrations = new VaultIndex(extractNarrations);
+		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)), this.usage);
+		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)), this.usage);
+		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)), this.usage);
+		const narrations = new VaultIndex(extractNarrations, this.usage);
 		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations, this.pairings, this.openFiles);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
 		const payeeSuggest = new PayeeSuggest(this.app, payees, () => this.settings.completePayee);
@@ -405,11 +417,19 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	}
 
 	onunload() {}
-
 	async saveSettings(): Promise<void> {
-		await this.saveData(this.settings);
+		await this.writePluginData();
 		this.balanceInlays.refresh();
 		this.flagWarnings.refresh();
+	}
+
+	private async writePluginData(): Promise<void> {
+		const usage = this.usage.toJSON();
+		if (Object.keys(usage).length === 0) {
+			await this.saveData({ ...this.settings });
+			return;
+		}
+		await this.saveData({ ...this.settings, completionUsage: usage });
 	}
 
 	private async launchFava(announce: boolean): Promise<void> {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
+import { CompletionUsage } from '../completion-rank';
 import { extractCommodities, extractLinks, extractNarrations, extractTags } from '../token-index';
 import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from '../token-suggest';
 import { registerVaultIndex, VaultIndex } from '../vault-index';
@@ -370,5 +371,24 @@ describe('NarrationSuggest', () => {
 		expect(editor.replacements).toEqual([
 			{ replacement: 'Fuel', from: { line: 0, ch: 22 }, to: { line: 0, ch: 24 } },
 		]);
+	});
+
+	it('remembers a pick so later matches rank it first', () => {
+		const usage = CompletionUsage.parse({}, () => 1);
+		const index = new VaultIndex(extractNarrations, usage);
+		index.setFileContent(
+			'a.bean',
+			['2026-09-30 * "A" "Fuel"', '2026-09-30 * "B" "Groceries"'].join('\n')
+		);
+		const suggest = new NarrationSuggest({} as App, index, () => true);
+		const editor = createEditor(['2026-09-30 * "A" "']);
+		suggest.context = {
+			start: { line: 0, ch: 17 },
+			end: { line: 0, ch: 17 },
+			editor: editor as unknown as Editor,
+		} as EditorSuggestContext;
+		expect(index.match('')).toEqual(['Fuel', 'Groceries']);
+		suggest.selectSuggestion('Groceries', {} as MouseEvent);
+		expect(index.match('')).toEqual(['Groceries', 'Fuel']);
 	});
 });
