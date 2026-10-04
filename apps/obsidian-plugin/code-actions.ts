@@ -58,9 +58,8 @@ export interface QuickFixContext {
 	/** Diagnostic tooltip on that line (bean-check messages, newline-joined). */
 	message: string;
 	pairings: readonly Pairing[];
-	/** Vault path that should receive new `open` directives. */
-	openFile: string;
-	currentPath: string;
+	/** Vault path that should receive new `open` directives; none: skip open. */
+	openFile: string | null;
 	/** Accounts that already have an `open` in `openFile`. */
 	openedAccounts: ReadonlySet<string>;
 }
@@ -104,6 +103,19 @@ export function flagDiagnostics(text: string): LineDiagnostic[] {
 	return diagnostics;
 }
 
+/** Flag markers whose lines are host lines of `fences` (markdown notes). */
+export function flagDiagnosticsFromFences(
+	fences: readonly { startLine: number; lines: readonly string[] }[]
+): LineDiagnostic[] {
+	const diagnostics: LineDiagnostic[] = [];
+	for (const fence of fences) {
+		for (const diagnostic of flagDiagnostics(fence.lines.join('\n'))) {
+			diagnostics.push({ line: fence.startLine + diagnostic.line, message: diagnostic.message });
+		}
+	}
+	return diagnostics;
+}
+
 /**
  * Combine bean-check's per-line report with flag markers. A line bean-check
  * already named keeps its message — the flag is still visible in the source,
@@ -132,8 +144,8 @@ export function quickFixesForLine(context: QuickFixContext): QuickFix[] {
 	if (padEdit(context.lines, context.line, context.pairings, context.message) !== null) {
 		fixes.push({ title: PAD_TRANSACTION_TITLE, kind: 'pad' });
 	}
-	const date = transactionDate(context.lines, context.line);
-	if (date !== undefined) {
+	const date = entryDate(context.lines, context.line);
+	if (date !== undefined && context.openFile !== null) {
 		const commodity = blockCommodity(context.lines, context.line);
 		for (const account of unknownAccounts(context.message)) {
 			if (context.openedAccounts.has(account)) continue;
@@ -412,8 +424,10 @@ function unknownAccounts(message: string): string[] {
 	return accounts;
 }
 
-function transactionDate(lines: readonly string[], line: number): string | undefined {
+function entryDate(lines: readonly string[], line: number): string | undefined {
 	if (line < 0 || line >= lines.length) return undefined;
+	const onLine = /^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})(?![0-9])/.exec(lines[line]);
+	if (onLine !== null) return onLine[1];
 	const range = blockRangeAt(lines, line);
 	for (let i = range.from; i <= range.to; i += 1) {
 		const match = TXN_HEADER_RE.exec(lines[i]);

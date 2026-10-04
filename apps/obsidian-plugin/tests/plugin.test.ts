@@ -1611,5 +1611,34 @@ describe('BeancountPlugin', () => {
 		);
 	});
 
+	it('marks a clean ! journal when an entry ledger owns the bean-check run', async () => {
+		const vault = new FakeVault();
+		vault.write('main.bean', 'include "journal.bean"\n');
+		const journal = vault.write('journal.bean', '2026-10-01 ! "Cafe"\n  Assets:Cash  10.00 USD\n');
+		const editor = createEditor(['2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD']);
+		await loadPlugin(vault, { entryLedger: 'main.bean' }, [{ view: { file: journal, editor } }]);
+		beanCheckResult = { stderr: '', missing: false };
+
+		await vault.emit('modify', journal);
+		await delay(600);
+
+		expect(published(editor)).toEqual([{ line: 0, message: FLAGGED_MESSAGE }]);
+	});
+
+	it('flags a markdown fence and ignores a bang in the prose around it', async () => {
+		const vault = new FakeVault();
+		const note = ['Wow!', '```beancount', '2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD', '```', ''].join('\n');
+		const file = vault.write('note.md', note);
+		const editor = createEditor(note.split('\n'));
+		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = { stderr: '', missing: false };
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(published(editor)).toEqual([{ line: 2, message: FLAGGED_MESSAGE }]);
+	});
+
+
 
 });

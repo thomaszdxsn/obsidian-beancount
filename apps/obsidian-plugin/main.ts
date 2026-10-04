@@ -10,7 +10,7 @@ import { beancountMode } from './beancount-mode';
 import { AccountIndex } from './account-index';
 import { AccountSuggest } from './account-suggest';
 import { accountHoverTooltip } from './account-hover';
-import type { BeanCheckError, BeanCheckRunner } from './bean-check';
+import type { BeanCheckError, BeanCheckRunner, LineDiagnostic } from './bean-check';
 import {
 	clipText,
 	isBeanCheckBinary,
@@ -20,7 +20,9 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import {
+	FLAGGED_MESSAGE,
 	flagDiagnostics,
+	flagDiagnosticsFromFences,
 	flagOkayEdit,
 	insertOpenDirective,
 	mergeDiagnostics,
@@ -116,6 +118,34 @@ function openEditorsFor(app: App, file: TFile): Editor[] {
 	}
 	return editors;
 }
+
+function openEditorFiles(app: App): Array<{ file: TFile; editor: Editor }> {
+	const found: Array<{ file: TFile; editor: Editor }> = [];
+	const add = (file: TFile | null | undefined, editor: Editor | null | undefined) => {
+		if (!file || !editor) return;
+		if (found.some((entry) => entry.editor === editor)) return;
+		found.push({ file, editor });
+	};
+	const active = app.workspace.activeEditor;
+	add(active?.file ?? null, active?.editor ?? null);
+	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
+		const view = leaf.view as MarkdownView | null;
+		add(view?.file ?? null, view?.editor ?? null);
+	}
+	return found;
+}
+
+function flagsFor(path: string, text: string): LineDiagnostic[] {
+	return path.endsWith('.md') ? flagDiagnosticsFromFences(extractBeancountFences(text)) : flagDiagnostics(text);
+}
+
+function beanDiagnosticsOn(editor: Editor): LineDiagnostic[] {
+	const view = (editor as Editor & { cm?: EditorView }).cm;
+	const field = view?.state?.field?.(lineDiagnostics);
+	if (!field) return [];
+	return field.filter((diagnostic) => diagnostic.message !== FLAGGED_MESSAGE);
+}
+
 
 /**
  * The vault base as bean-check reports files under it: the real path (its
@@ -297,15 +327,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!diagnostic) return false;
 		const { editor, file } = located;
 		const lines = editor.getValue().split('\n');
-		const openFile = this.openFiles.bestFile() ?? file.path;
+		const openFile = this.openFiles.bestFile() ?? (file.extension === 'md' ? null : file.path);
 		const fixes = quickFixesForLine({
 			lines,
 			line,
 			message: diagnostic.message,
 			pairings: this.pairings.all(),
 			openFile,
-			currentPath: file.path,
-			openedAccounts: this.openFiles.openedIn(openFile),
+			openedAccounts: openFile ? this.openFiles.openedIn(openFile) : new Set(),
 		});
 		if (fixes.length === 0) return false;
 		const menu = new Menu();
@@ -565,6 +594,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const previouslyOwned = [...this.markOwners.entries()]
 			.filter(([, owner]) => owner === target)
 			.map(([path]) => path);
+		const published = new Set<string>();
 		for (const path of new Set([...reported, ...previouslyOwned, target])) {
 			if (reported.has(path)) this.markOwners.set(path, target);
 			else this.markOwners.delete(path);
@@ -572,15 +602,24 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			// No editor, no markers: a background file is marked when it is
 			// opened and its target is saved again.
 			if (!vaultFile) continue;
+			published.add(path);
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
 				setEditorLineDiagnostics(
 					editor,
-					mergeDiagnostics(
-						toLineDiagnostics(errorsByPath.get(path) ?? []),
-						flagDiagnostics(editor.getValue())
-					)
+					mergeDiagnostics(toLineDiagnostics(errorsByPath.get(path) ?? []), flagsFor(path, editor.getValue()))
 				);
 			}
+		}
+		// Flag markers do not need bean-check: a clean journal under an entry
+		// ledger is never `target`, so it would otherwise stay unmarked.
+		for (const { file, editor } of openEditorFiles(this.app)) {
+			if (published.has(file.path)) continue;
+			const flags = flagsFor(file.path, editor.getValue());
+			if (flags.length === 0) continue;
+			setEditorLineDiagnostics(
+				editor,
+				mergeDiagnostics(beanDiagnosticsOn(editor), flags)
+			);
 		}
 	}
 

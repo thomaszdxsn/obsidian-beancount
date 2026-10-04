@@ -12,6 +12,7 @@ import {
 	PairingIndex,
 	extractPairings,
 	flagDiagnostics,
+	flagDiagnosticsFromFences,
 	flagOkayEdit,
 	inferBalancingAccount,
 	insertOpenDirective,
@@ -33,7 +34,6 @@ function context(partial: Partial<QuickFixContext> & Pick<QuickFixContext, 'line
 	return {
 		pairings: [],
 		openFile: 'accounts.bean',
-		currentPath: 'journal.bean',
 		openedAccounts: new Set(),
 		...partial,
 	};
@@ -372,6 +372,37 @@ describe('edge postings and residuals', () => {
 				{ date: '2026-09-01', payee: undefined, accounts: ['Expenses:Food', 'Assets:Cash'] },
 			])
 		).toBe('Assets:Cash');
+	});
+
+	it('opens an unknown account on a balance directive and skips markdown without an open file', () => {
+		expect(
+			quickFixesForLine(
+				context({
+					lines: ['2026-10-01 balance Expenses:Food  0.00 USD'],
+					line: 0,
+					message: "Invalid reference to unknown account 'Expenses:Food'",
+				})
+			)
+		).toMatchObject([{ kind: 'open-account', account: 'Expenses:Food', date: '2026-10-01' }]);
+		expect(
+			quickFixesForLine(
+				context({
+					lines: ['```beancount', '2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD', '```'],
+					line: 1,
+					message: "Invalid reference to unknown account 'Expenses:Food'",
+					openFile: null,
+				})
+			)
+		).toEqual([]);
+	});
+
+	it('maps flag markers onto markdown fence host lines and ignores prose bangs', () => {
+		expect(
+			flagDiagnosticsFromFences([
+				{ startLine: 2, lines: ['2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD'] },
+			])
+		).toEqual([{ line: 2, message: FLAGGED_MESSAGE }]);
+		expect(flagDiagnostics('Wow! not a flag\n!nope')).toEqual([]);
 	});
 });
 
