@@ -25,6 +25,7 @@ import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
+import { SnippetSession, SnippetSuggest, snippetTabExtension } from './snippet-suggest';
 import { postingIndentExtension } from './posting-indent';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { instantAlignmentExtension } from './instant-alignment';
@@ -221,11 +222,14 @@ export default class BeancountPlugin extends Plugin {
 		registerVaultIndex(this, accounts, payees);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
 		const payeeSuggest = new PayeeSuggest(this.app, payees);
+		const snippetSession = new SnippetSession();
+		const snippetSuggest = new SnippetSuggest(this.app, snippetSession);
 		this.registerEditorSuggest(accountSuggest);
 		this.registerEditorSuggest(payeeSuggest);
+		this.registerEditorSuggest(snippetSuggest);
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
-		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest]));
+		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest, snippetSuggest]));
 		// Typing `.` in a posting amount aligns that transaction block and
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
@@ -236,6 +240,7 @@ export default class BeancountPlugin extends Plugin {
 		// Balance assertion deltas at the end of balance lines. Independent of
 		// the diagnostic markers; a setting change reapplies them without an edit.
 		this.registerEditorExtension(this.balanceInlays.extension);
+		this.registerEditorExtension(snippetTabExtension(snippetSession, [accountSuggest, payeeSuggest, snippetSuggest]));
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',

@@ -11,6 +11,9 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
 - Account completion and hover from vault `open` / `close` directives
   (CJK account segments; closed accounts omitted from completion).
 - Payee completion from historical transaction payees.
+- Directive snippets (vscode-beancount prefixes plus `txn`): type a prefix at
+  column 0 to expand; `txn` → `YYYY-MM-DD * "" ""` with the caret in the payee
+  field. Tab walks `$n` stops; dates resolve to today.
 - Posting auto-indent on Enter inside a beancount entry.
 - **Align decimal points** command; optional `alignOnSave`; instant
   alignment when typing `.` (`instantAlignment`, `separatorColumn`).

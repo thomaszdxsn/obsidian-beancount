@@ -143,6 +143,25 @@ describe('BeancountPlugin', () => {
 		});
 	});
 
+	it('offers directive snippets from a prefix at column 0', async () => {
+		const { plugin } = await loadPlugin();
+		const snippets = plugin.registrations.editorSuggests[2] as {
+			onTrigger: (
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: null
+			) => unknown;
+			getSuggestions(context: { query: string }): Array<{ prefix: string }>;
+		};
+		const editor = createEditor(['txn']);
+		expect(snippets.onTrigger({ line: 0, ch: 3 }, editor, null)).toMatchObject({ query: 'txn' });
+		expect(snippets.getSuggestions({ query: 'txn' }).map((entry) => entry.prefix)).toEqual([
+			'txn',
+			'txn!',
+			'txn*',
+		]);
+	});
+
 	it('installs the beancount mode and its bean alias into the mode registry', async () => {
 		const registry = fakeRegistry();
 		host.CodeMirror = registry;
