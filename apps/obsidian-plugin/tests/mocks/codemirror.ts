@@ -3,9 +3,10 @@
  * (`esbuild` lists them as external): just the `keymap`/`Prec`/
  * `EditorSelection` pieces the posting-indent extension builds from, plus a
  * minimal `EditorView` double its Enter binding can be driven with — and the
- * `StateField`/`StateEffect`/`Decoration`/`ViewPlugin`/`gutter`/`hoverTooltip`
- * pieces the diagnostics and account-hover extensions build from, each
- * mirroring the real behaviour those calls rely on (effect identity via `is`,
+ * `StateField`/`StateEffect`/`Decoration`/`ViewPlugin`/`gutter`/`hoverTooltip`/
+ * `WidgetType` pieces the diagnostics, account-hover, and balance-hint
+ * extensions build from, each mirroring the real behaviour those calls rely on
+ * (effect identity via `is`,
  * decoration ranges, sorted sets, captured hover sources).
  */
 
@@ -19,7 +20,23 @@ export interface MockKeymapExtension {
 }
 
 export const Prec = {
-	high: (extension: MockKeymapExtension): MockKeymapExtension => extension,
+	high: <T>(extension: T): T => extension,
+};
+
+/** `EditorState.languageData.of` — tests call the captured source. */
+export type MockLanguageDataSource = (
+	state: { doc: { toString(): string } },
+	pos: number
+) => readonly unknown[];
+
+export interface MockLanguageDataExtension {
+	languageData: MockLanguageDataSource;
+}
+
+export const EditorState = {
+	languageData: {
+		of: (source: MockLanguageDataSource): MockLanguageDataExtension => ({ languageData: source }),
+	},
 };
 
 export const keymap = {
@@ -33,6 +50,7 @@ export interface MockCaret {
 
 export const EditorSelection = {
 	cursor: (pos: number): MockCaret => ({ anchor: pos, head: pos }),
+	range: (from: number, to: number): MockCaret => ({ anchor: from, head: to }),
 	create: (ranges: MockCaret[]): { ranges: MockCaret[] } => ({ ranges }),
 };
 
@@ -204,3 +222,6 @@ export function hoverTooltip(
 ): MockHoverTooltip {
 	return { source, options };
 }
+
+/** Base the balance-hint widget extends; tests never draw it. */
+export class WidgetType {}

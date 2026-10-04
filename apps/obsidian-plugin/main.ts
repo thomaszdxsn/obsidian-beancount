@@ -2,6 +2,7 @@ import { Menu, Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { alignText, blockRangeAt, computeAlignment } from './align';
@@ -34,16 +35,24 @@ import {
 import type { QuickFix, TextEdit } from './code-actions';
 import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
+import { FAVA_HOST, FAVA_URL, isFavaBinary, runFavaProcess } from './fava';
+import type { FavaRunner } from './fava';
+import { FlagWarningController } from './flag-warnings';
+import { BalanceInlayController } from './inlay-hints';
 import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
+import { SnippetSession, SnippetSuggest, snippetTabExtension } from './snippet-suggest';
+import { extractCommodities, extractLinks, extractNarrations, extractTags } from './token-index';
+import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from './token-suggest';
 import { postingIndentExtension } from './posting-indent';
+import { fenceLanguageExtension } from './fence-language';
 import { BeancountOutlineView, revealOutlineView, VIEW_TYPE_OUTLINE } from './outline-view';
 import { instantAlignmentExtension } from './instant-alignment';
 import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
-import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS } from './settings';
+import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 
 /**
  * Obsidian highlights fenced code blocks through its bundled CodeMirror 5
@@ -88,13 +97,14 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 /** Delay before on-save alignment, so a burst of edits aligns once. */
 const ALIGN_DEBOUNCE_MS = 500;
 
-/** The hint for a missing or rejected bean-check. */
 const MISSING_BEAN_CHECK_NOTICE =
 	'bean-check not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.';
 
+const MISSING_FAVA_NOTICE =
+	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
+
 /** Delay before on-save validation, so a burst of saves checks once. */
 const VALIDATE_DEBOUNCE_MS = 500;
-
 /** The editor of a leaf showing `file`, if any. */
 function openEditorFor(app: App, file: TFile): Editor | null {
 	return openEditorsFor(app, file)[0] ?? null;
@@ -256,25 +266,75 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly markOwners = new Map<string, string>();
 	/** Newest run per target; older runs finishing later must not report. */
 	private readonly validateSeq = new Map<string, number>();
+	/** False after cleanup; in-flight bean-check must not publish. */
+	private validateLive = true;
 	/** Notice texts shown this session: autosave must not stack them. */
 	private readonly noticesShown = new Set<string>();
+	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
+	private readonly balanceInlays = new BalanceInlayController(this);
+	/** Transaction-flag markers; refreshed when flagWarnings change. */
+	private readonly flagWarnings = new FlagWarningController(this);
+	/** How Fava is started; tests swap in their own runner. */
+	favaRunner: FavaRunner = runFavaProcess;
+	/** Live Fava child, killed when the plugin unloads. */
+	private favaChild: ChildProcess | null = null;
 
 	async onload() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = mergeSettings(await this.loadData());
+		// Ledger files open as notes: without this Obsidian shows them as
+		// unsupported, and nothing of the plugin (completion, alignment,
+		// validation) has an editor to work in. Registration is read at app
+		// start — a changed mapping needs an Obsidian restart, not just a
+		// plugin reload.
+		this.registerExtensions(['bean', 'beancount'], 'markdown');
 		const uninstall = installBeancountModes(host.CodeMirror);
 		if (uninstall) this.register(uninstall);
-		// One vault scan feeds completion, balancing-account history, and
-		// the file that already holds `open` directives.
+		// One vault scan feeds every completion index, balancing-account
+		// history, and the file that already holds `open` directives.
 		const accounts = new AccountIndex();
 		const payees = new VaultIndex(extractPayees);
-		registerVaultIndex(this, accounts, payees, this.pairings, this.openFiles);
+		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
+		// prose amounts (`- 10 GB`) collide with ledger token shapes, so on
+		// notes these extractors see only the beancount fence bodies; ledger
+		// files are scanned whole.
+		const ledgerText = (path: string, content: string): string =>
+			path.endsWith('.md')
+				? extractBeancountFences(content)
+						.map((fence) => fence.lines.join('\n'))
+						.join('\n')
+				: content;
+		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)));
+		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)));
+		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)));
+		const narrations = new VaultIndex(extractNarrations);
+		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations, this.pairings, this.openFiles);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
-		const payeeSuggest = new PayeeSuggest(this.app, payees);
+		const payeeSuggest = new PayeeSuggest(this.app, payees, () => this.settings.completePayee);
+		const commoditySuggest = new CommoditySuggest(this.app, commodities);
+		const tagSuggest = new TagSuggest(this.app, tags);
+		const linkSuggest = new LinkSuggest(this.app, links);
+		const narrationSuggest = new NarrationSuggest(this.app, narrations, () => this.settings.completeNarration);
+		const snippetSession = new SnippetSession();
+		const snippetSuggest = new SnippetSuggest(this.app, snippetSession);
 		this.registerEditorSuggest(accountSuggest);
 		this.registerEditorSuggest(payeeSuggest);
+		this.registerEditorSuggest(commoditySuggest);
+		this.registerEditorSuggest(tagSuggest);
+		this.registerEditorSuggest(linkSuggest);
+		this.registerEditorSuggest(narrationSuggest);
+		this.registerEditorSuggest(snippetSuggest);
+		const popovers = [
+			accountSuggest,
+			payeeSuggest,
+			commoditySuggest,
+			tagSuggest,
+			linkSuggest,
+			narrationSuggest,
+			snippetSuggest,
+		];
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
-		this.registerEditorExtension(postingIndentExtension([accountSuggest, payeeSuggest]));
+		this.registerEditorExtension(postingIndentExtension(popovers));
 		// Typing `.` in a posting amount aligns that transaction block and
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
@@ -283,10 +343,24 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// line can take.
 		this.registerEditorExtension(createDiagnosticsExtension(this));
 		this.registerEditorExtension(accountHoverTooltip(accounts));
+		// Cmd+/ comments, auto-close brackets, and ;#region folds inside
+		// ```beancount / ```bean fences — markdown's languageData otherwise
+		// wins because the fence highlighter is a CM5 overlay, not a nested
+		// CM6 language.
+		this.registerEditorExtension(fenceLanguageExtension());
+		// Balance assertion deltas at the end of balance lines. Independent of
+		// the diagnostic markers; a setting change reapplies them without an edit.
+		this.registerEditorExtension(this.balanceInlays.extension);
+		this.registerEditorExtension(this.flagWarnings.extension);
+		// Tab walks snippet stops; yields while a completion popover is open.
+		this.registerEditorExtension(snippetTabExtension(snippetSession, popovers));
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
 			editorCallback: alignCommand,
+			// Instant alignment covers typing `.`; this chord is the command
+			// until then. Obsidian has no default Mod+Shift+. binding.
+			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '.' }],
 		});
 		this.addCommand({
 			id: 'insert-today-date',
@@ -304,20 +378,75 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			name: 'Show outline',
 			callback: () => revealOutlineView(this.app),
 		});
+		this.addCommand({
+			id: 'run-fava',
+			name: 'Run Fava',
+			callback: () => {
+				void this.launchFava(true);
+			},
+		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
 		this.register(() => {
+			this.validateLive = false;
+			this.validateSeq.clear();
 			for (const timer of this.alignTimers.values()) clearTimeout(timer);
 			this.alignTimers.clear();
 			for (const timer of this.validateTimers.values()) clearTimeout(timer);
 			this.validateTimers.clear();
+			this.balanceInlays.destroy();
+			this.flagWarnings.destroy();
+			this.favaChild?.kill();
+			this.favaChild = null;
 		});
+		if (this.settings.runFavaOnActivate) {
+			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
+		}
 	}
 
 	onunload() {}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.balanceInlays.refresh();
+		this.flagWarnings.refresh();
+	}
+
+	private async launchFava(announce: boolean): Promise<void> {
+		if (this.favaChild && this.favaChild.exitCode === null) {
+			if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
+			return;
+		}
+		const command = this.settings.favaPath.trim() || 'fava';
+		if (!isFavaBinary(command)) {
+			new Notice(MISSING_FAVA_NOTICE);
+			return;
+		}
+		const requested = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
+		if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
+			new Notice('No valid bean file is available.');
+			return;
+		}
+		const adapter = this.app.vault.adapter as FileSystemAdapter;
+		const root = vaultRoot(adapter.getBasePath());
+		const confined = resolve(root, requested);
+		const rel = relative(root, confined);
+		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
+			new Notice('No valid bean file is available.');
+			return;
+		}
+		const result = await this.favaRunner(command, ['-H', FAVA_HOST, confined]);
+		if (result.missing) {
+			new Notice(MISSING_FAVA_NOTICE);
+			return;
+		}
+		this.favaChild = result.child ?? null;
+		if (this.favaChild) {
+			this.favaChild.once('exit', () => {
+				this.favaChild = null;
+			});
+		}
+		if (announce) new Notice(`Fava is running at ${FAVA_URL}`);
 	}
 
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
@@ -453,6 +582,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * temp ledger of its fences, with lines mapped back onto the note.
 	 */
 	private async validateFile(file: TFile): Promise<void> {
+		if (!this.validateLive) return;
 		const markdown = file.extension === 'md';
 		// An entry ledger turns a ledger-file save into a check of its whole
 		// include chain. A markdown save always owns its own run: the fences
@@ -461,14 +591,15 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
 		// Only the newest run for a target may report: bean-check speed varies
 		// with its cache, and an older run finishing last must not overwrite
-		// the newer report.
+		// the newer report. Unload shares this gate: cleanup flips
+		// `validateLive` so a started runner cannot publish after teardown.
 		const seq = (this.validateSeq.get(target) ?? 0) + 1;
 		this.validateSeq.set(target, seq);
 
 		let fences: BeancountFence[] | undefined;
 		if (markdown) {
 			const text = await this.app.vault.read(file);
-			if (this.validateSeq.get(target) !== seq) return;
+			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 			fences = extractBeancountFences(text);
 			if (fences.length === 0) {
 				this.markErrors(target, [], root);
@@ -530,7 +661,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			}
 
 			const run = await this.beanCheckRunner(command, [checkPath]);
-			if (this.validateSeq.get(target) !== seq) return;
+			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 			if (run.missing) {
 				this.notify(MISSING_BEAN_CHECK_NOTICE);
 				return;
@@ -567,6 +698,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * before. A file another target marked is left for that target's next run.
 	 */
 	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): void {
+		if (!this.validateLive) return;
 		const vaultFiles = this.app.vault.getFiles();
 		const errorsByPath = new Map<string, BeanCheckError[]>();
 		const unmapped: BeanCheckError[] = [];
@@ -637,6 +769,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * problem re-arms every few seconds and must not stack toasts.
 	 */
 	private notify(text: string): void {
+		if (!this.validateLive) return;
 		if (this.noticesShown.has(text)) return;
 		this.noticesShown.add(text);
 		new Notice(text);

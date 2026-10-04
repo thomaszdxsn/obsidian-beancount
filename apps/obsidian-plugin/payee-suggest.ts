@@ -6,12 +6,22 @@
  * triggers a prefix-match popup over every payee cached from the vault;
  * picking one replaces the typed text inside the quotes.
  */
-import type { Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
+import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { PAYEE_PREFIX_RE } from './payee-index';
 import { IndexSuggest } from './suggest';
+import type { CompletionIndex } from './suggest';
 
 export class PayeeSuggest extends IndexSuggest {
+	constructor(
+		app: App,
+		index: CompletionIndex,
+		private readonly enabled: () => boolean = () => true
+	) {
+		super(app, index);
+	}
+
 	onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
+		if (!this.enabled()) return null;
 		const line = editor.getLine(cursor.line);
 		// Mid-field edits (any character but the closing quote right after the
 		// cursor) would make selection replace only the typed prefix and garble

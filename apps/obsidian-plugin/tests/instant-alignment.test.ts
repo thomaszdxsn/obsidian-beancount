@@ -22,7 +22,7 @@ function runOf(host: Host): Run {
 }
 
 /** Apply a plan's simultaneous changes from the right, as CodeMirror does. */
-function apply(text: string, plan: InstantPlan): string {
+function apply(text: string, plan: Pick<InstantPlan, 'changes'>): string {
 	let next = text;
 	for (const change of [...plan.changes].sort((a, b) => b.from - a.from)) {
 		next = next.slice(0, change.from) + change.insert + next.slice(change.to);
@@ -162,7 +162,7 @@ describe('instantAlignmentExtension', () => {
 		const view = createView(text, [{ anchor: caret }]);
 		expect(runOf(host)(view as unknown as EditorView)).toBe(true);
 		expect(view.dispatched).toHaveLength(1);
-		const next = apply(text, view.dispatched[0] as InstantPlan);
+		const next = apply(text, view.dispatched[0]);
 		expect(next).toBe('  Assets:Cash    12. USD');
 		expect(view.dispatched[0].selection.ranges).toEqual([
 			{ anchor: next.indexOf('.') + 1, head: next.indexOf('.') + 1 },

@@ -122,6 +122,12 @@ describe('PayeeSuggest.onTrigger', () => {
 		await flush();
 		expect(trigger(suggest, '2026-09-30 * "Zzz')).toBeNull();
 	});
+
+	it('stays quiet when payee completion is turned off', async () => {
+		const index = { match: () => ['Whole Foods'] };
+		const suggest = new PayeeSuggest({} as App, index, () => false);
+		expect(trigger(suggest, '2026-09-30 * "Wh')).toBeNull();
+	});
 });
 
 describe('PayeeSuggest suggestions', () => {

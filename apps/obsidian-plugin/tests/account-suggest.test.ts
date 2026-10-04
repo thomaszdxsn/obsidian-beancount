@@ -77,6 +77,28 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(info).toMatchObject({ query: 'Assets:Ca', start: { line: 0, ch: 2 }, end: { line: 0, ch: 11 } });
 	});
 
+	it('triggers on and completes accounts with non-ASCII segments', async () => {
+		const { suggest } = setup({ 'a.md': '  Expenses:餐饮:午饭  30.00 CNY\n  Expenses:餐饮:晚饭  50.00 CNY' });
+		await flush();
+		expect(trigger(suggest, '  Expenses:餐饮:午')).toEqual({
+			start: { line: 0, ch: 2 },
+			end: { line: 0, ch: 15 },
+			query: 'Expenses:餐饮:午',
+		});
+		expect(suggest.getSuggestions(contextFor('Expenses:餐饮:'))).toEqual(['Expenses:餐饮:午饭', 'Expenses:餐饮:晚饭']);
+		expect(trigger(suggest, '见Expenses:餐')).toBeNull();
+		// CJK punctuation is a boundary like ASCII punctuation; a CJK letter is not.
+		expect(trigger(suggest, '（Expenses:餐')).toMatchObject({ query: 'Expenses:餐', start: { line: 0, ch: 1 } });
+	});
+
+	it('stays quiet when the cursor sits inside a non-ASCII segment', async () => {
+		const { suggest } = setup({ 'a.md': '  Expenses:餐饮:午饭  30.00 CNY' });
+		await flush();
+		// Picking a suggestion here would replace `Expenses:餐` and leave `饮` behind.
+		expect(trigger(suggest, '  Expenses:餐饮  30 CNY', 12)).toBeNull();
+		expect(trigger(suggest, '  Expenses:カード・ローン', 14)).toBeNull();
+	});
+
 	it('stays quiet when editing inside a token', async () => {
 		const { suggest } = setup(ACCOUNTS);
 		await flush();
@@ -93,6 +115,31 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(trigger(suggest, '2026-09-30 * "As')).toBeNull();
 		// Cursor before the closing quote of an account-shaped payee.
 		expect(trigger(suggest, '2026-09-30 * "Expenses:Foo"', 26)).toBeNull();
+	});
+
+	it('stays quiet in the narration field', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Narnia:Bank' });
+		await flush();
+		// The narration suggest owns that field: `"Nar` prefixes the cached
+		// `Narnia:Bank` just the same — the ownership guard must decide.
+		expect(trigger(suggest, '2026-09-30 * "Shell" "Nar')).toBeNull();
+	});
+
+	it('stays quiet in tag and link positions', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Travel:Air' });
+		await flush();
+		// The tag/link suggests own those tokens: `#Tr`/`^Tr` prefix the
+		// cached `Travel:Air` just the same.
+		expect(trigger(suggest, '#Tr')).toBeNull();
+		expect(trigger(suggest, '^Tr')).toBeNull();
+	});
+
+	it('stays quiet in a posting commodity slot', async () => {
+		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Uber:Rides' });
+		await flush();
+		// The commodity suggest owns the unit position: `10.00 U` prefixes
+		// the cached `Uber:Rides` just the same.
+		expect(trigger(suggest, '  Assets:Cash  10.00 U')).toBeNull();
 	});
 
 	it('stays quiet on lowercase prose, dates and amounts', async () => {

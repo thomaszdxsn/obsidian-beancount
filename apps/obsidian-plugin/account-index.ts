@@ -10,19 +10,35 @@ import type { VaultCache } from './vault-index';
 
 /**
  * A complete account name: a capitalized root segment plus one or more
- * `:segment` parts, e.g. `Assets:Cash:Wallet`. The shape matches the one the
- * syntax mode highlights (`A-Z` first character, segments of letters,
- * digits, `-` and `_`), so anything the editor treats as an account is also
- * completable — and prose words, dates (`2026-09-30`), times (`12:30`) and
- * URLs never leak in because they lack the capitalized-root-plus-colon
- * shape. A trailing empty segment (`Meeting:`) is not a name. The lookbehind
- * keeps a name from leaking out of a longer token or URL path
- * (`pre-Assets:Cash`, `github.com/User:Repo`), mirroring the prefix regex.
+ * `:segment` parts, e.g. `Assets:Cash:Wallet` or `Expenses:餐饮:午饭`.
+ * Segment characters are Unicode letters, digits and marks, `-`, `_` and the
+ * middle dots `·` / `・` that join words in CJK names (`Expenses:カード・ローン`),
+ * so the non-ASCII accounts the syntax mode highlights and alignment
+ * recognizes are completable too. Those two accept any non-space segment
+ * character; here other punctuation and symbols (`，`, `：`, `☕`) end a
+ * name, so prose like `Expenses:餐饮，午饭` indexes `Expenses:餐饮` rather than
+ * the whole clause. Prose words, dates (`2026-09-30`), times (`12:30`) and
+ * URLs never leak in because they lack the capitalized-root-plus-colon shape.
+ * Empty segments (`Meeting:`, `Assets::Cash`) are not names, and a name ends
+ * on a letter, digit, mark or `_` (a trailing `-` or dot is dropped). The
+ * lookbehind keeps a name from leaking out of a longer token or URL path
+ * (`pre-Assets:Cash`, `见Assets:Cash`, `github.com/User:Repo`), mirroring
+ * the prefix regex.
  */
-const ACCOUNT_RE = /(?<![A-Za-z0-9\-_:/])[A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+\b/g;
+const SEGMENT_CHARS = String.raw`\p{L}\p{N}\p{M}_\-·・`;
+const SEGMENT = `[${SEGMENT_CHARS}]`;
+const NAME_END = String.raw`(?<=[\p{L}\p{N}\p{M}_])`;
+const ACCOUNT_SHAPE = String.raw`[A-Z]${SEGMENT}*(?::${SEGMENT}+)+${NAME_END}`;
+const ACCOUNT_RE = new RegExp(`(?<![${SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
 
 /** The same shape while typing, where the last segment may be partial. */
-export const ACCOUNT_PREFIX_RE = /(?:^|[^A-Za-z0-9\-_:/])([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]*)*)$/;
+export const ACCOUNT_PREFIX_RE = new RegExp(
+	`(?:^|[^${SEGMENT_CHARS}:/])([A-Z]${SEGMENT}*(?::${SEGMENT}*)*)$`,
+	'u'
+);
+
+/** A character that continues an account token: a segment character or `:`. */
+export const ACCOUNT_CHAR_RE = new RegExp(`[${SEGMENT_CHARS}:]`, 'u');
 
 /** The complete account token covering `offset`, if any. */
 export function accountTokenAt(
@@ -41,8 +57,10 @@ export function accountTokenAt(
  * Column-0 `open` / `close` directives. The account shape matches
  * `ACCOUNT_RE`; currencies (if any) sit in the remainder of the line.
  */
-const DIRECTIVE_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+(open|close)(?![A-Za-z0-9])[ \t]+([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+)\b(.*)$/gm;
+const DIRECTIVE_RE = new RegExp(
+	String.raw`^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+(open|close)(?![A-Za-z0-9])[ \t]+(${ACCOUNT_SHAPE})(.*)$`,
+	'gmu'
+);
 
 /** Beancount commodity tokens on an `open` line, after comments and `"booking"`. */
 const COMMODITY_RE = /^[A-Z][A-Z0-9._'-]*$/;

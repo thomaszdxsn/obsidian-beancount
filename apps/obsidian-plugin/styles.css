@@ -8,6 +8,10 @@
 .cm-beancount-error-gutter {
 	cursor: pointer;
 }
+.cm-beancount-warning-underline {
+	text-decoration: underline wavy var(--text-warning, #d19a66);
+	text-decoration-skip-ink: none;
+}
 
 .cm-gutterElement.cm-beancount-error-gutter-marker::after {
 	content: '';
@@ -20,6 +24,12 @@
 }
 
 .beancount-account-suggest-meta {
+	white-space: pre-wrap;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.beancount-snippet-suggest-meta {
 	white-space: pre-wrap;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
@@ -56,4 +66,13 @@
 
 .beancount-outline-date {
 	color: var(--text-muted);
+}
+
+.cm-beancount-balance-hint {
+	padding-left: 1.5em;
+	color: var(--text-muted);
+	font-style: italic;
+	white-space: pre;
+	pointer-events: none;
+	user-select: none;
 }

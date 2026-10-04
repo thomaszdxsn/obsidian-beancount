@@ -1,16 +1,34 @@
-# Obsidian Sample Plugin
+# Beancount (Obsidian plugin)
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+User-facing documentation lives in the repository
+[README](../../README.md). This package is `apps/obsidian-plugin`
+(`manifest.json` id `beancount-obsidian`, version `0.0.1-alpha`).
+
+Desktop only: save-time validation runs `bean-check`. Install Beancount
+first:
+
+```sh
+pip install beancount
+```
 
 ## Features
 
 - **Beancount syntax highlighting**: `beancount`/`bean` fenced code blocks get
   highlighting through a CodeMirror stream mode ported from
-  `beancount.tmLanguage`.
+  `beancount.tmLanguage`. Inside those fences, Cmd+/ toggles `; ` line
+  comments (Obsidian's own command would wrap `%%` and break the ledger),
+  `{` `[` `(` and `'` auto-close (`"` does not — narration uses it), and
+  `;#region` / `;#endregion` fold. Matching-bracket highlight is not
+  available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
+  has no inner bracket nodes.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault. Names are
   extracted per file with a regex, cached, and invalidated when files are
-  created, modified, deleted or renamed. An account with a `close` directive
+  created, modified, deleted or renamed. Segments after the capitalized root
+  may hold non-ASCII letters and CJK middle dots (`Expenses:餐饮:午饭`,
+  `Expenses:カード・ローン`); other punctuation and symbols (`，`, `：`, `☕`) end a
+  name, so CJK prose does not index whole clauses.
+  An account with a `close` directive
   is omitted unless a later `open` reopens it. The popup shows the latest
   open date and constrained currencies when those directives are present.
   Balances are not computed here: doing it in JS would reimplement
@@ -21,10 +39,46 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   are in the vault. Names the vault has never seen produce no tooltip. Closed
   accounts still hover — the card is how their close date is visible.
   Balances are not computed here, for the same reason as completion.
+- **Balance inlay hints**: the **Balance inlay hints** setting is on by default.
+  A `balance` line shows `Δ asserted-minus-accumulated` without changing the
+  document; for example, `10.00 USD` accumulated and `12.50 USD` asserted
+  displays `Δ +2.50 USD`. The toggle updates all open editors immediately.
+  Hints update synchronously while typing, reuse their DOM, and coexist with
+  diagnostic underlines and gutter markers.
+  This is the single-commodity fallback, not a Beancount semantic engine:
+  automatic postings (`__automatic__`) are not inferred. It uses explicit
+  amounts in the current `.bean` / `.beancount` file, or all `bean` /
+  `beancount` fences in the current Markdown note. Account descendants are
+  included; transactions on the assertion date are excluded (start-of-day
+  balance), regardless of source order. Earlier assertions do not reset totals.
+  Unknown/inferred amounts, arithmetic expressions, costs/prices, multiple
+  commodities, padding, or amounts beyond exact scaled-integer precision
+  suppress affected hints. `include`, `plugin`, unsupported dated directives,
+  or a configured entry ledger disable this local calculation. The displayed
+  delta is not a tolerance-aware validation verdict; `bean-check` remains
+  authoritative.
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
-  indexes.
+  indexes. Turn it off with **Complete payees**.
+- **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
+  `balance`, …) in a `.bean` / `.beancount` file or a `beancount`/`bean` fence
+  offers the vscode-beancount templates. `txn` expands to `YYYY-MM-DD * "" ""`
+  with the caret in the payee quotes, so payee completion still runs. Tab walks
+  `$1`-style stops; today's date fills `$CURRENT_*`.
+- **Commodity completion**: typing a partial commodity where one carries an
+  amount — a posting's unit after the number, a cost or price annotation, a
+  `balance` amount, or after the `price` / `commodity` keyword of its
+  directive — suggests every commodity found in those positions across the
+  vault.
+- **Tag and link completion**: typing `#` or `^` inside ledger text — a
+  `.bean`/`.beancount` file, or a ```beancount / ```bean fence in a markdown
+  note — suggests every tag or link found in the vault; picking one replaces
+  the typed sigil and partial name in one step.
+- **Narration completion** (off by default): with "Complete narrations"
+  enabled, typing the second quoted field of a transaction line
+  (`2026-09-30 * "Payee" "na…`) suggests narrations found in the vault, and
+  picking one closes the field.
 - **Posting auto-indent**: pressing Enter inside a beancount entry opens the
   next line already indented two spaces — the first posting under a
   transaction header, or the next posting/metadata line while the entry
@@ -55,7 +109,10 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   optional entry ledger. A `.bean` save checks that entry's whole `include`
   chain; a markdown save includes the entry first so the fence is checked
   against its opens and accounts. Without an entry ledger each saved file
-  (or note's fences) is validated on its own.
+  (or note's fences) is validated on its own. Unloading the plugin cancels
+  pending timers and drops in-flight `bean-check` results: they do not mark
+  the editor or raise a Notice. The process is not killed; only the report
+  is discarded.
 - **QuickFix**: clicking a diagnostic gutter dot opens the fixes that line
   can take. `Flag as okay` turns a header `!` into `*` (or deletes a posting's
   leading flag). An unbalanced one-leg, one-commodity transaction can insert
@@ -70,95 +127,35 @@ This is a sample plugin for Obsidian (https://obsidian.md).
   Dated transactions, `open`, `close` and `balance` directives hang under
   consecutive date groups; clicking a row jumps the editor to that line.
 
-This project uses Typescript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in Typescript Definition format, which contains TSDoc comments describing what it does.
+## Markdown fences
 
-**Note:** The Obsidian API is still in early alpha and is subject to change at any time!
+Opening fence: 0–3 spaces, 3+ backticks or tildes, then `beancount` or `bean`
+as the language. Saving a note extracts those bodies for `bean-check`.
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
-
-## First time developing plugins?
-
-Quick starting guide for new plugin devs:
-
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
-
-## Releasing new releases
-
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
-
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check https://github.com/obsidianmd/obsidian-releases/blob/master/plugin-review.md
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint .\src\`
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+````markdown
+```beancount
+2026-10-04 * "Coffee"
+  Expenses:Food   12.00 CNY
+  Assets:Cash
 ```
+````
 
-If you have multiple URLs, you can also do:
+## Settings
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
+| UI name | Key | Default |
+| --- | --- | --- |
+| Align amounts on save | `alignOnSave` | `false` |
+| Instant alignment | `instantAlignment` | `true` |
+| Separator column | `separatorColumn` | `50` |
+| Bean-check executable | `beanCheckPath` | `""` (PATH) |
+| Entry ledger | `entryLedger` | `""` (check the saved file / fences alone) |
+| Complete payees | `completePayee` | `true` |
+| Complete narrations | `completeNarration` | `false` |
+| Fava executable | `favaPath` | `""` (PATH) |
+| Run Fava on activate | `runFavaOnActivate` | `false` |
+| Incomplete transactions (!) | `flagWarnings["!"]` | `"warning"` |
+| Cleared transactions (*) | `flagWarnings["*"]` | `null` (none) |
 
-## API Documentation
-
-See https://github.com/obsidianmd/obsidian-api
+`entryLedger` is a vault path such as `main.bean`. With it set, a `.bean`
+save checks that file's `include` chain; markdown fences are validated as if
+included after the entry (opens and accounts apply).

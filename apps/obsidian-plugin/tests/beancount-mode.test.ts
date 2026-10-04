@@ -1,7 +1,7 @@
 import { StringStream } from '@codemirror/language';
 import { classHighlighter, highlightTree } from '@lezer/highlight';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { beancountMode, beancountStreamLanguage } from '../beancount-mode';
+import { beancountMode, beancountStreamLanguage, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 
 interface Token {
 	text: string;
@@ -570,5 +570,15 @@ describe('beancountStreamLanguage', () => {
 		);
 		expect(spans).toContainEqual([0, 6, 'tok-comment']);
 		expect(spans.map((span) => span[2])).toContain('tok-number');
+	});
+});
+
+describe('beancountMode languageData', () => {
+	it('exposes vscode-beancount comment, bracket and word tokens', () => {
+		expect(beancountMode.languageData).toBe(BEANCOUNT_LANGUAGE_DATA);
+		expect(BEANCOUNT_LANGUAGE_DATA.commentTokens.line).toBe(';');
+		expect(BEANCOUNT_LANGUAGE_DATA.closeBrackets.brackets).toEqual(['(', '[', '{', "'"]);
+		expect(BEANCOUNT_LANGUAGE_DATA.closeBrackets.brackets.includes('"')).toBe(false);
+		expect(BEANCOUNT_LANGUAGE_DATA.wordChars).toBe(':');
 	});
 });

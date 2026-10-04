@@ -14,11 +14,10 @@ export interface BeancountFence {
 }
 
 /**
- * Opening fence: 0–3 spaces, 3+ backticks or tildes, then `beancount` or
- * `bean` as the info-string language (an extra suffix like `linenums` is
- * ignored). A different language is not a ledger fence.
+ * Every opening fence, including non-ledger languages. Walking those bodies
+ * too prevents a literal ```bean example inside another fence becoming a ledger.
  */
-const OPEN_FENCE = /^ {0,3}([`~]{3,})[ \t]*(beancount|bean)(?:[ \t]|$)/i;
+const OPEN_FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/;
 
 /** A temp ledger built from one note's fences, ready to hand bean-check. */
 export interface FenceLedger {
@@ -41,12 +40,13 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 	let i = 0;
 	while (i < lines.length) {
 		const open = OPEN_FENCE.exec(lines[i]);
-		if (!open) {
+		if (!open || (open[1][0] === '`' && open[2].includes('`'))) {
 			i += 1;
 			continue;
 		}
 		const marker = open[1][0];
 		const minLen = open[1].length;
+		const ledger = /^(beancount|bean)(?:[ \t]|$)/i.test(open[2]);
 		// CommonMark strips the opener's indent (0–3 spaces) from each body line.
 		const indent = (/^ */.exec(lines[i]) ?? [''])[0].length;
 		const body: string[] = [];
@@ -56,16 +56,16 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 			const line = lines[j];
 			let start = 0;
 			while (start < indent && line[start] === ' ') start += 1;
-			body.push(line.slice(start));
+			if (ledger) body.push(line.slice(start));
 		}
-		fences.push({ startLine: i + 1, lines: body });
+		if (ledger) fences.push({ startLine: i + 1, lines: body });
 		i = j + 1;
 	}
 	return fences;
 }
 
 function isClosingFence(line: string, marker: string, minLen: number): boolean {
-	const close = /^( {0,3})([`~]{3,})[ \t]*$/.exec(line);
+	const close = /^( {0,3})(`{3,}|~{3,})[ \t]*$/.exec(line);
 	return close !== null && close[2][0] === marker && close[2].length >= minLen;
 }
 

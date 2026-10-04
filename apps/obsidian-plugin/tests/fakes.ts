@@ -176,6 +176,7 @@ export interface FakeEditor {
 	getValue(): string;
 	getCursor(): FakePosition;
 	setCursor(pos: FakePosition): void;
+	setSelection(anchor: FakePosition, head: FakePosition): void;
 	scrollIntoView(range: { from: FakePosition; to: FakePosition }, center?: boolean): void;
 	somethingSelected(): boolean;
 	listSelections(): FakeSelection[];
@@ -213,6 +214,9 @@ export function createEditor(lines: string[]): FakeEditor {
 		},
 		setCursor(pos: FakePosition): void {
 			this.selections = [{ anchor: pos, head: pos }];
+		},
+		setSelection(anchor: FakePosition, head: FakePosition): void {
+			this.selections = [{ anchor, head }];
 		},
 		scrollIntoView(range: { from: FakePosition; to: FakePosition }, center?: boolean): void {
 			this.scrollIntoViewCalls.push({ range, center });

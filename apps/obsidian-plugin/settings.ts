@@ -4,6 +4,8 @@
  * `main`, so the two modules never form a cycle.
  */
 import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { DEFAULT_FLAG_WARNINGS } from './flag-warnings';
+import type { FlagWarningLevel } from './flag-warnings';
 
 export interface BeancountSettings {
 	/** Re-align posting amounts whenever a ledger file is saved. */
@@ -19,6 +21,24 @@ export interface BeancountSettings {
 	beanCheckPath: string;
 	/** Vault path of the ledger entry file; empty validates each saved file alone. */
 	entryLedger: string;
+	/**
+	 * Show single-commodity balance assertion deltas at the end of balance lines.
+	 * An entry ledger hides them: inventory outside this file is unknown.
+	 */
+	inlayHints: boolean;
+	/** Complete the first quoted field of a transaction (payee). */
+	completePayee: boolean;
+	/** Complete the narration field of a transaction (second quoted string). */
+	completeNarration: boolean;
+	/** Path to the Fava executable; empty takes `fava` from PATH. */
+	favaPath: string;
+	/** Start Fava against the entry ledger when the plugin loads. */
+	runFavaOnActivate: boolean;
+	/**
+	 * Per-flag marker style. `null` hides the flag; `warning` / `error` pick
+	 * the CSS class. Defaults match vscode-beancount `beancount.flagWarnings`.
+	 */
+	flagWarnings: Record<string, FlagWarningLevel>;
 }
 
 export const DEFAULT_SETTINGS: BeancountSettings = {
@@ -27,12 +47,41 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 	separatorColumn: 50,
 	beanCheckPath: '',
 	entryLedger: '',
+	inlayHints: true,
+	completePayee: true,
+	completeNarration: false,
+	favaPath: '',
+	runFavaOnActivate: false,
+	flagWarnings: { ...DEFAULT_FLAG_WARNINGS },
 };
 
-/** What the settings tab needs from the plugin: state to edit, persistence. */
+/** Fold stored `data.json` onto defaults, including the nested flag map. */
+export function mergeSettings(stored: unknown): BeancountSettings {
+	const data = stored && typeof stored === 'object' ? (stored as Partial<BeancountSettings>) : {};
+	const flagStored =
+		data.flagWarnings && typeof data.flagWarnings === 'object' ? data.flagWarnings : {};
+	return {
+		...DEFAULT_SETTINGS,
+		...data,
+		flagWarnings: { ...DEFAULT_FLAG_WARNINGS, ...flagStored },
+	};
+}
+
+/** What the settings tab needs from the plugin: state plus persistence. */
 export interface SettingsHost {
 	settings: BeancountSettings;
 	saveSettings(): Promise<void>;
+}
+
+const FLAG_LEVEL_OPTIONS: Array<[string, FlagWarningLevel]> = [
+	['None', null],
+	['Warning', 'warning'],
+	['Error', 'error'],
+];
+
+function parseFlagLevel(value: string): FlagWarningLevel {
+	if (value === 'warning' || value === 'error') return value;
+	return null;
 }
 
 export class BeancountSettingTab extends PluginSettingTab {
@@ -46,6 +95,8 @@ export class BeancountSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+
+		new Setting(containerEl).setName('Alignment').setHeading();
 		new Setting(containerEl)
 			.setName('Align amounts on save')
 			.setDesc('Re-align the decimal points of posting amounts whenever a markdown or beancount file is saved.')
@@ -78,6 +129,8 @@ export class BeancountSettingTab extends PluginSettingTab {
 						await this.host.saveSettings();
 					})
 			);
+
+		new Setting(containerEl).setName('Validation').setHeading();
 		new Setting(containerEl)
 			.setName('Bean-check executable')
 			.setDesc(
@@ -106,5 +159,84 @@ export class BeancountSettingTab extends PluginSettingTab {
 						await this.host.saveSettings();
 					})
 			);
+		new Setting(containerEl)
+			.setName('Balance inlay hints')
+			.setDesc(
+				'Show the single-commodity difference (asserted minus accumulated) at the end of balance lines. Hidden when an entry ledger is set, because postings outside this file are unknown.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.inlayHints).onChange(async (value) => {
+					this.host.settings.inlayHints = value;
+					await this.host.saveSettings();
+				})
+			);
+
+		new Setting(containerEl).setName('Completion').setHeading();
+		new Setting(containerEl)
+			.setName('Complete payees')
+			.setDesc(
+				'Typing the first quoted field of a transaction line (2026-09-30 * "Am…) suggests payees found in the vault.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.completePayee).onChange(async (value) => {
+					this.host.settings.completePayee = value;
+					await this.host.saveSettings();
+				})
+			);
+		new Setting(containerEl)
+			.setName('Complete narrations')
+			.setDesc(
+				'Typing the second quoted field of a transaction line ("payee" "na…) suggests narrations found in the vault, and picking one closes the field.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.completeNarration).onChange(async (value) => {
+					this.host.settings.completeNarration = value;
+					await this.host.saveSettings();
+				})
+			);
+
+		new Setting(containerEl).setName('Fava').setHeading();
+		new Setting(containerEl)
+			.setName('Fava executable')
+			.setDesc('Path to Fava; leave empty to run `fava` from PATH. Only a program named `fava` is accepted.')
+			.addText((text) =>
+				text
+					.setPlaceholder('fava')
+					.setValue(this.host.settings.favaPath)
+					.onChange(async (value) => {
+						this.host.settings.favaPath = value;
+						await this.host.saveSettings();
+					})
+			);
+		new Setting(containerEl)
+			.setName('Run Fava on activate')
+			.setDesc('Start Fava against the entry ledger (or the active ledger file) when the plugin loads.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.runFavaOnActivate).onChange(async (value) => {
+					this.host.settings.runFavaOnActivate = value;
+					await this.host.saveSettings();
+				})
+			);
+
+		new Setting(containerEl).setName('Flag warnings').setHeading();
+		this.addFlagLevelSetting('!', 'Incomplete transactions (!)', 'Marker style for transactions flagged `!`. Default: warning.');
+		this.addFlagLevelSetting('*', 'Cleared transactions (*)', 'Marker style for transactions flagged `*` or `txn`. Default: none.');
+	}
+
+	private addFlagLevelSetting(flag: string, name: string, desc: string): void {
+		new Setting(this.containerEl)
+			.setName(name)
+			.setDesc(desc)
+			.addDropdown((dropdown) => {
+				for (const [label, level] of FLAG_LEVEL_OPTIONS) {
+					dropdown.addOption(level ?? 'none', label);
+				}
+				dropdown
+					.setValue(this.host.settings.flagWarnings[flag] ?? 'none')
+					.onChange(async (value) => {
+						this.host.settings.flagWarnings[flag] = parseFlagLevel(value);
+						await this.host.saveSettings();
+					});
+			});
 	}
 }
