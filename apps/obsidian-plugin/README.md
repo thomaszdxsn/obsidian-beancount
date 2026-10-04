@@ -60,7 +60,7 @@ pip install beancount
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
-  indexes.
+  indexes. Turn it off with **Complete payees**.
 - **Commodity completion**: typing a partial commodity where one carries an
   amount — a posting's unit after the number, a cost or price annotation, a
   `balance` amount, or after the `price` / `commodity` keyword of its
@@ -133,6 +133,12 @@ as the language. Saving a note extracts those bodies for `bean-check`.
 | Separator column | `separatorColumn` | `50` |
 | Bean-check executable | `beanCheckPath` | `""` (PATH) |
 | Entry ledger | `entryLedger` | `""` (check the saved file / fences alone) |
+| Complete payees | `completePayee` | `true` |
+| Complete narrations | `completeNarration` | `false` |
+| Fava executable | `favaPath` | `""` (PATH) |
+| Run Fava on activate | `runFavaOnActivate` | `false` |
+| Incomplete transactions (!) | `flagWarnings["!"]` | `"warning"` |
+| Cleared transactions (*) | `flagWarnings["*"]` | `null` (none) |
 
 `entryLedger` is a vault path such as `main.bean`. With it set, a `.bean`
 save checks that file's `include` chain; markdown fences are validated as if

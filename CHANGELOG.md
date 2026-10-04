@@ -12,7 +12,7 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   (CJK account segments; closed accounts omitted from completion).
 - Payee completion from historical transaction payees.
 - Posting auto-indent on Enter inside a beancount entry.
-- **Align decimal points** command; optional `alignOnSave`; instant
+- **Align decimal points** command (default `Mod+Shift+.`); optional `alignOnSave`; instant
   alignment when typing `.` (`instantAlignment`, `separatorColumn`).
 - **Insert today's date** (`YYYY-MM-DD`, default `Mod+Shift+D`).
 - Save-time `bean-check` diagnostics (inline + gutter) for `.bean` /
@@ -30,4 +30,8 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   `.bean` / `.beancount` files and beancount fences.
 - Narration completion: typing the second quoted field of a transaction
   suggests vault narrations and closes the field on pick. Off by default
-  (`completeNarration`).
+  (`completeNarration`). Payee completion can be turned off (`completePayee`).
+- Transaction flag markers (`flagWarnings`): `!` is a warning by default, `*`
+  is unmarked, so mixed incomplete/cleared ledgers get distinct underline
+  styles. Settings tab groups Alignment / Validation / Completion / Fava /
+  Flag warnings. **Run Fava** command (`favaPath`, `runFavaOnActivate`).
