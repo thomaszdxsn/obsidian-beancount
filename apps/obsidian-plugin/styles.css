@@ -5,6 +5,9 @@
 	text-decoration-skip-ink: none;
 }
 
+.cm-beancount-error-gutter {
+	cursor: pointer;
+}
 .cm-beancount-warning-underline {
 	text-decoration: underline wavy var(--text-warning, #d19a66);
 	text-decoration-skip-ink: none;

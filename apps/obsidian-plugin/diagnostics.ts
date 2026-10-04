@@ -120,19 +120,41 @@ class ErrorGutterMarker extends GutterMarker {
 
 const GUTTER_DOT = new ErrorGutterMarker();
 
-export const diagnosticsGutter = gutter({
-	class: ERROR_GUTTER_CLASS,
-	lineMarker(view: EditorView, block: BlockInfo) {
-		const line = view.state.doc.lineAt(block.from);
-		const marked = view.state.field(lineDiagnostics).some((diagnostic) => diagnostic.line === line.number - 1);
-		return marked ? GUTTER_DOT : null;
-	},
-	// Markers read the diagnostics field, which a run replaces without
-	// touching the document — the gutter must redraw on that too.
-	lineMarkerChange: (update) => update.startState.field(lineDiagnostics) !== update.state.field(lineDiagnostics),
-});
+/** Click on a gutter dot: the host shows the quick-fix menu for that line. */
+export interface DiagnosticClickHost {
+	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean;
+}
 
-export const diagnosticsExtension: Extension = [lineDiagnostics, diagnosticsView, diagnosticsGutter];
+export function createDiagnosticsGutter(host?: DiagnosticClickHost) {
+	return gutter({
+		class: ERROR_GUTTER_CLASS,
+		lineMarker(view: EditorView, block: BlockInfo) {
+			const line = view.state.doc.lineAt(block.from);
+			const marked = view.state.field(lineDiagnostics).some((diagnostic) => diagnostic.line === line.number - 1);
+			return marked ? GUTTER_DOT : null;
+		},
+		// Markers read the diagnostics field, which a run replaces without
+		// touching the document — the gutter must redraw on that too.
+		lineMarkerChange: (update) =>
+			update.startState.field(lineDiagnostics) !== update.state.field(lineDiagnostics),
+		domEventHandlers: host
+			? {
+					mousedown(view: EditorView, block: BlockInfo, event: Event) {
+						const line = view.state.doc.lineAt(block.from);
+						return host.onDiagnosticClick(view, line.number - 1, event as MouseEvent);
+					},
+			  }
+			: undefined,
+	});
+}
+
+export const diagnosticsGutter = createDiagnosticsGutter();
+
+export function createDiagnosticsExtension(host?: DiagnosticClickHost): Extension {
+	return [lineDiagnostics, diagnosticsView, host ? createDiagnosticsGutter(host) : diagnosticsGutter];
+}
+
+export const diagnosticsExtension: Extension = createDiagnosticsExtension();
 
 /**
  * Publish `diagnostics` to the CodeMirror view behind `editor` (empty: clear).
