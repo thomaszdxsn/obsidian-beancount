@@ -61,6 +61,11 @@ pip install beancount
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
   indexes. Turn it off with **Complete payees**.
+- **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
+  `balance`, …) in a `.bean` / `.beancount` file or a `beancount`/`bean` fence
+  offers the vscode-beancount templates. `txn` expands to `YYYY-MM-DD * "" ""`
+  with the caret in the payee quotes, so payee completion still runs. Tab walks
+  `$1`-style stops; today's date fills `$CURRENT_*`.
 - **Commodity completion**: typing a partial commodity where one carries an
   amount — a posting's unit after the number, a cost or price annotation, a
   `balance` amount, or after the `price` / `commodity` keyword of its

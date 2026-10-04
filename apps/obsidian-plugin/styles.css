@@ -26,6 +26,12 @@
 	color: var(--text-muted);
 }
 
+.beancount-snippet-suggest-meta {
+	white-space: pre-wrap;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
 .beancount-account-hover-name {
 	font-weight: 600;
 }

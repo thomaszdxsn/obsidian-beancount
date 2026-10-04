@@ -29,6 +29,7 @@ import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
+import { SnippetSession, SnippetSuggest, snippetTabExtension } from './snippet-suggest';
 import { extractCommodities, extractLinks, extractNarrations, extractTags } from './token-index';
 import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from './token-suggest';
 import { postingIndentExtension } from './posting-indent';
@@ -259,17 +260,27 @@ export default class BeancountPlugin extends Plugin {
 		const tagSuggest = new TagSuggest(this.app, tags);
 		const linkSuggest = new LinkSuggest(this.app, links);
 		const narrationSuggest = new NarrationSuggest(this.app, narrations, () => this.settings.completeNarration);
+		const snippetSession = new SnippetSession();
+		const snippetSuggest = new SnippetSuggest(this.app, snippetSession);
 		this.registerEditorSuggest(accountSuggest);
 		this.registerEditorSuggest(payeeSuggest);
 		this.registerEditorSuggest(commoditySuggest);
 		this.registerEditorSuggest(tagSuggest);
 		this.registerEditorSuggest(linkSuggest);
 		this.registerEditorSuggest(narrationSuggest);
+		this.registerEditorSuggest(snippetSuggest);
+		const popovers = [
+			accountSuggest,
+			payeeSuggest,
+			commoditySuggest,
+			tagSuggest,
+			linkSuggest,
+			narrationSuggest,
+			snippetSuggest,
+		];
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
-		this.registerEditorExtension(
-			postingIndentExtension([accountSuggest, payeeSuggest, commoditySuggest, tagSuggest, linkSuggest, narrationSuggest])
-		);
+		this.registerEditorExtension(postingIndentExtension(popovers));
 		// Typing `.` in a posting amount aligns that transaction block and
 		// parks the caret after the point; the setting can silence it.
 		this.registerEditorExtension(instantAlignmentExtension(this));
@@ -286,6 +297,8 @@ export default class BeancountPlugin extends Plugin {
 		// the diagnostic markers; a setting change reapplies them without an edit.
 		this.registerEditorExtension(this.balanceInlays.extension);
 		this.registerEditorExtension(this.flagWarnings.extension);
+		// Tab walks snippet stops; yields while a completion popover is open.
+		this.registerEditorExtension(snippetTabExtension(snippetSession, popovers));
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',

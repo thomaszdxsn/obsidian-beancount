@@ -1,8 +1,9 @@
 # Obsidian Beancount
 
 Edit [Beancount](https://beancount.github.io/) ledgers in Obsidian: syntax
-highlighting, account/payee completion, posting auto-indent, decimal-point
-alignment, date insert, outline, and `bean-check` validation on save.
+highlighting, account/payee completion, directive snippets, posting auto-indent,
+decimal-point alignment, date insert, outline, and `bean-check` validation on
+save.
 
 Desktop only — validation shells out to the `bean-check` executable.
 
@@ -111,6 +112,10 @@ A missing or rejected `bean-check` shows:
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
   indexes.
+- **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
+  `balance`, …) offers the vscode-beancount templates. `txn` expands to
+  `YYYY-MM-DD * "" ""` with the caret in the payee quotes, so payee completion
+  still runs. Tab walks `$1`-style stops; today's date fills `$CURRENT_*`.
 - **Posting auto-indent**: pressing Enter inside a beancount entry opens the
   next line already indented two spaces — the first posting under a
   transaction header, or the next posting/metadata line while the entry

@@ -50,6 +50,7 @@ export interface MockCaret {
 
 export const EditorSelection = {
 	cursor: (pos: number): MockCaret => ({ anchor: pos, head: pos }),
+	range: (from: number, to: number): MockCaret => ({ anchor: from, head: to }),
 	create: (ranges: MockCaret[]): { ranges: MockCaret[] } => ({ ranges }),
 };
 
