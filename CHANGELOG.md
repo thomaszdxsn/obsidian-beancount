@@ -46,3 +46,9 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
 
 - In-flight `bean-check` results are discarded when the plugin unloads, so a
   late report cannot mark the editor or raise a Notice.
+- Account completion and hover read markdown notes' `beancount` / `bean`
+  fences only, so colon-joined prose (`PG_DATA_DIR:-supabase-db-data`,
+  `LangGraph长期记忆SDK:Semantic`) no longer shows up as an account.
+- `.bean` / `.beancount` editors use the monospace font, so space-padded
+  amounts line up even when the text font is proportional.
+- Account hover card has padding.

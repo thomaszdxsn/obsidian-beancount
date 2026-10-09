@@ -35,13 +35,26 @@
 	color: var(--text-muted);
 }
 
+.beancount-account-hover {
+	padding: var(--size-4-2, 8px) var(--size-4-3, 12px);
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-tight, 1.3);
+}
+
 .beancount-account-hover-name {
-	font-weight: 600;
+	font-weight: var(--font-semibold, 600);
 }
 
 .beancount-account-hover ul {
-	margin: 0.25em 0 0;
+	margin: var(--size-4-1, 4px) 0 0;
 	padding-left: 1.2em;
+	color: var(--text-muted);
+}
+
+/* Ledger files: alignment pads with spaces, which only lines up in a fixed-pitch font. */
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-editor .cm-scroller,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-editor .cm-line {
+	font-family: var(--font-monospace);
 }
 
 .beancount-outline-empty {

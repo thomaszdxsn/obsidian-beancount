@@ -7,6 +7,7 @@
  */
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
+import { ledgerSource } from './fences';
 import { VaultIndex } from './vault-index';
 import type { VaultCache } from './vault-index';
 
@@ -152,9 +153,11 @@ export class AccountIndex implements VaultCache {
 		this.names = new VaultIndex(extractAccounts, usage);
 	}
 
+	/** Markdown notes contribute only their beancount fences; ledger files all of it. */
 	setFileContent(path: string, content: string): void {
-		this.names.setFileContent(path, content);
-		const directives = extractAccountDirectives(content);
+		const ledger = ledgerSource(path, content);
+		this.names.setFileContent(path, ledger);
+		const directives = extractAccountDirectives(ledger);
 		if (directives.size === 0) this.directivesByPath.delete(path);
 		else this.directivesByPath.set(path, directives);
 		this.merged = null;

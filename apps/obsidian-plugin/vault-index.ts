@@ -204,8 +204,10 @@ export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultCac
 		if (isTextFile(file)) {
 			// A dropped in-flight read must be replaced; an untracked
 			// destination (`.txt` → `.md`, or a file edited to string-less
-			// prose) needs a first read.
-			if (dropped.length > 0 || !moved) refresh(file);
+			// prose) needs a first read; and a note ↔ ledger rename
+			// (`x.md` → `x.bean`) changes what is ledger text (`ledgerSource`).
+			const kindChanged = oldPath.endsWith('.md') !== file.path.endsWith('.md');
+			if (dropped.length > 0 || !moved || kindChanged) refresh(file);
 		} else {
 			for (const index of indexes) index.removeFile(file.path);
 			// Folder rename: the re-keyed children keep their cached content,

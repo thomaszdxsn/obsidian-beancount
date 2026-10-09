@@ -22,8 +22,10 @@ pip install beancount
   available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
   has no inner bracket nodes.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
-  editor suggests still-open account names found in the vault. Names are
-  extracted per file with a regex, cached, and invalidated when files are
+  editor suggests still-open account names found in the vault's ledger text:
+  whole `.bean` / `.beancount` files, and only the `beancount` / `bean` fences
+  of markdown notes (prose such as `PG_DATA_DIR:-x` never becomes a name).
+  Names are extracted per file with a regex, cached, and invalidated when files are
   created, modified, deleted or renamed. Segments after the capitalized root
   may hold non-ASCII letters and CJK middle dots (`Expenses:餐饮:午饭`,
   `Expenses:カード・ローン`); other punctuation and symbols (`，`, `：`, `☕`) end a
@@ -93,6 +95,8 @@ pip install beancount
   saved. Instant alignment (on by default) intercepts `.` in a posting amount,
   aligns that transaction block onto the separator column (default 50), and
   leaves the caret just after the point — one undo restores the insert.
+  Alignment pads with spaces, so `.bean` / `.beancount` editors switch to the
+  monospace font (`--font-monospace`); fences are already code blocks.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
   selection when there is one. It ships with the default hotkey `Mod+Shift+D`;
