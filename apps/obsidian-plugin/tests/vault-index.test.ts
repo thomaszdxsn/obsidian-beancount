@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import type { Plugin, PluginManifest } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
-import { extractAccounts } from '../account-index';
+import { AccountIndex, extractAccounts } from '../account-index';
 import { extractPayees } from '../payee-index';
 import { registerVaultIndex, VaultIndex } from '../vault-index';
 import { FakeVault, flush } from './fakes';
@@ -269,6 +269,24 @@ describe('registerVaultIndex', () => {
 		await vault.emit('rename', renamed, 'note.txt');
 		expect(index.values()).toEqual(['Assets:Cash']);
 		expect(vault.reads).toEqual(['note.md']);
+	});
+
+	it('re-reads a note ↔ ledger rename, whose ledger text differs', async () => {
+		const vault = new FakeVault();
+		vault.write('x.md', 'Prose:Name\n```bean\n  Expenses:Food  1 USD\n```');
+		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
+		const accounts = new AccountIndex();
+		registerVaultIndex(plugin as unknown as Plugin, accounts);
+		await flush();
+		expect(accounts.match('')).toEqual(['Expenses:Food']);
+
+		await vault.emit('rename', vault.rename('x.md', 'x.bean'), 'x.md');
+		await flush();
+		expect(accounts.match('')).toEqual(['Expenses:Food', 'Prose:Name']);
+
+		await vault.emit('rename', vault.rename('x.bean', 'x.md'), 'x.bean');
+		await flush();
+		expect(accounts.match('')).toEqual(['Expenses:Food']);
 	});
 
 	it('drops the entry when a rename makes the file unindexable', async () => {

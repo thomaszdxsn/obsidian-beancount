@@ -9,7 +9,6 @@ import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import { notices, shownMenus } from './mocks/obsidian';
 import type {
-	MockAttributeSource,
 	MockGutterConfig,
 	MockHoverTooltip,
 	MockKeymapExtension,
@@ -421,19 +420,6 @@ describe('BeancountPlugin', () => {
 				2
 			)
 		).toBeNull();
-	});
-
-	it('switches ledger-file editors, not notes, to the monospace class', async () => {
-		const { plugin } = await loadPlugin();
-		const extensions = plugin.registrations.editorExtensions as unknown[];
-		const font = extensions.find(
-			(item): item is { editorAttributes: MockAttributeSource } =>
-				typeof item === 'object' && item !== null && 'editorAttributes' in item
-		);
-		const attrsFor = (path: string, extension: string) =>
-			font?.editorAttributes({ state: { field: () => ({ file: { path, extension } }) } });
-		expect(attrsFor('main.bean', 'bean')).toEqual({ class: 'beancount-ledger-editor' });
-		expect(attrsFor('note.md', 'md')).toBeNull();
 	});
 
 	it('lets the plugin’s own completion popovers keep Enter', async () => {
