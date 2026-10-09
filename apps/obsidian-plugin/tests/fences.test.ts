@@ -3,7 +3,35 @@
  * bodies, then map bean-check's temp-file lines back onto the host document.
  */
 import { describe, expect, it } from 'vitest';
-import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from '../fences';
+import { buildFenceLedger, extractBeancountFences, isSafeIncludePath, ledgerSource } from '../fences';
+
+describe('ledgerSource', () => {
+	it('keeps a ledger file whole, prose and comments included', () => {
+		const text = 'PG_DATA_DIR:-x\n2020-01-01 open Assets:Cash\n';
+		expect(ledgerSource('main.bean', text)).toBe(text);
+		expect(ledgerSource('dir/x.beancount', text)).toBe(text);
+	});
+
+	it('reduces a note to its ledger fence bodies, joined in document order', () => {
+		const note = [
+			'Prose Notes:Here',
+			'```beancount',
+			'2020-01-01 open Assets:Cash',
+			'```',
+			'```python',
+			'Python:Code = 1',
+			'```',
+			'~~~bean',
+			'  Expenses:Food  1 USD',
+			'~~~',
+		].join('\n');
+		expect(ledgerSource('note.md', note)).toBe('2020-01-01 open Assets:Cash\n  Expenses:Food  1 USD');
+	});
+
+	it('reduces a note without ledger fences to nothing', () => {
+		expect(ledgerSource('note.md', 'LangGraph长期记忆SDK:Semantic')).toBe('');
+	});
+});
 
 describe('extractBeancountFences', () => {
 	it('returns nothing for prose without a fence', () => {

@@ -39,7 +39,8 @@ import { FAVA_HOST, favaUrl, isFavaBinary, normalizeFavaPort, openFavaUrl, runFa
 import type { FavaOpener, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
+import { ledgerFontExtension } from './ledger-font';
+import { buildFenceLedger, extractBeancountFences, isSafeIncludePath, ledgerSource } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
@@ -314,19 +315,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// history, and the file that already holds `open` directives.
 		const accounts = new AccountIndex(this.usage);
 		const payees = new VaultIndex(extractPayees, this.usage);
-		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`) and
-		// prose amounts (`- 10 GB`) collide with ledger token shapes, so on
-		// notes these extractors see only the beancount fence bodies; ledger
-		// files are scanned whole.
-		const ledgerText = (path: string, content: string): string =>
-			path.endsWith('.md')
-				? extractBeancountFences(content)
-						.map((fence) => fence.lines.join('\n'))
-						.join('\n')
-				: content;
-		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerText(path, content)), this.usage);
-		const tags = new VaultIndex((content, path) => extractTags(ledgerText(path, content)), this.usage);
-		const links = new VaultIndex((content, path) => extractLinks(ledgerText(path, content)), this.usage);
+		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`), prose
+		// amounts (`- 10 GB`) and colon-joined words (`PG_DATA_DIR:-x`) collide
+		// with ledger token shapes, so on notes these extractors (and the
+		// account index) see only the beancount fence bodies; ledger files are
+		// scanned whole.
+		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerSource(path, content)), this.usage);
+		const tags = new VaultIndex((content, path) => extractTags(ledgerSource(path, content)), this.usage);
+		const links = new VaultIndex((content, path) => extractLinks(ledgerSource(path, content)), this.usage);
 		const narrations = new VaultIndex(extractNarrations, this.usage);
 		registerVaultIndex(this, accounts, payees, commodities, tags, links, narrations, this.pairings, this.openFiles);
 		const accountSuggest = new AccountSuggest(this.app, accounts);
@@ -375,6 +371,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		this.registerEditorExtension(this.flagWarnings.extension);
 		// Tab walks snippet stops; yields while a completion popover is open.
 		this.registerEditorExtension(snippetTabExtension(snippetSession, popovers));
+		// Ledger files render monospace so space-padded amounts line up.
+		this.registerEditorExtension(ledgerFontExtension());
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',

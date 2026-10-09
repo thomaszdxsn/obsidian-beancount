@@ -433,4 +433,22 @@ describe('AccountIndex', () => {
 		expect(index.match('Expenses:')).toEqual(['Expenses:Food']);
 		expect(index.match('Assets:')).toEqual(['Assets:Cash']);
 	});
+
+	it('indexes a note’s beancount fences but not its prose', () => {
+		const index = new AccountIndex();
+		index.setFileContent(
+			'note.md',
+			[
+				'LangGraph长期记忆SDK:Semantic and PG_DATA_DIR:-supabase-db-data',
+				'```beancount',
+				'2020-01-01 open Assets:Cash USD',
+				'  Expenses:Food  10.00 USD',
+				'```',
+			].join('\n')
+		);
+		index.setFileContent('ledger.bean', '; Notes:Prose in a ledger comment still counts');
+		expect(index.match('')).toEqual(['Assets:Cash', 'Expenses:Food', 'Notes:Prose']);
+		expect(index.record('Assets:Cash')).toEqual({ open: '2020-01-01', currencies: ['USD'] });
+		expect(index.has('PG_DATA_DIR:-supabase-db-data')).toBe(false);
+	});
 });

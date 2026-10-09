@@ -223,5 +223,16 @@ export function hoverTooltip(
 	return { source, options };
 }
 
+/** `EditorView.editorAttributes.of` — tests call the captured source. */
+export type MockAttributeSource = (view: {
+	state: { field(field: unknown, require?: boolean): unknown };
+}) => Record<string, string> | null;
+
+export const EditorView = {
+	editorAttributes: {
+		of: (source: MockAttributeSource): { editorAttributes: MockAttributeSource } => ({ editorAttributes: source }),
+	},
+};
+
 /** Base the balance-hint widget extends; tests never draw it. */
 export class WidgetType {}

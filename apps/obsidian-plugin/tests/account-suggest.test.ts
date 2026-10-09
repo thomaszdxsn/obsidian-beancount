@@ -10,7 +10,7 @@ import { createEditor, FakeVault, flush } from './fakes';
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
 
 /** A vault with completable accounts, for trigger expectations. */
-const ACCOUNTS = { 'a.md': 'Assets:Cash:Wallet Expenses:Food' };
+const ACCOUNTS = { 'a.bean': 'Assets:Cash:Wallet Expenses:Food' };
 
 function trigger(suggest: AccountSuggest, line: string, ch = line.length) {
 	const editor = createEditor([line]);
@@ -79,7 +79,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('triggers on and completes accounts with non-ASCII segments', async () => {
-		const { suggest } = setup({ 'a.md': '  Expenses:餐饮:午饭  30.00 CNY\n  Expenses:餐饮:晚饭  50.00 CNY' });
+		const { suggest } = setup({ 'a.bean': '  Expenses:餐饮:午饭  30.00 CNY\n  Expenses:餐饮:晚饭  50.00 CNY' });
 		await flush();
 		expect(trigger(suggest, '  Expenses:餐饮:午')).toEqual({
 			start: { line: 0, ch: 2 },
@@ -93,7 +93,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when the cursor sits inside a non-ASCII segment', async () => {
-		const { suggest } = setup({ 'a.md': '  Expenses:餐饮:午饭  30.00 CNY' });
+		const { suggest } = setup({ 'a.bean': '  Expenses:餐饮:午饭  30.00 CNY' });
 		await flush();
 		// Picking a suggestion here would replace `Expenses:餐` and leave `饮` behind.
 		expect(trigger(suggest, '  Expenses:餐饮  30 CNY', 12)).toBeNull();
@@ -119,7 +119,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet in the narration field', async () => {
-		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Narnia:Bank' });
+		const { suggest } = setup({ 'a.bean': 'Assets:Cash:Wallet Expenses:Food Narnia:Bank' });
 		await flush();
 		// The narration suggest owns that field: `"Nar` prefixes the cached
 		// `Narnia:Bank` just the same — the ownership guard must decide.
@@ -127,7 +127,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet in tag and link positions', async () => {
-		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Travel:Air' });
+		const { suggest } = setup({ 'a.bean': 'Assets:Cash:Wallet Expenses:Food Travel:Air' });
 		await flush();
 		// The tag/link suggests own those tokens: `#Tr`/`^Tr` prefix the
 		// cached `Travel:Air` just the same.
@@ -136,7 +136,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet in a posting commodity slot', async () => {
-		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet Expenses:Food Uber:Rides' });
+		const { suggest } = setup({ 'a.bean': 'Assets:Cash:Wallet Expenses:Food Uber:Rides' });
 		await flush();
 		// The commodity suggest owns the unit position: `10.00 U` prefixes
 		// the cached `Uber:Rides` just the same.
@@ -163,7 +163,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('triggers on bare capitalized words as completion queries', async () => {
-		const { suggest } = setup({ 'a.md': 'Assets:Cash:Wallet' });
+		const { suggest } = setup({ 'a.bean': 'Assets:Cash:Wallet' });
 		await flush();
 		// Root-only and single-letter queries complete against real accounts.
 		expect(suggest.getSuggestions(contextFor('Assets'))).toEqual(['Assets:Cash:Wallet']);
@@ -172,7 +172,7 @@ describe('AccountSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet on capitalized words that prefix no cached account', async () => {
-		const { suggest } = setup({ 'a.md': 'Assets:Cash' });
+		const { suggest } = setup({ 'a.bean': 'Assets:Cash' });
 		await flush();
 		expect(trigger(suggest, '100.00 USD')).toBeNull();
 		expect(suggest.getSuggestions(contextFor('USD'))).toEqual([]);
@@ -182,8 +182,8 @@ describe('AccountSuggest.onTrigger', () => {
 describe('AccountSuggest suggestions', () => {
 	it('returns prefix matches from the vault index', async () => {
 		const { suggest } = setup({
-			'a.md': 'Assets:Cash:Wallet Assets:Broker:IBKR',
-			'b.md': 'Expenses:Food:Restaurants',
+			'a.bean': 'Assets:Cash:Wallet Assets:Broker:IBKR',
+			'b.bean': 'Expenses:Food:Restaurants',
 		});
 		await flush();
 		expect(suggest.getSuggestions(contextFor('Assets:Ca'))).toEqual(['Assets:Cash:Wallet']);
@@ -194,7 +194,7 @@ describe('AccountSuggest suggestions', () => {
 	it('never suggests the exact token being typed', async () => {
 		// The live buffer feeds the index, so the typed token is a "known"
 		// account; offering it back would make Enter accept a no-op.
-		const { suggest } = setup({ 'a.md': '  Assets:Cash' });
+		const { suggest } = setup({ 'a.bean': '  Assets:Cash' });
 		await flush();
 		expect(suggest.getSuggestions(contextFor('Assets:Cash'))).toEqual([]);
 		expect(suggest.getSuggestions(contextFor('Assets:Ca'))).toEqual(['Assets:Cash']);

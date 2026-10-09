@@ -8,7 +8,14 @@ import { parseBeanCheckErrors, toLineDiagnostics } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import type { FakeSettingContainer, Plugin as RecordingPlugin } from './mocks/obsidian';
 import { notices, shownMenus } from './mocks/obsidian';
-import type { MockGutterConfig, MockHoverTooltip, MockKeymapExtension, MockLanguageDataExtension, MockView } from './mocks/codemirror';
+import type {
+	MockAttributeSource,
+	MockGutterConfig,
+	MockHoverTooltip,
+	MockKeymapExtension,
+	MockLanguageDataExtension,
+	MockView,
+} from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
@@ -167,6 +174,29 @@ describe('BeancountPlugin', () => {
 		expect(commodities.getSuggestions({ query: 'US' })).toEqual(['USD']);
 		expect(tags.getSuggestions({ query: '#tr' })).toEqual(['#trip']);
 		expect(links.getSuggestions({ query: '^r' })).toEqual(['^receipt']);
+	});
+
+	it('completes and hovers note accounts from beancount fences only, across edits', async () => {
+		const vault = new FakeVault();
+		const note = vault.write(
+			'note.md',
+			['PG_DATA_DIR:-supabase-db-data', '```beancount', '2020-01-01 open Assets:Cash USD', '```'].join('\n')
+		);
+		const { plugin } = await loadPlugin(vault);
+		await flush();
+		const accounts = plugin.registrations.editorSuggests[0] as { getSuggestions(context: { query: string }): string[] };
+		const hover = plugin.registrations.editorExtensions[3] as MockHoverTooltip;
+		const hoverAt = (text: string) =>
+			hover.source({ state: { doc: { lineAt: () => ({ from: 0, to: text.length, text }) } } }, 0);
+		expect(accounts.getSuggestions({ query: '' })).toEqual(['Assets:Cash']);
+		expect(hoverAt('PG_DATA_DIR:-supabase-db-data')).toBeNull();
+
+		// A later edit that moves the account out of the fence drops it.
+		vault.write('note.md', 'Assets:Cash in prose now\n```beancount\n  Expenses:Food  1 USD\n```');
+		await vault.emit('modify', note);
+		await flush();
+		expect(accounts.getSuggestions({ query: '' })).toEqual(['Expenses:Food']);
+		expect(hoverAt('Assets:Cash')).toBeNull();
 	});
 
 	it('ranks a stored frecency pick first after reload', async () => {
@@ -391,6 +421,19 @@ describe('BeancountPlugin', () => {
 				2
 			)
 		).toBeNull();
+	});
+
+	it('switches ledger-file editors, not notes, to the monospace class', async () => {
+		const { plugin } = await loadPlugin();
+		const extensions = plugin.registrations.editorExtensions as unknown[];
+		const font = extensions.find(
+			(item): item is { editorAttributes: MockAttributeSource } =>
+				typeof item === 'object' && item !== null && 'editorAttributes' in item
+		);
+		const attrsFor = (path: string, extension: string) =>
+			font?.editorAttributes({ state: { field: () => ({ file: { path, extension } }) } });
+		expect(attrsFor('main.bean', 'bean')).toEqual({ class: 'beancount-ledger-editor' });
+		expect(attrsFor('note.md', 'md')).toBeNull();
 	});
 
 	it('lets the plugin’s own completion popovers keep Enter', async () => {

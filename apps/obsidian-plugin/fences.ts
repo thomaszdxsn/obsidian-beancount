@@ -69,6 +69,18 @@ function isClosingFence(line: string, marker: string, minLen: number): boolean {
 	return close !== null && close[2][0] === marker && close[2].length >= minLen;
 }
 
+/**
+ * The ledger text of a vault file: a markdown note contributes only its
+ * `beancount`/`bean` fence bodies, a `.bean`/`.beancount` file all of it.
+ * Prose shapes (`#project`, `^block-id`, `- 10 GB`, `PG_DATA_DIR:-x`) would
+ * otherwise pass for ledger tokens.
+ */
+export function ledgerSource(path: string, content: string): string {
+	if (!path.endsWith('.md')) return content;
+	return extractBeancountFences(content)
+		.map((fence) => fence.lines.join('\n'))
+		.join('\n');
+}
 
 /**
  * Whether `path` can be interpolated into one `include "..."` line: no CR/LF,
