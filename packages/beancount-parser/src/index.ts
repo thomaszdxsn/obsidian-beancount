@@ -477,15 +477,23 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   }
 
   // Span of the rule's own text: ends before the newline that terminates it.
+  // A directive that ends at EOF ends on its last token, which may be a
+  // string spanning several lines.
   private location(ctx: ParserRuleContext): SourceLocation {
     const start = ctx.start!;
     const stop = ctx.stop ?? start;
     const atLineEnd = stop.type === AntlrBeancountParser.EOL || stop.type === Token.EOF;
+    if (atLineEnd) {
+      return { start: { line: start.line, column: start.column }, end: { line: stop.line, column: stop.column } };
+    }
+    const text = stop.text ?? '';
+    const lastBreak = text.lastIndexOf('\n');
+    const breaks = lastBreak === -1 ? 0 : text.split('\n').length - 1;
     return {
       start: { line: start.line, column: start.column },
       end: {
-        line: stop.line,
-        column: atLineEnd ? stop.column : stop.column + (stop.text?.length ?? 0),
+        line: stop.line + breaks,
+        column: lastBreak === -1 ? stop.column + text.length : text.length - lastBreak - 1,
       },
     };
   }
