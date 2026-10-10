@@ -1,5 +1,6 @@
 import type { App, Editor, EditorSuggestContext, TFile } from 'obsidian';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Transaction } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import { extractPayees } from '../payee-index';
 import { PayeeSuggest } from '../payee-suggest';
@@ -206,8 +207,13 @@ describe('payee completion after txn', () => {
 type Run = (view: EditorView) => boolean;
 
 function tabRun(session: SnippetSession, suggests: Array<{ context: unknown }> = []): Run {
-	const extension = snippetTabExtension(session, suggests) as unknown as MockKeymapExtension;
-	return extension.bindings[0].run as unknown as Run;
+	const extension = snippetTabExtension(session, suggests);
+	const list = Array.isArray(extension) ? extension : [extension];
+	const keymap = list.find(
+		(item): item is MockKeymapExtension => typeof item === 'object' && item !== null && 'bindings' in item
+	);
+	if (!keymap) throw new Error('missing tab binding');
+	return keymap.bindings[0].run as unknown as Run;
 }
 
 describe('snippetTabExtension', () => {
@@ -303,6 +309,97 @@ describe('snippetTabExtension', () => {
 		const view = createView('x y', [{ anchor: 1 }]);
 		expect(run(view as unknown as EditorView)).toBe(false);
 		expect(view.dispatched).toEqual([]);
+		expect(session.active).toBe(true);
+	});
+});
+
+interface GuardPlugin {
+	cls: new (view: never) => { update(update: unknown): void };
+}
+
+function noteEdit(
+	session: SnippetSession,
+	view: unknown,
+	userEvent: string | undefined,
+	changes: { from: number; to: number }[]
+): void {
+	const extension = snippetTabExtension(session, []);
+	const list = Array.isArray(extension) ? extension : [extension];
+	const plugin = list.find((item): item is GuardPlugin => typeof item === 'object' && item !== null && 'cls' in item);
+	if (!plugin) throw new Error('missing session guard');
+	new plugin.cls({} as never).update({
+		view,
+		transactions: [
+			{
+				annotation: (type: unknown) => (type === Transaction.userEvent ? userEvent : undefined),
+				changes: {
+					iterChanges(f: (from: number, to: number) => void): void {
+						for (const change of changes) f(change.from, change.to);
+					},
+				},
+			},
+		],
+	});
+}
+
+const TWO_STOPS = {
+	text: 'ab',
+	stops: [
+		{ index: 1, from: 1, to: 3 },
+		{ index: 2, from: 4, to: 6 },
+	],
+};
+
+describe('snippet session edits', () => {
+	const view = {};
+
+	it('ends the session on undo or redo even when the range sits inside a stop', () => {
+		for (const userEvent of ['undo', 'redo']) {
+			const session = new SnippetSession();
+			session.start(0, TWO_STOPS, view);
+			noteEdit(session, view, userEvent, [{ from: 1, to: 3 }]);
+			expect(session.active).toBe(false);
+		}
+	});
+
+	it('ends the session when a change is outside the pending stops', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		noteEdit(session, view, 'input.type', [{ from: 0, to: 0 }]);
+		expect(session.active).toBe(false);
+	});
+
+	it('keeps the session when the edit is inside a pending stop', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		noteEdit(session, view, 'input.type', [{ from: 1, to: 3 }]);
+		expect(session.active).toBe(true);
+		noteEdit(session, view, undefined, [{ from: 5, to: 6 }]);
+		expect(session.active).toBe(true);
+	});
+
+	it('keeps an insertion at a zero-width stop and ends one that misses it', () => {
+		const session = new SnippetSession();
+		const owner = {};
+		session.start(0, { text: 'x', stops: [{ index: 1, from: 2, to: 2 }] }, owner);
+		noteEdit(session, owner, undefined, [{ from: 2, to: 2 }]);
+		expect(session.active).toBe(true);
+		noteEdit(session, owner, undefined, [{ from: 1, to: 1 }]);
+		expect(session.active).toBe(false);
+	});
+
+	it('ends the session when an edit lands in a stop Tab has already left', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		expect(session.advance(3, view)).not.toBeNull();
+		noteEdit(session, view, undefined, [{ from: 1, to: 2 }]);
+		expect(session.active).toBe(false);
+	});
+
+	it('ignores an undo in a different editor', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		noteEdit(session, {}, 'undo', [{ from: 0, to: 1 }]);
 		expect(session.active).toBe(true);
 	});
 });

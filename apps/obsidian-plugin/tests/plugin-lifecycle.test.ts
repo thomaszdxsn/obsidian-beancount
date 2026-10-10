@@ -184,6 +184,8 @@ function attachPane(extension: unknown, text: string, extensionName: string): Hi
 		// The separator ruler touches `document`; node tests have no DOM.
 		return null;
 	}
+	// Plugins without decorations (the snippet-session guard) paint nothing.
+	if (!installed.decorations) return null;
 	return pane;
 }
 
@@ -267,26 +269,29 @@ describe('payee autofill', () => {
 
 		const typing = createEditor(['2026-10-02 * "Ca']);
 		Object.assign(suggest, {
-			context: { start: { line: 0, ch: 13 }, end: { line: 0, ch: 15 }, editor: typing },
+			context: { start: { line: 0, ch: 14 }, end: { line: 0, ch: 16 }, editor: typing },
 		});
 		suggest.selectSuggestion('Cafe', {} as MouseEvent);
-		expect(typing.replacements.map((entry) => entry.replacement).join('\n')).toContain('Expenses:Food');
-		expect(typing.replacements.map((entry) => entry.replacement).join('\n')).toContain('Assets:Cash');
+		expect(typing.getValue()).toBe(['2026-10-02 * "Cafe"', '  Expenses:Food  4.50 USD', '  Assets:Cash'].join('\n'));
 
 		const unknown = createEditor(['2026-10-02 * "No']);
 		Object.assign(suggest, {
-			context: { start: { line: 0, ch: 13 }, end: { line: 0, ch: 15 }, editor: unknown },
+			context: { start: { line: 0, ch: 14 }, end: { line: 0, ch: 16 }, editor: unknown },
 		});
 		suggest.selectSuggestion('Nope', {} as MouseEvent);
-		expect(unknown.replacements.map((entry) => entry.replacement)).toEqual(['Nope"']);
+		expect(unknown.replacements).toEqual([
+			{ replacement: 'Nope"', from: { line: 0, ch: 14 }, to: { line: 0, ch: 16 } },
+		]);
 
 		plugin.settings.payeeAutofill = false;
 		const silenced = createEditor(['2026-10-02 * "Ca']);
 		Object.assign(suggest, {
-			context: { start: { line: 0, ch: 13 }, end: { line: 0, ch: 15 }, editor: silenced },
+			context: { start: { line: 0, ch: 14 }, end: { line: 0, ch: 16 }, editor: silenced },
 		});
 		suggest.selectSuggestion('Cafe', {} as MouseEvent);
-		expect(silenced.replacements.map((entry) => entry.replacement)).toEqual(['Cafe"']);
+		expect(silenced.replacements).toEqual([
+			{ replacement: 'Cafe"', from: { line: 0, ch: 14 }, to: { line: 0, ch: 16 } },
+		]);
 	});
 });
 
@@ -453,6 +458,200 @@ describe('open-triggered validation', () => {
 
 		expect(runs).toBe(1);
 		expect(published(again)).toEqual([{ line: 1, message: 'bad fence' }]);
+	});
+});
+
+describe('open during a re-check', () => {
+	const stored = "Invalid reference to unknown account 'Assets:Cash'";
+
+	function shift(editor: FakeEditor, line: number): void {
+		editor.cm.dispatch({ effects: [setLineDiagnostics.of([{ line, message: stored }])] });
+	}
+
+	it('does not replay stale line numbers while a child-save re-check is debounced, and still runs it', async () => {
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'include "child.bean"\n');
+		const child = vault.write('child.bean', '2026-10-01 * "A"\n  Assets:Cash  1.00 USD\n');
+		stampMtime(main, 10);
+		stampMtime(child, 20);
+		const editor = createEditor(['2026-10-01 * "A"', '  Assets:Cash  1.00 USD']);
+		const { plugin, opened, leaves } = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		let runs = 0;
+		plugin.beanCheckRunner = async () => {
+			runs += 1;
+			return { stderr: `/vault/child.bean:2:       ${stored}\n`, missing: false };
+		};
+		leaves.push({ view: { file: child, editor } });
+		opened[0](child);
+		await delay(600);
+		expect(runs).toBe(1);
+		expect(published(editor)).toEqual([{ line: 1, message: stored }]);
+
+		// A child save does not change the entry ledger's mtime. Markers have
+		// followed an edit; the stored report still names the old line.
+		shift(editor, 4);
+		await vault.emit('modify', child);
+		opened[0](child);
+		expect(published(editor)).toEqual([{ line: 4, message: stored }]);
+
+		await delay(600);
+		expect(runs).toBe(2);
+		expect(published(editor)).toEqual([{ line: 1, message: stored }]);
+
+		// Idle again: the same mtime replays the fresh report and does not check.
+		shift(editor, 4);
+		opened[0](child);
+		expect(published(editor)).toEqual([{ line: 1, message: stored }]);
+		await delay(600);
+		expect(runs).toBe(2);
+	});
+
+	it('does not replay stale line numbers while the entry-ledger check is in flight, and schedules a follow-up', async () => {
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'include "child.bean"\n');
+		const child = vault.write('child.bean', '2026-10-01 * "A"\n  Assets:Cash  1.00 USD\n');
+		stampMtime(main, 10);
+		const editor = createEditor(['2026-10-01 * "A"', '  Assets:Cash  1.00 USD']);
+		const { plugin, opened, leaves } = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		const pending: Array<(run: BeanCheckRun) => void> = [];
+		let runs = 0;
+		plugin.beanCheckRunner = async () => {
+			runs += 1;
+			if (runs === 1) return { stderr: `/vault/child.bean:2:       ${stored}\n`, missing: false };
+			if (runs === 2) {
+				return await new Promise<BeanCheckRun>((resolve) => {
+					pending.push(resolve);
+				});
+			}
+			return { stderr: `/vault/child.bean:5:       follow-up\n`, missing: false };
+		};
+		leaves.push({ view: { file: child, editor } });
+		opened[0](child);
+		await delay(600);
+		expect(runs).toBe(1);
+
+		await vault.emit('modify', child);
+		await delay(600);
+		expect(runs).toBe(2);
+		expect(pending).toHaveLength(1);
+		shift(editor, 4);
+		opened[0](child);
+		expect(published(editor)).toEqual([{ line: 4, message: stored }]);
+		expect(runs).toBe(2);
+
+		pending[0]({ stderr: '/vault/child.bean:3:       inflight\n', missing: false });
+		await flush();
+		expect(published(editor)).toEqual([{ line: 2, message: 'inflight' }]);
+
+		await delay(600);
+		expect(runs).toBe(3);
+		expect(published(editor)).toEqual([{ line: 4, message: 'follow-up' }]);
+	});
+
+	it('resolves the open target by path instead of scanning every vault file', async () => {
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'option "title" "Main"\n');
+		const child = vault.write('child.bean', '2026-10-01 * "A"\n');
+		stampMtime(main, 4);
+		for (let i = 0; i < 8; i += 1) vault.write(`pad-${i}.bean`, '2026-10-01 * "x"\n');
+		const { plugin, opened } = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		plugin.beanCheckRunner = async () => ({ stderr: '', missing: false });
+		let scans = 0;
+		const getFiles = vault.api.getFiles.bind(vault.api);
+		vault.api.getFiles = () => {
+			scans += 1;
+			return getFiles();
+		};
+
+		opened[0](child);
+		expect(scans).toBe(0);
+		await delay(600);
+		expect(scans).toBe(1);
+	});
+
+	it('resolves each reported file once per run, including a repeated and a backslash path', async () => {
+		const vault = new FakeVault();
+		const main = vault.write('main.bean', 'include "child.bean"\n');
+		stampMtime(main, 3);
+		for (let i = 0; i < 6; i += 1) vault.write(`other-${i}.bean`, '2026-10-01 * "x"\n');
+		const child = vault.write('child.bean', '2026-10-01 * "A"\n  Assets:Cash\n');
+		const editor = createEditor(['2026-10-01 * "A"', '  Assets:Cash']);
+		const { plugin, opened, leaves } = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		const line = `/vault/child.bean:2:       ${stored}`;
+		const slashed = `${String.raw`\vault\child.bean`}:2:       ${stored}`;
+		plugin.beanCheckRunner = async () => ({
+			stderr: [line, line, line, slashed, '/outside/nope.bean:1:       gone', ''].join('\n'),
+			missing: false,
+		});
+		let reads = 0;
+		const files = vault.api.getFiles().map((file) => {
+			const stat =
+				'stat' in file && file.stat && typeof file.stat === 'object' && 'mtime' in file.stat && typeof file.stat.mtime === 'number'
+					? { mtime: file.stat.mtime }
+					: undefined;
+			const wrapped: FakeFile & { stat?: { mtime: number } } = {
+				path: file.path,
+				extension: file.extension,
+				name: file.name,
+				basename: file.basename,
+				stat,
+			};
+			Object.defineProperty(wrapped, 'path', {
+				enumerable: true,
+				configurable: true,
+				get() {
+					reads += 1;
+					return file.path;
+				},
+			});
+			return wrapped;
+		});
+		vault.api.getFiles = () => files;
+		leaves.push({ view: { file: child, editor } });
+		opened[0](child);
+		await delay(600);
+
+		// One pass over the file list, plus the open file's path when markers
+		// are published. A per-error find of a match at the end of the list
+		// would read the list once per complaint.
+		expect(reads).toBeLessThan(files.length * 3);
+		expect(published(editor)).toEqual([{ line: 1, message: [stored, stored, stored, stored].join('\n') }]);
+		expect(await problemTexts(plugin)).toContain(`child.bean:2  ${stored}`);
+		expect(notices[0]).toContain('/outside/nope.bean');
+		expect(notices[0]).toContain('gone');
+	});
+
+	it('maps a report that matches two vault paths onto the earlier file', async () => {
+		async function mapped(firstPath: string, secondPath: string): Promise<{ texts: string[]; marked: boolean }> {
+			const vault = new FakeVault();
+			vault.write('main.bean', 'include "child.bean"\n');
+			const first = vault.write(firstPath, '2026-10-01 * "A"\n');
+			vault.write(secondPath, '2026-10-01 * "B"\n');
+			stampMtime(first, 1);
+			const editor = createEditor(['2026-10-01 * "A"']);
+			const { plugin, opened, leaves } = await loadPlugin(vault, { entryLedger: 'main.bean' });
+			plugin.beanCheckRunner = async () => ({
+				stderr: '/vault/child.bean:1:       which file\n',
+				missing: false,
+			});
+			leaves.push({ view: { file: first, editor } });
+			opened[0](first);
+			await delay(600);
+			return {
+				texts: await problemTexts(plugin),
+				marked: published(editor).some((diagnostic) => diagnostic.message === 'which file'),
+			};
+		}
+
+		const rootedFirst = await mapped('child.bean', '/vault/child.bean');
+		expect(rootedFirst.marked).toBe(true);
+		expect(rootedFirst.texts.filter((text) => text.endsWith('which file'))).toEqual(['child.bean:1  which file']);
+
+		const bareFirst = await mapped('/vault/child.bean', 'child.bean');
+		expect(bareFirst.marked).toBe(true);
+		expect(bareFirst.texts.filter((text) => text.endsWith('which file'))).toEqual([
+			'/vault/child.bean:1  which file',
+		]);
 	});
 });
 

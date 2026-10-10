@@ -185,6 +185,35 @@ function matchesTempFile(reported: string, absPath: string): boolean {
 	return normalized === absPath.replace(/\\/g, '/') || normalized === 'fences.bean';
 }
 
+/** A vault file, not a folder: folders have no `extension` to stamp an mtime on. */
+function isVaultFile(file: TAbstractFile | null): file is TFile {
+	return !!file && typeof (file as TFile).extension === 'string';
+}
+
+/**
+ * Vault path bean-check's `reported` names, or undefined when it names nothing
+ * in `filesByPath`. Same rule as `matchesVaultFile`: the report is `root + path`
+ * or the bare path. When both name a different file, the earliest in `order` wins.
+ * `root` is `/`-separated with a trailing slash, as `vaultRoot` returns it.
+ */
+function vaultPathForReported(
+	reported: string,
+	root: string,
+	filesByPath: ReadonlyMap<string, { path: string }>,
+	order: readonly { path: string }[],
+): string | undefined {
+	const normalized = reported.replace(/\\/g, '/');
+	const rooted = normalized.startsWith(root) ? normalized.slice(root.length) : undefined;
+	const rootedHit = rooted !== undefined && filesByPath.has(rooted) ? rooted : undefined;
+	const bareHit = filesByPath.has(normalized) ? normalized : undefined;
+	if (rootedHit !== undefined && bareHit !== undefined && rootedHit !== bareHit) {
+		for (const entry of order) {
+			if (matchesVaultFile(reported, entry.path, root)) return entry.path;
+		}
+	}
+	return rootedHit ?? bareHit;
+}
+
 /** Every line of the editor, in order. */
 function editorLines(editor: Editor): string[] {
 	const lines: string[] = [];
@@ -268,6 +297,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly alignTimers = new Map<string, NodeJS.Timeout>();
 	/** Pending on-save validation per run target. */
 	private readonly validateTimers = new Map<string, NodeJS.Timeout>();
+	/**
+	 * In-flight `validateFile` calls per target. A count, not a flag: an older
+	 * run's `finally` must not clear a newer run still checking the same target.
+	 */
+	private readonly validateInFlight = new Map<string, number>();
 	/** Which run (its target path) last marked each vault file, so its next run clears them. */
 	private readonly markOwners = new Map<string, string>();
 	/** Open files this extra loop last stamped with flag markers. */
@@ -725,7 +759,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private scheduleOpenValidation(file: TFile, text: string): void {
 		const entryLedger = this.settings.entryLedger.trim();
 		const target = file.extension === 'md' ? file.path : entryLedger || file.path;
-		const targetFile = this.app.vault.getFiles().find((entry) => entry.path === target);
+		// One lookup, not a scan of every vault file. A folder has no extension,
+		// so it is not the TFile whose mtime a skip compares.
+		const located = this.app.vault.getAbstractFileByPath(target);
+		const targetFile = located && isVaultFile(located) ? located : undefined;
 		const input = {
 			path: file.path,
 			extension: file.extension,
@@ -734,18 +771,24 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			targetMtime: fileMtime(targetFile),
 			lastValidatedMtime: this.lastValidatedMtime.get(target),
 		};
-		if (openValidationTarget(input) !== null) {
-			this.scheduleValidate(file);
-			return;
-		}
 		// Null is also "not a ledger" and "prose, no fence". Asking again
 		// without a recorded mtime is null only for those; an mtime skip
 		// becomes the target. Stored rows are already host lines: fence runs
 		// map temp-file lines before `markErrors` records them, and a markdown
 		// note is its own target (not the entry ledger), so the same rows are
 		// safe to republish. Do not skip the mapping by re-running bean-check.
+		// A child save does not bump the entry ledger's mtime, so an open while
+		// that re-check is debounced or in flight looks like a tab switch.
+		// Replaying would stamp the previous run's line numbers over markers
+		// that followed the edit, and skipping the schedule would leave the
+		// open on that stale report.
+		const recheck = this.validateTimers.has(target) || this.validateInFlight.has(target);
 		if (openValidationTarget({ ...input, lastValidatedMtime: undefined }) === null) return;
-		this.replayStoredMarkers(file, target);
+		if (!recheck && openValidationTarget(input) === null) {
+			this.replayStoredMarkers(file, target);
+			return;
+		}
+		this.scheduleValidate(file);
 	}
 
 	/**
@@ -827,105 +870,112 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// include chain. A markdown save always owns its own run: the fences
 		// live in a temp file, even when the entry ledger is included first.
 		const target = markdown ? file.path : this.settings.entryLedger.trim() || file.path;
-		const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
-		// Only the newest run for a target may report: bean-check speed varies
-		// with its cache, and an older run finishing last must not overwrite
-		// the newer report. Unload shares this gate: cleanup flips
-		// `validateLive` so a started runner cannot publish after teardown.
-		const seq = (this.validateSeq.get(target) ?? 0) + 1;
-		this.validateSeq.set(target, seq);
+		this.validateInFlight.set(target, (this.validateInFlight.get(target) ?? 0) + 1);
+		try {
+			const root = vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
+			// Only the newest run for a target may report: bean-check speed varies
+			// with its cache, and an older run finishing last must not overwrite
+			// the newer report. Unload shares this gate: cleanup flips
+			// `validateLive` so a started runner cannot publish after teardown.
+			const seq = (this.validateSeq.get(target) ?? 0) + 1;
+			this.validateSeq.set(target, seq);
 
-		let fences: BeancountFence[] | undefined;
-		if (markdown) {
-			const text = await this.app.vault.read(file);
-			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
-			fences = extractBeancountFences(text);
-			if (fences.length === 0) {
-				this.markErrors(target, [], root);
-				return;
-			}
-		}
-
-		// Only the validator itself may run: the setting locates bean-check,
-		// it must not name some other program to execute on the ledger.
-		const command = this.settings.beanCheckPath.trim() || 'bean-check';
-		if (!isBeanCheckBinary(command)) {
-			this.notify(MISSING_BEAN_CHECK_NOTICE);
-			return;
-		}
-		const entry = this.settings.entryLedger.trim();
-		// Newlines/quotes in the setting would break out of the generated
-		// `include "..."` line; reject them the same way as a path escape.
-		if (entry && !isSafeIncludePath(entry)) {
-			this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
-			return;
-		}
-		const confined = resolve(root, entry || file.path);
-		// The entry-ledger setting must stay inside the vault: `..` or an
-		// absolute path would point bean-check (and its quoted error text)
-		// at some other file entirely.
-		const rel = relative(root, confined);
-		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-			this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`);
-			return;
-		}
-
-		let includePath: string | undefined;
-		if (markdown && entry) {
-			try {
-				const real = realpathSync(confined).replace(/\\/g, '/');
-				const realRel = relative(root, real);
-				if (realRel === '' || realRel === '..' || realRel.startsWith('..' + sep) || isAbsolute(realRel)) {
-					this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+			let fences: BeancountFence[] | undefined;
+			if (markdown) {
+				const text = await this.app.vault.read(file);
+				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
+				fences = extractBeancountFences(text);
+				if (fences.length === 0) {
+					this.markErrors(target, [], root);
 					return;
 				}
-				includePath = real;
-			} catch {
-				includePath = confined.replace(/\\/g, '/');
-			}
-		}
-
-		let checkPath = confined;
-		let cleanup: (() => void) | undefined;
-		let hostLine: ((tempLine: number) => number | undefined) | undefined;
-		try {
-			if (markdown && fences) {
-				const ledger = buildFenceLedger(fences, includePath);
-				const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
-				cleanup = () => rmSync(dir, { recursive: true, force: true });
-				const temp = join(dir, 'fences.bean');
-				writeFileSync(temp, ledger.text);
-				checkPath = realpathSync(temp);
-				hostLine = (line) => ledger.hostLine(line);
 			}
 
-			const run = await this.beanCheckRunner(command, [checkPath]);
-			if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
-			if (run.missing) {
+			// Only the validator itself may run: the setting locates bean-check,
+			// it must not name some other program to execute on the ledger.
+			const command = this.settings.beanCheckPath.trim() || 'bean-check';
+			if (!isBeanCheckBinary(command)) {
 				this.notify(MISSING_BEAN_CHECK_NOTICE);
 				return;
 			}
-			let errors = parseBeanCheckErrors(run.stderr);
-			// stderr that parses to nothing is a broken bean-check (a traceback,
-			// a hang cut short) — say so and keep the marks that are already up,
-			// instead of clearing them for "clean".
-			if (errors.length === 0 && (run.stderr.trim() !== '' || run.failure)) {
-				this.notify(`bean-check ${run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`}`);
+			const entry = this.settings.entryLedger.trim();
+			// Newlines/quotes in the setting would break out of the generated
+			// `include "..."` line; reject them the same way as a path escape.
+			if (entry && !isSafeIncludePath(entry)) {
+				this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
 				return;
 			}
-			if (hostLine) {
-				const mapHost = hostLine;
-				errors = errors.flatMap((error) => {
-					if (error.file.startsWith('<')) return [error];
-					if (!matchesTempFile(error.file, checkPath)) return [];
-					const line = mapHost(error.line);
-					if (line === undefined) return [];
-					return [{ ...error, file: root + file.path, line }];
-				});
+			const confined = resolve(root, entry || file.path);
+			// The entry-ledger setting must stay inside the vault: `..` or an
+			// absolute path would point bean-check (and its quoted error text)
+			// at some other file entirely.
+			const rel = relative(root, confined);
+			if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
+				this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`);
+				return;
 			}
-			this.markErrors(target, errors, root);
+
+			let includePath: string | undefined;
+			if (markdown && entry) {
+				try {
+					const real = realpathSync(confined).replace(/\\/g, '/');
+					const realRel = relative(root, real);
+					if (realRel === '' || realRel === '..' || realRel.startsWith('..' + sep) || isAbsolute(realRel)) {
+						this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+						return;
+					}
+					includePath = real;
+				} catch {
+					includePath = confined.replace(/\\/g, '/');
+				}
+			}
+
+			let checkPath = confined;
+			let cleanup: (() => void) | undefined;
+			let hostLine: ((tempLine: number) => number | undefined) | undefined;
+			try {
+				if (markdown && fences) {
+					const ledger = buildFenceLedger(fences, includePath);
+					const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
+					cleanup = () => rmSync(dir, { recursive: true, force: true });
+					const temp = join(dir, 'fences.bean');
+					writeFileSync(temp, ledger.text);
+					checkPath = realpathSync(temp);
+					hostLine = (line) => ledger.hostLine(line);
+				}
+
+				const run = await this.beanCheckRunner(command, [checkPath]);
+				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
+				if (run.missing) {
+					this.notify(MISSING_BEAN_CHECK_NOTICE);
+					return;
+				}
+				let errors = parseBeanCheckErrors(run.stderr);
+				// stderr that parses to nothing is a broken bean-check (a traceback,
+				// a hang cut short) — say so and keep the marks that are already up,
+				// instead of clearing them for "clean".
+				if (errors.length === 0 && (run.stderr.trim() !== '' || run.failure)) {
+					this.notify(`bean-check ${run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`}`);
+					return;
+				}
+				if (hostLine) {
+					const mapHost = hostLine;
+					errors = errors.flatMap((error) => {
+						if (error.file.startsWith('<')) return [error];
+						if (!matchesTempFile(error.file, checkPath)) return [];
+						const line = mapHost(error.line);
+						if (line === undefined) return [];
+						return [{ ...error, file: root + file.path, line }];
+					});
+				}
+				this.markErrors(target, errors, root);
+			} finally {
+				cleanup?.();
+			}
 		} finally {
-			cleanup?.();
+			const left = (this.validateInFlight.get(target) ?? 1) - 1;
+			if (left > 0) this.validateInFlight.set(target, left);
+			else this.validateInFlight.delete(target);
 		}
 	}
 
@@ -939,13 +989,21 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): void {
 		if (!this.validateLive) return;
 		const vaultFiles = this.app.vault.getFiles();
-		this.problems.replace(
-			target,
-			toProblemRows(errors, (reported) =>
-				vaultFiles.find((entry) => matchesVaultFile(reported, entry.path, root))?.path,
-			),
-		);
-		const targetFile = vaultFiles.find((entry) => entry.path === target);
+		const filesByPath = new Map<string, TFile>();
+		for (const entry of vaultFiles) {
+			if (!filesByPath.has(entry.path)) filesByPath.set(entry.path, entry);
+		}
+		// One resolution per reported path, shared by the Problems rows and the
+		// editor marks. A second linear scan per error would repeat the first.
+		const vaultPathByReported = new Map<string, string | undefined>();
+		const vaultPathFor = (reported: string): string | undefined => {
+			if (vaultPathByReported.has(reported)) return vaultPathByReported.get(reported);
+			const vaultPath = vaultPathForReported(reported, root, filesByPath, vaultFiles);
+			vaultPathByReported.set(reported, vaultPath);
+			return vaultPath;
+		};
+		this.problems.replace(target, toProblemRows(errors, vaultPathFor));
+		const targetFile = filesByPath.get(target);
 		const mtime = fileMtime(targetFile);
 		if (mtime === undefined) this.lastValidatedMtime.delete(target);
 		else this.lastValidatedMtime.set(target, mtime);
@@ -954,14 +1012,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		for (const error of errors) {
 			// Reports name files by the real paths their loader resolved; a
 			// file outside the vault matches nothing and drops to `unmapped`.
-			const match = vaultFiles.find((entry) => matchesVaultFile(error.file, entry.path, root));
+			const match = vaultPathFor(error.file);
 			if (!match) {
 				unmapped.push(error);
 				continue;
 			}
-			const list = errorsByPath.get(match.path) ?? [];
+			const list = errorsByPath.get(match) ?? [];
 			list.push(error);
-			errorsByPath.set(match.path, list);
+			errorsByPath.set(match, list);
 		}
 		// What no editor can carry — a `<load>:0` failure (missing entry
 		// ledger, broken include) or an error in a file outside the vault —
@@ -979,7 +1037,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		for (const path of new Set([...reported, ...previouslyOwned, target])) {
 			if (reported.has(path)) this.markOwners.set(path, target);
 			else this.markOwners.delete(path);
-			const vaultFile = vaultFiles.find((entry) => entry.path === path);
+			const vaultFile = filesByPath.get(path);
 			// No editor, no markers: a background file is marked when it is
 			// opened and its target is saved again.
 			if (!vaultFile) continue;

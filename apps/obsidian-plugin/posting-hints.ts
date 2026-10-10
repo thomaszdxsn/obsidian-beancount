@@ -9,11 +9,13 @@
  *
  * The omitted amount is the negated per-commodity sum. It is shown only when
  * the transaction has more than two postings or more than one commodity;
- * two legs of one commodity are obvious (the vscode-beancount rule). Decimal
- * places are the most fractional digits among the amounts summed for that
- * commodity, using the same exact scaled-integer arithmetic as balance
- * assertion deltas. Thousands separators are accepted on input and not
- * rewritten into the hint.
+ * two legs of one commodity are obvious (the vscode-beancount rule). When the
+ * commodity has a fractional amount, the sum is quantized like beancount's
+ * booking interpolation: half-even to the coarsest fractional precision
+ * written for it (`10.125` at `.00` becomes `10.12`). Integer-only
+ * commodities stay exact. The arithmetic is the same scaled integers as
+ * balance assertion deltas. Thousands separators are accepted on input and
+ * not rewritten into the hint.
  *
  * When every posting has an amount, the header gets a warning if any
  * commodity's sum exceeds beancount's default inferred tolerance — half a
@@ -292,6 +294,45 @@ function alignLabel(
 	return { label: ' '.repeat(pad) + amountText, aligned: true };
 }
 
+/**
+ * Booking interpolation quantizes to the coarsest fractional precision
+ * written for the commodity (`Decimal.quantize(10^-scale, ROUND_HALF_EVEN)`).
+ * Integer-only commodities (`coarsestScale === 0`) stay exact — beancount
+ * infers no quantum for them. `null` when the quantum is not a safe power of
+ * ten; a wrong rounding is worse than no hint.
+ */
+function quantizeInferred(qty: Qty, coarsestScale: number): Qty | null {
+	if (coarsestScale <= 0) return qty;
+	return quantizeHalfEven(qty, coarsestScale);
+}
+
+/** `Decimal.quantize` with the default half-even rounding, in scaled integers. */
+function quantizeHalfEven(qty: Qty, scale: number): Qty | null {
+	if (scale < 0 || !Number.isSafeInteger(qty.units)) return null;
+	if (qty.scale === scale) return qty;
+	if (qty.scale < scale) {
+		let units = qty.units;
+		for (let i = qty.scale; i < scale; i++) {
+			units *= 10;
+			if (!Number.isSafeInteger(units)) return null;
+		}
+		return { units: units === 0 ? 0 : units, scale };
+	}
+	const factor = 10 ** (qty.scale - scale);
+	if (!Number.isSafeInteger(factor) || factor === 0) return null;
+	const negative = qty.units < 0;
+	const abs = negative ? -qty.units : qty.units;
+	if (!Number.isSafeInteger(abs)) return null;
+	const kept = Math.floor(abs / factor);
+	const rem = abs - kept * factor;
+	const half = factor / 2;
+	let rounded = kept;
+	if (rem > half || (rem === half && kept % 2 !== 0)) rounded = kept + 1;
+	if (!Number.isSafeInteger(rounded)) return null;
+	const units = rounded === 0 ? 0 : negative ? -rounded : rounded;
+	return { units, scale };
+}
+
 function inferredHint(
 	txn: Txn,
 	missing: Seen,
@@ -315,9 +356,11 @@ function inferredHint(
 	for (const bucket of buckets.values()) {
 		const negated = negate(bucket.qty);
 		if (negated === null) return null;
-		const text = formatPlain(negated, bucket.display);
+		const quantized = quantizeInferred(negated, bucket.coarsestScale);
+		if (quantized === null) return null;
+		const text = formatPlain(quantized, bucket.display);
 		if (text === null) return null;
-		(negated.units === 0 ? zeros : parts).push(text);
+		(quantized.units === 0 ? zeros : parts).push(text);
 	}
 	if (parts.length === 0) parts.push(...zeros);
 	const aligned = alignLabel(parts.join(', '), missing.line, amounts, lines, options);

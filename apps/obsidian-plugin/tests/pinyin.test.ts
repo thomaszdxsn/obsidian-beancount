@@ -5,7 +5,7 @@ import { AccountSuggest } from '../account-suggest';
 import { CompletionUsage, rankCompletions } from '../completion-rank';
 import { PayeeSuggest } from '../payee-suggest';
 import { extractPayees } from '../payee-index';
-import { pinyinInitials } from '../pinyin';
+import { PINYIN_INITIALS_CACHE_CAP, pinyinInitials } from '../pinyin';
 import { NarrationSuggest } from '../token-suggest';
 import { extractNarrations } from '../token-index';
 import { VaultIndex } from '../vault-index';
@@ -30,6 +30,23 @@ describe('pinyinInitials', () => {
 	it('keeps characters the table does not list, including a supplementary-plane character', () => {
 		expect(pinyinInitials('A€餐')).toBe('a€c');
 		expect(pinyinInitials('𠮷餐')).toBe('𠮷c');
+	});
+
+	it('returns the same initials for a repeated value, including after the cache clears', () => {
+		expect(pinyinInitials('Expenses:餐饮')).toBe('expenses:cy');
+		expect(pinyinInitials('Expenses:餐饮')).toBe('expenses:cy');
+		expect(pinyinInitials('卡片-贷款')).toBe(pinyinInitials('卡片-贷款'));
+		// Distinct keys past the cap force a clear. Evicted values must convert the same way.
+		for (let i = 0; i < PINYIN_INITIALS_CACHE_CAP; i++) pinyinInitials(`cache-fill-${i}`);
+		expect(pinyinInitials('cache-fill-0')).toBe('cache-fill-0');
+		expect(pinyinInitials(`cache-fill-${PINYIN_INITIALS_CACHE_CAP - 1}`)).toBe(
+			`cache-fill-${PINYIN_INITIALS_CACHE_CAP - 1}`
+		);
+		expect(pinyinInitials('Expenses:餐饮')).toBe('expenses:cy');
+		expect(pinyinInitials('银行')).toBe('yx');
+		expect(pinyinInitials('A€餐')).toBe('a€c');
+		expect(pinyinInitials('𠮷餐')).toBe('𠮷c');
+		expect(pinyinInitials('')).toBe('');
 	});
 });
 
@@ -81,6 +98,33 @@ describe('rankCompletions pinyin tiers', () => {
 	it('does not treat an unknown character as an initial', () => {
 		expect(rankCompletions(['A€餐', '银行'], 'yh', undefined, true)).toEqual([]);
 		expect(rankCompletions(['A€餐'], '€c', undefined, true)).toEqual(['A€餐']);
+	});
+
+	it('ranks pure ASCII the same with pinyin on', () => {
+		const ascii = ['A1-B2', 'Account', 'Assets:Broker:IBKR', 'Assets:Cash:Wallet', 'Expenses:Food'];
+		const usage = CompletionUsage.parse(
+			{
+				completionUsage: {
+					Account: { count: 9, lastUsed: 1 },
+					'A1-B2': { count: 1, lastUsed: 1 },
+				},
+			},
+			() => 1
+		);
+		for (const query of ['', 'a', 'e', 'fo', 'c', '12', 'Assets:', 'xyz', 'ASSETS:C']) {
+			expect(rankCompletions(ascii, query, usage, true)).toEqual(rankCompletions(ascii, query, usage));
+		}
+	});
+
+	it('keeps a pinyin prefix ahead of a direct subsequence of the same name', () => {
+		// 'c' is a direct subsequence of 餐饮Cash (the ASCII tail) and of Account.
+		// It is also a pinyin prefix of 餐饮Cash, which must win. Code-point order
+		// would put Account first if both were filed as subsequences.
+		expect(rankCompletions(['Account', '餐饮Cash'], 'c', undefined, true)).toEqual([
+			'餐饮Cash',
+			'Account',
+		]);
+		expect(rankCompletions(['Account', '餐饮Cash'], 'c')).toEqual(['Account', '餐饮Cash']);
 	});
 });
 

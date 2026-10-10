@@ -168,9 +168,6 @@ describe('resolveIncludePath', () => {
 			kind: 'glob',
 			matches: ['ledger/2024/a.bean', 'ledger/2024/b.bean'],
 		});
-		expect(resolve('2024/*.bean').kind === 'glob' && resolve('2024/*.bean')).not.toEqual(
-			expect.objectContaining({ matches: expect.arrayContaining(['ledger/2024/sub/c.bean']) })
-		);
 		const glob = resolve('2024/*.bean');
 		expect(glob.kind === 'glob' ? glob.matches : []).not.toContain('ledger/2024/.hidden.bean');
 		expect(glob.kind === 'glob' ? glob.matches : []).not.toContain('ledger/2024/sub/c.bean');
@@ -251,6 +248,19 @@ describe('resolveIncludePath', () => {
 		expect(resolve('.*.bean', 'main.bean', '/vault', files)).toEqual({
 			kind: 'glob',
 			matches: ['.hidden.bean'],
+		});
+		expect(resolve('*[a-c]', 'main.bean', '/vault', ['b', 'd', 'ab', '.c'])).toEqual({
+			kind: 'glob',
+			matches: ['ab', 'b'],
+		});
+	});
+
+	it('matches a run of stars against a long name', () => {
+		const name = `${'a'.repeat(59)}b`;
+		const pattern = '*a*a*a*a*a*a*a*a*a*a*b';
+		expect(resolve(pattern, 'main.bean', '/vault', [name, 'a'.repeat(60), `dir/${name}`])).toEqual({
+			kind: 'glob',
+			matches: [name],
 		});
 	});
 });
@@ -425,11 +435,17 @@ describe('includeLinkMouseDown', () => {
 		text: string,
 		file: { path: string; extension: string } | null,
 		pos: number | null,
-		mods: { meta?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean; button?: number }
+		mods: { meta?: boolean; ctrl?: boolean; alt?: boolean; shift?: boolean; button?: number },
+		options?: { poisonToString?: boolean }
 	) {
 		notices.length = 0;
 		const opened: string[] = [];
 		const doc = docOf(text);
+		if (options?.poisonToString) {
+			doc.toString = () => {
+				throw new Error('full document');
+			};
+		}
 		const view = {
 			state: {
 				doc,
@@ -620,6 +636,24 @@ describe('includeLinkMouseDown', () => {
 		expect(outside.opened).toEqual([]);
 		expect(notices).toEqual([missingIncludeNotice('../outside.bean')]);
 	});
+
+	it('opens a ledger include without reading the whole document', () => {
+		const result = click('include "a.bean"', bean, 8, { meta: true, ctrl: true }, { poisonToString: true });
+		expect(result.handled).toBe(true);
+		expect(result.opened).toEqual(['tab:ledger/a.bean']);
+	});
+
+	it('ignores a markdown include with no fence without reading the whole document', () => {
+		const result = click(
+			'include "a.bean"',
+			{ path: 'notes/budget.md', extension: 'md' },
+			8,
+			{ meta: true, ctrl: true },
+			{ poisonToString: true }
+		);
+		expect(result.handled).toBe(false);
+		expect(result.opened).toEqual([]);
+	});
 });
 
 describe('includeLinksExtension', () => {
@@ -631,7 +665,22 @@ describe('includeLinksExtension', () => {
 			state: { doc, field: () => ({ file }) },
 			posAtCoords: () => 8,
 		};
-		const extension = includeLinksExtension({} as App) as unknown as MockViewPlugin<{
+		const opened: string[] = [];
+		const app = {
+			vault: {
+				adapter: { getBasePath: () => '/vault' },
+				getFiles: () => FILES.map((path) => ({ path })),
+			},
+			workspace: {
+				getLeaf: (pane: PaneType | boolean) => ({
+					openFile: (entry: { path: string }) => {
+						opened.push(`${String(pane)}:${entry.path}`);
+						return Promise.resolve();
+					},
+				}),
+			},
+		} as unknown as App;
+		const extension = includeLinksExtension(app) as unknown as MockViewPlugin<{
 			decorations: Array<{ from: number; to: number; value: { spec: { class?: string } } }>;
 			update(update: { docChanged: boolean; state: typeof view.state; view: typeof view }): void;
 		}> & {
@@ -648,7 +697,25 @@ describe('includeLinksExtension', () => {
 			}),
 		]);
 		plugin.update({ docChanged: false, state: view.state, view });
-		expect(extension.spec.eventHandlers.mousedown({ button: 0 } as MouseEvent, view)).toBe(false);
+		const plain = { button: 0 } as MouseEvent;
+		expect(extension.spec.eventHandlers.mousedown(plain, view)).toBe(false);
+		expect(opened).toEqual([]);
+		const event = {
+			button: 0,
+			metaKey: true,
+			ctrlKey: true,
+			altKey: false,
+			shiftKey: false,
+			clientX: 8,
+			clientY: 0,
+			preventDefault() {
+				this.defaultPrevented = true;
+			},
+			defaultPrevented: false,
+		} as MouseEvent & { defaultPrevented: boolean };
+		expect(extension.spec.eventHandlers.mousedown(event, view)).toBe(true);
+		expect(event.defaultPrevented).toBe(true);
+		expect(opened).toEqual(['tab:ledger/a.bean']);
 	});
 
 	it('refreshes marks only when the document or file changes, and opens from the handler', () => {
@@ -725,5 +792,95 @@ describe('includeLinksExtension', () => {
 		expect(extension.spec.eventHandlers.mousedown(event, view)).toBe(true);
 		expect(event.defaultPrevented).toBe(true);
 		expect(opened).toEqual(['tab:ledger/a.bean']);
+	});
+
+	it('limits ledger decorations to visible lines and does not read the whole document', () => {
+		const text = 'include "a.bean"\n\ninclude "b.bean"\ninclude "c.bean"';
+		const doc = docOf(text);
+		doc.toString = () => {
+			throw new Error('full document');
+		};
+		let ranges: Array<{ from: number; to: number }> | undefined = [
+			{ from: 0, to: doc.line(1).to },
+			{ from: doc.line(4).from, to: doc.line(4).to },
+		];
+		const file = { path: 'ledger/main.bean', extension: 'bean' };
+		const view = {
+			state: { doc, field: () => ({ file }) },
+			get visibleRanges() {
+				return ranges;
+			},
+		};
+		const extension = includeLinksExtension({} as App) as unknown as MockViewPlugin<{
+			decorations: Array<{ from: number; to: number }>;
+			update(update: {
+				docChanged: boolean;
+				viewportChanged?: boolean;
+				state: typeof view.state;
+				view: typeof view;
+			}): void;
+		}>;
+		const plugin = new extension.cls(view as never);
+		const mark = (line: number) =>
+			expect.objectContaining({ from: doc.line(line).from + 8, to: doc.line(line).from + 16 });
+		expect(plugin.decorations).toEqual([mark(1), mark(4)]);
+
+		ranges = [{ from: doc.line(3).from, to: doc.line(3).to }];
+		plugin.update({ docChanged: false, viewportChanged: true, state: view.state, view });
+		expect(plugin.decorations).toEqual([mark(3)]);
+
+		ranges = [];
+		plugin.update({ docChanged: false, viewportChanged: true, state: view.state, view });
+		expect(plugin.decorations).toEqual([mark(1), mark(3), mark(4)]);
+
+		ranges = [{ from: 1000, to: 1100 }];
+		plugin.update({ docChanged: false, viewportChanged: true, state: view.state, view });
+		expect(plugin.decorations).toEqual([]);
+
+		ranges = undefined;
+		plugin.update({ docChanged: false, viewportChanged: true, state: view.state, view });
+		expect(plugin.decorations).toEqual([mark(1), mark(3), mark(4)]);
+	});
+
+	it('skips a markdown note with no fence without reading the whole document', () => {
+		const doc = docOf('include "a.bean"\nprose');
+		doc.toString = () => {
+			throw new Error('full document');
+		};
+		const view = {
+			state: { doc, field: () => ({ file: { path: 'notes/budget.md', extension: 'md' } }) },
+		};
+		const extension = includeLinksExtension({} as App) as unknown as MockViewPlugin<{
+			decorations: unknown[];
+		}>;
+		expect(new extension.cls(view as never).decorations).toEqual([]);
+	});
+
+	it('decorates a fence include even outside the viewport and does not rescan on scroll', () => {
+		const text = '```beancount\ninclude "a.bean"\n```';
+		const doc = docOf(text);
+		const view = {
+			state: { doc, field: () => ({ file: { path: 'notes/budget.md', extension: 'md' } }) },
+			visibleRanges: [{ from: 0, to: 1 }],
+		};
+		const extension = includeLinksExtension({} as App) as unknown as MockViewPlugin<{
+			decorations: Array<{ from: number; to: number }>;
+			update(update: {
+				docChanged: boolean;
+				viewportChanged?: boolean;
+				state: typeof view.state;
+				view: typeof view;
+			}): void;
+		}>;
+		const plugin = new extension.cls(view as never);
+		const line = doc.line(2);
+		const marks = [expect.objectContaining({ from: line.from + 8, to: line.from + 16 })];
+		expect(plugin.decorations).toEqual(marks);
+		const before = plugin.decorations;
+		doc.toString = () => {
+			throw new Error('full document');
+		};
+		plugin.update({ docChanged: false, viewportChanged: true, state: view.state, view });
+		expect(plugin.decorations).toBe(before);
 	});
 });

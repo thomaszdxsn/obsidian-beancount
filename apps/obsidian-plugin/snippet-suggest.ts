@@ -8,10 +8,10 @@
  * the plugin's popovers is open (payee completion after `txn`), Tab stays
  * with that popover. The session is bound to the editor that expanded it.
  */
-import { EditorSelection, Prec } from '@codemirror/state';
+import { EditorSelection, Prec, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
-import { keymap } from '@codemirror/view';
-import type { EditorView } from '@codemirror/view';
+import { keymap, ViewPlugin } from '@codemirror/view';
+import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { extractBeancountFences } from './fences';
@@ -23,7 +23,15 @@ interface SuggestState {
 	context: unknown;
 }
 
-/** Tab-stop session for one in-progress expansion. */
+/**
+ * Tab-stop session for one in-progress expansion.
+ *
+ * Stops are absolute document offsets and are not mapped through edits.
+ * `noteEdit` ends the session on undo/redo or a change outside the
+ * pending stops, so Tab cannot land on a range the document no longer
+ * has. A change inside a pending stop is kept: the next Tab measures
+ * that stop from the cursor.
+ */
 export class SnippetSession {
 	private origin = 0;
 	private stops: TabStop[] = [];
@@ -76,6 +84,41 @@ export class SnippetSession {
 		}
 		const next = this.stops[this.index];
 		return { from: this.origin + next.from, to: this.origin + next.to };
+	}
+
+	/**
+	 * End the session when `editor` owns it and the edit cannot be trusted.
+	 * `userEvent` `undo` or `redo` always ends it: history restored a
+	 * previous document, so the stored offsets are stale even when the
+	 * inverted range happens to sit inside a stop. Any other change ends
+	 * it unless every range is contained in a still-pending stop. A
+	 * zero-width stop contains only an insertion at its offset. Edits in
+	 * a different editor are ignored, matching Tab.
+	 */
+	noteEdit(
+		editor: unknown,
+		userEvent: string | undefined,
+		changes: readonly { from: number; to: number }[]
+	): void {
+		if (!this.active) return;
+		if (this.owner != null && editor != null && editor !== this.owner) return;
+		if (
+			userEvent === 'undo' ||
+			userEvent === 'redo' ||
+			changes.some((change) => !this.insidePendingStop(change.from, change.to))
+		) {
+			this.clear();
+		}
+	}
+
+	/** True when the change's pre-edit range sits inside a stop Tab has not left yet. */
+	private insidePendingStop(from: number, to: number): boolean {
+		for (let i = this.index; i < this.stops.length; i += 1) {
+			const stopFrom = this.origin + this.stops[i].from;
+			const stopTo = this.origin + this.stops[i].to;
+			if (from >= stopFrom && to <= stopTo) return true;
+		}
+		return false;
 	}
 }
 
@@ -134,6 +177,9 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 /**
  * Tab walks the active snippet's remaining stops. `Prec.high` so it is
  * asked first; returning false leaves Tab to completion popovers and indent.
+ * The same extension ends the session when undo/redo or a change outside
+ * the pending stops lands in the editor that owns it. Stops are not mapped
+ * through the change.
  */
 export function snippetTabExtension(session: SnippetSession, suggests: readonly SuggestState[]): Extension {
 	const run = (view: EditorView): boolean => {
@@ -157,7 +203,33 @@ export function snippetTabExtension(session: SnippetSession, suggests: readonly 
 		});
 		return true;
 	};
-	return Prec.high(keymap.of([{ key: 'Tab', run }]));
+	return [
+		Prec.high(keymap.of([{ key: 'Tab', run }])),
+		sessionGuard(session),
+	];
+}
+
+/**
+ * Clear the session when the owning editor reports an undo, a redo, or a
+ * change outside its pending stops. Registered with the Tab binding so
+ * the plugin does not install a second extension.
+ */
+function sessionGuard(session: SnippetSession): Extension {
+	return ViewPlugin.fromClass(
+		class {
+			update(update: ViewUpdate): void {
+				if (!session.active) return;
+				for (const tr of update.transactions) {
+					const event = tr.annotation(Transaction.userEvent);
+					const changes: { from: number; to: number }[] = [];
+					tr.changes.iterChanges((from, to) => {
+						changes.push({ from, to });
+					});
+					session.noteEdit(update.view, typeof event === 'string' ? event : undefined, changes);
+				}
+			}
+		}
+	);
 }
 
 /** Ledger files, or the body of a `beancount`/`bean` fence in markdown. */

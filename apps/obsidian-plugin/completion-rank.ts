@@ -7,6 +7,8 @@
  * subsequence-matches its pinyin initials (`Expenses:餐饮` → `expenses:cy`).
  * Tiers, best first: direct prefix, pinyin prefix, direct subsequence,
  * pinyin subsequence. A direct hit is never filed in a pinyin tier.
+ * Initials are computed only after a direct prefix misses, and only for a
+ * value the table can rewrite; other values cannot gain a pinyin hit.
  * Frecency still breaks ties inside a tier. Callers that omit `pinyin`
  * keep the two-tier order.
  *
@@ -15,7 +17,7 @@
  * so a corrupt file cannot keep the plugin from loading.
  */
 
-import { pinyinInitials } from './pinyin';
+import { PINYIN_TABLE_HAN, pinyinInitials } from './pinyin';
 
 /** Most strings `match` returns — the suggestion popup window. */
 export const MAX_SUGGESTIONS = 50;
@@ -63,15 +65,24 @@ function isSubsequence(hay: string, needle: string): boolean {
  * With pinyin off, subsequence stays 1 so the two-tier order is unchanged.
  * With it on: 0 direct prefix, 1 pinyin prefix, 2 direct subsequence,
  * 3 pinyin subsequence.
+ *
+ * A pinyin prefix outranks a direct subsequence, so initials are needed as
+ * soon as a direct prefix misses — but only when `PINYIN_TABLE_HAN` matches.
+ * Otherwise initials equal a per-character lowercasing of `value` (the
+ * lowercased value, for ASCII) and the pinyin tiers cannot add a hit.
+ * Empty queries are direct prefixes of everything and never reach the table.
  */
 function matchQuality(value: string, needle: string, pinyin: boolean): number {
 	const hay = value.toLowerCase();
 	if (hay.startsWith(needle)) return 0;
-	// Empty queries are direct prefixes of everything; skip the table.
-	const initials = pinyin && needle.length > 0 ? pinyinInitials(value) : '';
-	if (initials.startsWith(needle) && pinyin) return 1;
-	if (needle.length > 0 && isSubsequence(hay, needle)) return pinyin ? 2 : 1;
-	if (pinyin && isSubsequence(initials, needle)) return 3;
+	if (!(pinyin && needle.length > 0 && PINYIN_TABLE_HAN.test(value))) {
+		if (needle.length > 0 && isSubsequence(hay, needle)) return pinyin ? 2 : 1;
+		return 4;
+	}
+	const initials = pinyinInitials(value);
+	if (initials.startsWith(needle)) return 1;
+	if (isSubsequence(hay, needle)) return 2;
+	if (isSubsequence(initials, needle)) return 3;
 	return 4;
 }
 

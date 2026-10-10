@@ -896,13 +896,13 @@ describe('BeancountProblemsView', () => {
 			{ file: 'gone', line: 1, message: 'missing', vaultPath: '' },
 			row('child.bean', 2, 'bad', 'child.bean'),
 		]);
-		const rows = mountChildren(view).filter((child) => child.className === 'beancount-problems-row');
-		const empty = rows.find((child) => child.text.startsWith('gone:'));
-		const mapped = rows.find((child) => child.text.startsWith('child.bean:'));
-		expect(empty?.clicks).toHaveLength(1);
+		const children = mountChildren(view);
+		const empty = children.find((child) => child.text.startsWith('gone:'));
+		const mapped = children.find((child) => child.text.startsWith('child.bean:'));
+		expect(empty?.className).toBe('beancount-problems-row beancount-problems-unmapped');
+		expect(empty?.clicks).toEqual([]);
+		expect(mapped?.className).toBe('beancount-problems-row');
 		expect(mapped?.clicks).toHaveLength(1);
-		empty?.clicks[0]();
-		await Promise.resolve();
 		expect(lookups).toBe(0);
 		expect(opened).toEqual([]);
 

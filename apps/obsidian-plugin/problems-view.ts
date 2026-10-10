@@ -24,7 +24,7 @@ export interface ProblemsItemEl {
 
 /**
  * Replace `mount`'s children with the header and one row per problem.
- * A row with no `vaultPath` is drawn but not clickable.
+ * A row with no vault path — missing or `''` — is drawn but not clickable.
  */
 export function drawProblems(
 	mount: ProblemsMount,
@@ -37,7 +37,7 @@ export function drawProblems(
 	for (const group of groups) {
 		mount.createDiv({ cls: 'beancount-problems-file', text: group.file });
 		for (const row of group.rows) {
-			const clickable = row.vaultPath !== undefined;
+			const clickable = Boolean(row.vaultPath);
 			const el = mount.createDiv({
 				cls: clickable
 					? 'beancount-problems-row'

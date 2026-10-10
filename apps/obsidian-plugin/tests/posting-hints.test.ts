@@ -43,7 +43,7 @@ describe('posting amount hints', () => {
 		).toEqual([inferred(3, ' -30.00 USD')]);
 	});
 
-	it('keeps the finest scale among the summed amounts and drops thousands separators', () => {
+	it('quantizes the inferred amount to the coarsest fractional precision and drops thousands separators', () => {
 		expect(
 			hints(
 				'2026-01-01 * "Shop"',
@@ -51,7 +51,36 @@ describe('posting amount hints', () => {
 				'  Assets:B  0.5 USD',
 				'  Assets:C'
 			)
-		).toEqual([inferred(3, ' -1001.00 USD')]);
+		).toEqual([inferred(3, ' -1001.0 USD')]);
+		// Half-even: 10.125 → 10.12 (2 even), 10.135 → 10.14 (3 odd), 10.126 is not a tie.
+		expect(
+			hints('2026-01-01 * "Shop"', '  Expenses:A  10.00 USD', '  Expenses:B  0.125 USD', '  Assets:Cash')
+		).toEqual([inferred(3, ' -10.12 USD')]);
+		expect(
+			hints('2026-01-01 * "Shop"', '  Expenses:A  10.00 USD', '  Expenses:B  0.135 USD', '  Assets:Cash')
+		).toEqual([inferred(3, ' -10.14 USD')]);
+		expect(
+			hints('2026-01-01 * "Shop"', '  Expenses:A  10.00 USD', '  Expenses:B  0.126 USD', '  Assets:Cash')
+		).toEqual([inferred(3, ' -10.13 USD')]);
+		// Integer-only commodities have no quantum.
+		expect(hints('2026-01-01 * "Int"', '  Expenses:A  10 USD', '  Expenses:B  1 USD', '  Assets:Cash')).toEqual([
+			inferred(3, ' -11 USD'),
+		]);
+		// A residual that rounds to zero at the coarsest precision is a cancel, not a third commodity.
+		expect(
+			hints(
+				'2026-01-01 * "Fx"',
+				'  Assets:A  10.00 USD',
+				'  Assets:B  -10.004 USD',
+				'  Assets:C  5 EUR',
+				'  Assets:D'
+			).map((hint) => hint.label.trim())
+		).toEqual(['-5 EUR']);
+		expect(
+			hints('2026-01-01 * "Round"', '  Assets:A  10.00 USD', '  Assets:B  -10.004 USD', '  Assets:C').map(
+				(hint) => hint.label.trim()
+			)
+		).toEqual(['0.00 USD']);
 	});
 
 	it('joins a multi-commodity residual in appearance order', () => {
@@ -187,9 +216,14 @@ describe('posting amount hints', () => {
 		expect(hints('2026-01-01 * "Off"', '  Assets:A  1.006 USD', '  Assets:B  -1.00 USD')).toEqual([
 			unbalanced(0, '≠ 0: 0.006 USD'),
 		]);
-		// Integer-only amounts carry no tolerance.
+		// Integer-only amounts carry no tolerance. A fractional amount does not
+		// inherit tolerance from an integer leg, and an integer leg adds none:
+		// 1.30 − 1 is 0.30, far outside half a cent.
 		expect(hints('2026-01-01 * "Int"', '  Assets:A  2 USD', '  Assets:B  -1 USD')).toEqual([
 			unbalanced(0, '≠ 0: 1 USD'),
+		]);
+		expect(hints('2026-01-01 * "Gap"', '  Assets:A  1.30 USD', '  Assets:B  -1 USD')).toEqual([
+			unbalanced(0, '≠ 0: 0.30 USD'),
 		]);
 	});
 

@@ -14,10 +14,13 @@
  * the header. Narration text is never rewritten. The caret lands at the
  * start of the narration body when the header has a second quoted field
  * (including `""`), otherwise on the first amount stop, with that number
- * selected so typing replaces it. Tab walks the rest via `SnippetSession`:
- * stops are absolute document offsets (origin 0) so the narration stop in
- * the header and the amount stops in the inserted lines share one session.
- * A narration stop is zero-width, so the existing narration is not selected.
+ * selected so typing replaces it. The payee replacement and the posting
+ * insert are one `editor.transaction`, so undo restores both. Tab walks
+ * the rest via `SnippetSession`: stops are absolute document offsets
+ * (origin 0) so the narration stop in the header and the amount stops in
+ * the inserted lines share one session. A narration stop is zero-width,
+ * so the existing narration is not selected. The session is not mapped
+ * through later edits; undo/redo or a change outside its stops ends it.
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { PAYEE_PREFIX_RE } from './payee-index';
@@ -168,20 +171,35 @@ export class PayeeSuggest extends IndexSuggest {
 					})
 				: null;
 		const atEnd = editor.getLine(context.end.line);
-		editor.replaceRange(payeeReplacement(value, atEnd, context.end.ch), context.start, context.end);
-		this.index.remember?.(value);
+		const payeeText = payeeReplacement(value, atEnd, context.end.ch);
 		if (plan && this.autofill) {
-			editor.replaceRange(plan.insert, { line, ch: plan.atCh });
-			if (plan.selection) editor.setSelection(plan.selection.anchor, plan.selection.head);
+			// One history event. Both ranges are pre-edit coordinates: the
+			// insert is the end of the header as it is now, not `plan.atCh`
+			// (that column is after this replacement). Selection is the
+			// post-edit caret. `session.start` follows the transaction so a
+			// synchronous dispatch does not see an active session and treat
+			// the pick itself as an outside edit.
+			const endCh = atEnd.length;
+			editor.transaction({
+				changes: [
+					{ from: context.start, to: context.end, text: payeeText },
+					{ from: { line, ch: endCh }, to: { line, ch: endCh }, text: plan.insert },
+				],
+				...(plan.selection ? { selection: { from: plan.selection.anchor, to: plan.selection.head } } : {}),
+			});
 			const host = editor as Editor & { cm?: unknown };
 			if (plan.stops.length > 0) {
 				this.autofill.session.start(0, { text: '', stops: plan.stops }, host.cm ?? host);
 			} else {
 				this.autofill.session.clear();
 			}
+		} else {
+			editor.replaceRange(payeeText, context.start, context.end);
 		}
+		this.index.remember?.(value);
 		this.close();
 	}
+
 }
 
 /**

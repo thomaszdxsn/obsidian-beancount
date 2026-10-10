@@ -243,6 +243,7 @@ function ledgerLines(
 interface LinkDoc {
 	lines: number;
 	line(n: number): { from: number; to: number; text: string };
+	toString(): string;
 }
 
 /** Mark ranges for include paths on ledger lines of `doc`. `text` is `doc`'s full text. */
@@ -253,26 +254,119 @@ export function includeLinkMarks(
 ): Array<{ from: number; to: number }> {
 	const eligible = ledgerLines(text, file);
 	if (eligible === 'none') return [];
+	if (eligible === null) return collectIncludeMarks(doc, null);
+	const lines = [...eligible].sort((a, b) => a - b);
+	return collectIncludeMarks(
+		doc,
+		lines.map((line) => ({ fromLine: line, toLine: line }))
+	);
+}
+
+/**
+ * Include-path ranges on `spans` (0-based, inclusive). `null` walks every
+ * line. A line is visited once, so overlapping viewport ranges cannot emit
+ * two marks for the same path.
+ */
+function collectIncludeMarks(
+	doc: LinkDoc,
+	spans: ReadonlyArray<{ fromLine: number; toLine: number }> | null
+): Array<{ from: number; to: number }> {
 	const marks: Array<{ from: number; to: number }> = [];
-	for (let i = 0; i < doc.lines; i += 1) {
-		if (eligible !== null && !eligible.has(i)) continue;
-		const line = doc.line(i + 1);
+	const seen = new Set<number>();
+	const visit = (index: number) => {
+		if (index < 0 || index >= doc.lines || seen.has(index)) return;
+		seen.add(index);
+		const line = doc.line(index + 1);
 		const span = includeLinkSpan(line.text);
-		if (!span || span.to <= span.from) continue;
+		if (!span || span.to <= span.from) return;
 		marks.push({ from: line.from + span.from, to: line.from + span.to });
+	};
+	if (spans === null) {
+		for (let i = 0; i < doc.lines; i += 1) visit(i);
+		return marks;
+	}
+	for (const span of spans) {
+		const from = Math.max(0, span.fromLine);
+		const to = Math.min(doc.lines - 1, span.toLine);
+		for (let i = from; i <= to; i += 1) visit(i);
 	}
 	return marks;
 }
 
+/**
+ * Whether any line could open a markdown fence. A miss means the note has
+ * no ledger text, so the caller must not materialize the document or look
+ * for `include` directives. A hit is cheap to confirm; fence bodies are
+ * short, and only those are walked afterwards.
+ */
+function docHasFence(doc: LinkDoc): boolean {
+	for (let n = 1; n <= doc.lines; n += 1) {
+		if (/^ {0,3}(`{3,}|~{3,})/.test(doc.line(n).text)) return true;
+	}
+	return false;
+}
+
+/**
+ * 0-based line spans `view.visibleRanges` covers. `null` means the viewport
+ * is unmeasured (missing or empty): every line is eligible, the same
+ * fallback the ledger highlighter uses before the first measure. A range
+ * that does not overlap the document is skipped, so a stale range past the
+ * end does not decorate the last line.
+ */
+function visibleLineSpans(view: EditorView): Array<{ fromLine: number; toLine: number }> | null {
+	const doc = view.state.doc;
+	const ranges = view.visibleRanges;
+	if (!ranges || ranges.length === 0) return null;
+	if (doc.lines === 0) return [];
+	const length = typeof doc.length === 'number' ? doc.length : doc.line(doc.lines).to;
+	const spans: Array<{ fromLine: number; toLine: number }> = [];
+	for (const range of ranges) {
+		if (range.to < 0 || range.from > length) continue;
+		const fromPos = range.from < 0 ? 0 : range.from;
+		const endPos = range.to > range.from ? range.to - 1 : range.from;
+		if (endPos < 0) continue;
+		const fromLine = doc.lineAt(fromPos > length ? length : fromPos).number - 1;
+		const toLine = doc.lineAt(endPos > length ? length : endPos).number - 1;
+		if (toLine >= fromLine) spans.push({ fromLine, toLine });
+	}
+	return spans;
+}
+
+/**
+ * Marks for this view. A ledger file walks only the viewport and never
+ * allocates `doc.toString()` — that string was unused, and a full scan on
+ * every keystroke in every editor is the cost this avoids. A markdown note
+ * is read only when it contains a fence.
+ */
+function includeMarks(view: EditorView): Array<{ from: number; to: number }> {
+	const file = editorFile(view.state);
+	if (!file) return [];
+	const doc = view.state.doc;
+	if (isLedgerFile(file)) return collectIncludeMarks(doc, visibleLineSpans(view));
+	if (file.extension !== 'md' || !docHasFence(doc)) return [];
+	return includeLinkMarks(doc, doc.toString(), file);
+}
+
 function includeDecorations(view: EditorView): DecorationSet {
-	const text = view.state.doc.toString();
-	const marks = includeLinkMarks(view.state.doc, text, editorFile(view.state));
+	const marks = includeMarks(view);
 	// An empty set, not `Decoration.none`: the test double has no shared
 	// empty decoration, and a real editor treats an empty set the same.
 	return Decoration.set(
 		marks.map((mark) => Decoration.mark({ class: INCLUDE_LINK_CLASS }).range(mark.from, mark.to)),
 		true
 	);
+}
+
+/**
+ * Whether 0-based `lineIndex` is ledger text. A ledger file is, and that
+ * does not read the document — Mod-click must not allocate the whole file
+ * to answer it. A note is only when the line sits in a beancount fence.
+ */
+function lineInLedger(doc: LinkDoc, lineIndex: number, file: { path: string; extension: string }): boolean {
+	if (isLedgerFile(file)) return true;
+	if (file.extension !== 'md' || !docHasFence(doc)) return false;
+	const eligible = ledgerLines(doc.toString(), file);
+	return eligible !== 'none' && eligible !== null && eligible.has(lineIndex);
 }
 
 /**
@@ -290,10 +384,9 @@ export function includeLinkMouseDown(view: EditorView, event: MouseEvent, app: A
 	if (pos === null) return false;
 	const line = view.state.doc.lineAt(pos);
 	const file = editorFile(view.state);
-	const eligible = ledgerLines(view.state.doc.toString(), file);
-	if (eligible === 'none' || (eligible !== null && !eligible.has(line.number - 1))) return false;
+	if (!file || !lineInLedger(view.state.doc, line.number - 1, file)) return false;
 	const span = includeLinkSpan(line.text);
-	if (!span || !file) return false;
+	if (!span) return false;
 	const col = pos - line.from;
 	if (col < span.from || col > span.to) return false;
 	event.preventDefault();
@@ -335,7 +428,12 @@ export function includeLinksExtension(app: App): Extension {
 
 			update(update: ViewUpdate): void {
 				const key = editorFileKey(update.state);
-				if (!update.docChanged && key === this.fileKey) return;
+				const fileChanged = key !== this.fileKey;
+				const viewportOnly = Boolean(update.viewportChanged) && !update.docChanged && !fileChanged;
+				if (!update.docChanged && !fileChanged && !update.viewportChanged) return;
+				// Fence marks do not depend on the viewport; only a ledger file does.
+				const file = editorFile(update.state);
+				if (viewportOnly && !(file && isLedgerFile(file))) return;
 				this.fileKey = key;
 				this.decorations = includeDecorations(update.view);
 			}
@@ -423,30 +521,71 @@ function globMatch(pattern: string, file: string): boolean {
  */
 function segmentMatch(pattern: string, text: string): boolean {
 	if (text.startsWith('.') && !pattern.startsWith('.')) return false;
-	return matchAt(pattern, 0, text, 0);
+	return matchSegment(pattern, text);
 }
 
-function matchAt(pattern: string, pi: number, text: string, ti: number): boolean {
-	while (pi < pattern.length) {
+/** One pattern atom. A star is not an atom — it is the retry point. */
+type SegmentAtom =
+	| { kind: 'star' }
+	| { kind: 'any' }
+	| { kind: 'lit'; ch: string }
+	| { kind: 'class'; neg: boolean; cls: string };
+
+/**
+ * Match one segment. A `*` remembers the atom after it and the text index
+ * it last consumed, then retries from the next character on failure. That
+ * stays linear in the name: a pattern of many stars cannot hang Mod-click
+ * the way a recursive search of every star boundary would. `?` is one
+ * character. `[...]` is one character, including `!`/`^` negation and
+ * ranges; an unclosed `[` is a literal. Stars are collapsed, since `**`
+ * matches the same names as `*`.
+ */
+function matchSegment(pattern: string, text: string): boolean {
+	const atoms = segmentAtoms(pattern);
+	let ai = 0;
+	let ti = 0;
+	let starAi = -1;
+	let starTi = -1;
+	while (ti < text.length) {
+		if (ai < atoms.length && atoms[ai].kind === 'star') {
+			starAi = ai;
+			starTi = ti;
+			ai += 1;
+			continue;
+		}
+		if (ai < atoms.length && segmentAtomMatches(atoms[ai], text[ti])) {
+			ai += 1;
+			ti += 1;
+			continue;
+		}
+		if (starAi < 0) return false;
+		starTi += 1;
+		ti = starTi;
+		ai = starAi + 1;
+	}
+	while (ai < atoms.length && atoms[ai].kind === 'star') ai += 1;
+	return ai === atoms.length;
+}
+
+function segmentAtoms(pattern: string): SegmentAtom[] {
+	const atoms: SegmentAtom[] = [];
+	for (let pi = 0; pi < pattern.length; ) {
 		const ch = pattern[pi];
 		if (ch === '*') {
-			for (let k = text.length; k >= ti; k -= 1) {
-				if (matchAt(pattern, pi + 1, text, k)) return true;
-			}
-			return false;
-		}
-		if (ti >= text.length) return false;
-		if (ch === '?') {
+			if (atoms.length === 0 || atoms[atoms.length - 1].kind !== 'star') atoms.push({ kind: 'star' });
 			pi += 1;
-			ti += 1;
+			continue;
+		}
+		if (ch === '?') {
+			atoms.push({ kind: 'any' });
+			pi += 1;
 			continue;
 		}
 		if (ch === '[') {
 			const close = pattern.indexOf(']', pi + 1);
 			if (close === -1) {
-				if (text[ti] !== '[') return false;
+				atoms.push({ kind: 'lit', ch: '[' });
 				pi += 1;
-				ti += 1;
 				continue;
 			}
 			let cls = pattern.slice(pi + 1, close);
@@ -455,17 +594,22 @@ function matchAt(pattern: string, pi: number, text: string, ti: number): boolean
 				neg = true;
 				cls = cls.slice(1);
 			}
-			const hit = classHas(cls, text[ti]);
-			if (neg ? hit : !hit) return false;
+			atoms.push({ kind: 'class', neg, cls });
 			pi = close + 1;
-			ti += 1;
 			continue;
 		}
-		if (text[ti] !== ch) return false;
+		atoms.push({ kind: 'lit', ch });
 		pi += 1;
-		ti += 1;
 	}
-	return ti === text.length;
+	return atoms;
+}
+
+function segmentAtomMatches(atom: SegmentAtom, ch: string): boolean {
+	if (atom.kind === 'any') return true;
+	if (atom.kind === 'lit') return atom.ch === ch;
+	if (atom.kind !== 'class') return false;
+	const hit = classHas(atom.cls, ch);
+	return atom.neg ? !hit : hit;
 }
 
 function classHas(cls: string, ch: string): boolean {

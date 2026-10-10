@@ -48,6 +48,7 @@ export class FakeVault {
 
 	readonly api = {
 		getFiles: (): FakeFile[] => [...this.files.values()],
+		getAbstractFileByPath: (path: string): FakeFile | null => this.files.get(path) ?? null,
 		cachedRead: (file: FakeFile): Promise<string> => this.read(file),
 		read: (file: FakeFile): Promise<string> => this.read(file),
 		modify: async (file: FakeFile, data: string): Promise<void> => {
@@ -182,7 +183,7 @@ export interface FakeEditor {
 	listSelections(): FakeSelection[];
 	replaceRange(replacement: string, from: FakePosition, to?: FakePosition): void;
 	replaceSelection(replacement: string): void;
-	transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void;
+	transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition; to?: FakePosition } }): void;
 }
 
 export function createEditor(lines: string[]): FakeEditor {
@@ -248,15 +249,21 @@ export function createEditor(lines: string[]): FakeEditor {
 			const pos = positionAt(from + replacement.length, this.lines);
 			this.selections = [{ anchor: pos, head: pos }];
 		},
-		transaction(tx: { changes: FakeEditorChange[]; selection?: { from: FakePosition } }): void {
+		transaction(tx: {
+			changes: FakeEditorChange[];
+			selection?: { from: FakePosition; to?: FakePosition };
+		}): void {
 			this.transactions.push(tx.changes);
-			for (const change of tx.changes) {
-				const line = this.lines[change.from.line];
-				this.lines[change.from.line] =
-					line.slice(0, change.from.ch) + change.text + line.slice(change.to.ch);
+			// Pre-edit coordinates: a later change on the same line is applied
+			// first so an earlier range still addresses the original text.
+			const ordered = [...tx.changes].sort((a, b) => b.from.line - a.from.line || b.from.ch - a.from.ch);
+			for (const change of ordered) {
+				const line = this.lines[change.from.line] ?? '';
+				const toCh = change.to.line === change.from.line ? change.to.ch : line.length;
+				this.lines[change.from.line] = line.slice(0, change.from.ch) + change.text + line.slice(toCh);
 			}
 			if (tx.selection) {
-				this.selections = [{ anchor: tx.selection.from, head: tx.selection.from }];
+				this.selections = [{ anchor: tx.selection.from, head: tx.selection.to ?? tx.selection.from }];
 			}
 		},
 	};

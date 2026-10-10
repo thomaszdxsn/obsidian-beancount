@@ -48,11 +48,20 @@ interface HintWidget {
 	ignoreEvent(): boolean;
 }
 
-function editor(controller: Pick<BalanceInlayController, 'extension'>, text: string, extension: string | null = 'bean') {
+function editor(
+	controller: Pick<BalanceInlayController, 'extension'>,
+	text: string,
+	extension: string | null = 'bean',
+	viewport?: ReadonlyArray<{ from: number; to: number }>
+) {
 	let file = extension === null ? null : { path: `ledger.${extension}`, extension };
 	let plugin: InlayPlugin;
+	let ranges: ReadonlyArray<{ from: number; to: number }> | undefined = viewport;
 	const view = {
 		state: { doc: Text.of(text.split('\n')), field: () => ({ file }) },
+		get visibleRanges() {
+			return ranges;
+		},
 		dispatch(spec: { effects: unknown }) {
 			plugin.update({ state: view.state, view, docChanged: false, transactions: [{ effects: [spec.effects] }] } as unknown as ViewUpdate);
 		},
@@ -69,6 +78,17 @@ function editor(controller: Pick<BalanceInlayController, 'extension'>, text: str
 		},
 		setFile(next: { path: string; extension: string } | null) {
 			file = next;
+		},
+		/** Scroll. A selection-only update must not be used for this. */
+		setViewport(next: ReadonlyArray<{ from: number; to: number }> | undefined) {
+			ranges = next;
+			plugin.update({
+				state: view.state,
+				view,
+				docChanged: false,
+				viewportChanged: true,
+				transactions: [],
+			} as unknown as ViewUpdate);
 		},
 		/** Selection or other non-document noise: must not rebuild hints. */
 		unchanged() {
@@ -314,5 +334,70 @@ describe('balance inlay editor lifecycle', () => {
 		expect((controller.extension as unknown as MockViewPlugin<InlayPlugin>).spec.decorations(pane.plugin)).toBe(
 			pane.plugin.decorations
 		);
+	});
+
+	it('limits posting hints to viewport transactions and keeps balance hints file-wide', () => {
+		const head = ['2026-01-01 * "Near"', '  Assets:Cash  10.00 USD', '2026-01-02 balance Assets:Cash 12.50 USD'];
+		const mid = ['2026-02-01 * "Mid"', '  Assets:A  8.00 USD', '  Assets:B  -1.00 USD'];
+		const far = ['2026-03-01 * "Far"', '  Assets:A  10.00 USD', '  Assets:B  20.00 USD', '  Assets:C'];
+		const gap = Array.from({ length: 40 }, () => '; gap');
+		const lines = [...head, ...gap, ...mid, ...gap, ...far];
+		const doc = Text.of(lines);
+		const lineTo = (line: number) => doc.line(line).to;
+		const span = (line: number) => ({ from: doc.line(line).from, to: doc.line(line).to });
+		const nearLine = 1;
+		const balanceLine = 3;
+		const midHeader = head.length + gap.length + 1;
+		const farCash = lines.length;
+		const host = { settings: { inlayHints: true, entryLedger: '' } };
+		const controller = new BalanceInlayController(host);
+		const pane = editor(controller, lines.join('\n'), 'bean', [span(farCash)]);
+		// The balance line is above the viewport; its delta still needs the file from the top.
+		expect(pane.labels()).toEqual([
+			{ at: lineTo(balanceLine), text: 'Δ +2.50 USD' },
+			{ at: lineTo(farCash), text: ' -30.00 USD' },
+		]);
+		host.settings.entryLedger = 'main.bean';
+		controller.refresh();
+		expect(pane.labels()).toEqual([{ at: lineTo(farCash), text: ' -30.00 USD' }]);
+		// The visible line is a posting; the warning sits on the header above it.
+		pane.setViewport([span(midHeader + 1)]);
+		expect(pane.labels()).toEqual([{ at: lineTo(midHeader), text: '≠ 0: 7.00 USD' }]);
+		pane.setViewport([span(nearLine + 1), span(farCash), span(farCash - 1)]);
+		expect(pane.labels()).toEqual([
+			{ at: lineTo(nearLine), text: '≠ 0: 10.00 USD' },
+			{ at: lineTo(farCash), text: ' -30.00 USD' },
+		]);
+		pane.setViewport([]);
+		expect(pane.labels()).toEqual([
+			{ at: lineTo(nearLine), text: '≠ 0: 10.00 USD' },
+			{ at: lineTo(midHeader), text: '≠ 0: 7.00 USD' },
+			{ at: lineTo(farCash), text: ' -30.00 USD' },
+		]);
+	});
+
+	it('limits fence posting hints to the viewport and does not hint prose', () => {
+		const lines = [
+			'# Note',
+			'```bean',
+			'2026-01-01 * "A"',
+			'  Assets:A  10.00 USD',
+			'  Assets:B  -9.00 USD',
+			'',
+			'2026-02-01 * "B"',
+			'  Assets:A  4.00 USD',
+			'  Assets:B  -1.00 USD',
+			'```',
+			'2026-03-01 * "Prose"',
+			'  Assets:A  9.00 USD',
+			'  Assets:B  -1.00 USD',
+		];
+		const doc = Text.of(lines);
+		const span = (line: number) => ({ from: doc.line(line).from, to: doc.line(line).to });
+		const controller = new BalanceInlayController({ settings: { inlayHints: true, entryLedger: 'main.bean' } });
+		const pane = editor(controller, lines.join('\n'), 'md', [span(9)]);
+		expect(pane.labels()).toEqual([{ at: doc.line(7).to, text: '≠ 0: 3.00 USD' }]);
+		pane.setViewport([span(11), span(12), span(13)]);
+		expect(pane.labels()).toEqual([]);
 	});
 });

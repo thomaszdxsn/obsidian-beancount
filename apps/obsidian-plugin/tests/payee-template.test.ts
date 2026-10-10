@@ -37,7 +37,7 @@ function indexWith(files: Record<string, string>): PayeeTemplateIndex {
 }
 
 describe('PayeeTemplateIndex', () => {
-	it('keeps the latest transaction by date, then later line, then later path', () => {
+	it('keeps the latest transaction by date, then later path, then later line in the same file', () => {
 		const index = indexWith({
 			'a.bean': [CAFE, '', '2026-02-01 * "Cafe"', '  Expenses:Rent  9.00 USD', '  Assets:Cash  -9.00 USD'].join('\n'),
 			'b.bean': '2026-02-01 * "Cafe"\n  Expenses:Fuel  3.00 USD\n  Assets:Cash',
@@ -293,6 +293,45 @@ describe('payee autofill on select', () => {
 		expect(applied.session.active).toBe(true);
 	});
 
+	it('writes the payee and the postings in one transaction', () => {
+		const editor = createEditor(['2026-10-04 * "Ca']);
+		const seen: Array<{ changes: unknown; selection?: { from: FakePosition; to?: FakePosition } }> = [];
+		const transaction = editor.transaction.bind(editor);
+		editor.transaction = (tx) => {
+			seen.push(tx);
+			transaction(tx);
+		};
+		const autofill = host(TWO_LEG);
+		const suggest = new PayeeSuggest({} as App, { match: () => ['Cafe'] }, () => true, autofill);
+		suggest.context = {
+			start: { line: 0, ch: 14 },
+			end: { line: 0, ch: 16 },
+			query: 'Ca',
+			editor: editor as unknown as Editor,
+			file: {} as TFile,
+		} as EditorSuggestContext;
+		suggest.selectSuggestion('Cafe', {} as MouseEvent);
+		// Two replaceRange calls would be two undo steps; the first Cmd-Z
+		// would leave the snippet session on offsets the document no longer has.
+		expect(editor.replacements).toEqual([]);
+		expect(seen).toEqual([
+			{
+				changes: [
+					{ from: { line: 0, ch: 14 }, to: { line: 0, ch: 16 }, text: 'Cafe"' },
+					{
+						from: { line: 0, ch: 16 },
+						to: { line: 0, ch: 16 },
+						text: '\n  Expenses:Food  12.50 USD\n  Assets:Cash',
+					},
+				],
+				selection: { from: { line: 1, ch: 17 }, to: { line: 1, ch: 22 } },
+			},
+		]);
+		expect(applyReplacements(editor)).toBe('2026-10-04 * "Cafe"\n  Expenses:Food  12.50 USD\n  Assets:Cash');
+		expect(editor.selections).toEqual([{ anchor: { line: 1, ch: 17 }, head: { line: 1, ch: 22 } }]);
+		expect(autofill.session.active).toBe(true);
+	});
+
 	it('counts the inserted closer in the amount stop', () => {
 		const plan = planPayeeAutofill({
 			lines: ['2026-10-04 * "Ca'],
@@ -349,6 +388,18 @@ describe('payee autofill on select', () => {
 		expect(applyReplacements(editor)).toBe(
 			'```beancount\n2026-10-04 * "Cafe"\n  Expenses:Food  12.50 USD\n  Assets:Cash\n```'
 		);
+		// Insert is the pre-edit end of the header (ch 16), not the post-edit column.
+		expect(editor.replacements).toEqual([]);
+		expect(editor.transactions).toEqual([
+			[
+				{ from: { line: 1, ch: 14 }, to: { line: 1, ch: 16 }, text: 'Cafe"' },
+				{
+					from: { line: 1, ch: 16 },
+					to: { line: 1, ch: 16 },
+					text: '\n  Expenses:Food  12.50 USD\n  Assets:Cash',
+				},
+			],
+		]);
 		expect(autofill.session.active).toBe(true);
 	});
 
