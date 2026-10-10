@@ -410,7 +410,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       const kv = line.key_value();
       const value = kv.key_value_value();
       const key = kv.KEY().getText().slice(0, -1);
-      if (Object.hasOwn(meta, key)) this.error(kv.KEY().symbol, `duplicate metadata key '${key}'`);
+      // Not `Object.hasOwn`: the Obsidian plugin type-checks this source against ES2021.
+      if (Object.prototype.hasOwnProperty.call(meta, key)) this.error(kv.KEY().symbol, `duplicate metadata key '${key}'`);
       meta[key] = value ? this.metadataValue(value) : null;
     }
     return meta;
@@ -476,15 +477,23 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   }
 
   // Span of the rule's own text: ends before the newline that terminates it.
+  // A directive that ends at EOF ends on its last token, which may be a
+  // string spanning several lines.
   private location(ctx: ParserRuleContext): SourceLocation {
     const start = ctx.start!;
     const stop = ctx.stop ?? start;
     const atLineEnd = stop.type === AntlrBeancountParser.EOL || stop.type === Token.EOF;
+    if (atLineEnd) {
+      return { start: { line: start.line, column: start.column }, end: { line: stop.line, column: stop.column } };
+    }
+    const text = stop.text ?? '';
+    const lastBreak = text.lastIndexOf('\n');
+    const breaks = lastBreak === -1 ? 0 : text.split('\n').length - 1;
     return {
       start: { line: start.line, column: start.column },
       end: {
-        line: stop.line,
-        column: atLineEnd ? stop.column : stop.column + (stop.text?.length ?? 0),
+        line: stop.line + breaks,
+        column: lastBreak === -1 ? stop.column + text.length : text.length - lastBreak - 1,
       },
     };
   }

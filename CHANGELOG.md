@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Transactions fold to their header line in ledger files and fences
+  (including fences indented under list items). Each entry is parsed on its
+  own, so an entry with a syntax error loses only its own fold; an entry
+  over 300 lines gets no fold.
+
+### Changed
+
+- The bundle targets ES2022 with esbuild 0.25, so the bundled Beancount
+  parser runs about 6x faster than with ES2018 output.
+
 ## 0.1.1
 
 Clears the community directory's automated review findings.
