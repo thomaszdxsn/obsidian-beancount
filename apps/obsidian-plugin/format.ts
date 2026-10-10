@@ -14,13 +14,15 @@
  * (bean-format's default). Posting metadata is one level deeper. Directive
  * headers collapse runs of spaces and tabs to a single space, but never
  * inside `"..."` strings (escaped quotes included) and never inside a
- * trailing `;` comment. Column-0 comments, org headings, and blank lines
- * keep their text; only trailing whitespace is stripped, and not inside a
- * string.
+ * trailing `;` comment — a `"` there does not open a string. A logical line
+ * whose string is still open continues past a short location, so a
+ * continuation at EOF is not reformatted as its own directive. Column-0
+ * comments, org headings, and blank lines keep their text; only trailing
+ * whitespace is stripped, and not inside a string.
  */
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import type { Directive, Posting } from '@repo/beancount-parser';
-import { alignText } from './align';
+import { alignText, endsInString } from './align';
 import { extractBeancountFences } from './fences';
 import type { BeancountFence } from './fences';
 
@@ -116,9 +118,10 @@ export function formatFencedDocument(text: string): FormatResult {
 
 /**
  * Line replacements that turn `before` into `after`. Equal line counts become
- * one edit per changed line (common prefix/suffix kept, so a caret maps
- * through the edit the way alignment's gap rewrites do). A line-count change
- * — the formatter does not produce one — is a single whole-document edit.
+ * one edit per differing whitespace run: the formatter only changes
+ * whitespace, and a caret in an unchanged token between two runs must not
+ * be swallowed by a span that covers both. A line-count change — the
+ * formatter does not produce one — is a single whole-document edit.
  */
 export function lineChanges(before: string, after: string): LineChange[] {
 	if (before === after) return [];
@@ -138,20 +141,43 @@ export function lineChanges(before: string, after: string): LineChange[] {
 	}
 	const changes: LineChange[] = [];
 	for (let i = 0; i < oldLines.length; i += 1) {
-		const oldLine = oldLines[i];
-		const newLine = newLines[i];
-		if (oldLine === newLine) continue;
-		let from = 0;
-		while (from < oldLine.length && from < newLine.length && oldLine[from] === newLine[from]) from += 1;
-		let oldEnd = oldLine.length;
-		let newEnd = newLine.length;
-		while (oldEnd > from && newEnd > from && oldLine[oldEnd - 1] === newLine[newEnd - 1]) {
-			oldEnd -= 1;
-			newEnd -= 1;
-		}
-		changes.push({ fromLine: i, fromCh: from, toLine: i, toCh: oldEnd, text: newLine.slice(from, newEnd) });
+		pushWhitespaceRuns(changes, i, oldLines[i], newLines[i]);
 	}
 	return changes;
+}
+
+/** One edit per whitespace run that differs. A non-whitespace mismatch takes the rest of the line. */
+function pushWhitespaceRuns(changes: LineChange[], line: number, oldLine: string, newLine: string): void {
+	let oldAt = 0;
+	let newAt = 0;
+	while (oldAt < oldLine.length || newAt < newLine.length) {
+		if (oldAt < oldLine.length && newAt < newLine.length && oldLine[oldAt] === newLine[newAt]) {
+			oldAt += 1;
+			newAt += 1;
+			continue;
+		}
+		const oldFrom = oldAt;
+		const newFrom = newAt;
+		while (oldAt < oldLine.length && (oldLine[oldAt] === ' ' || oldLine[oldAt] === '\t')) oldAt += 1;
+		while (newAt < newLine.length && (newLine[newAt] === ' ' || newLine[newAt] === '\t')) newAt += 1;
+		if (oldAt === oldFrom && newAt === newFrom) {
+			changes.push({
+				fromLine: line,
+				fromCh: oldFrom,
+				toLine: line,
+				toCh: oldLine.length,
+				text: newLine.slice(newFrom),
+			});
+			return;
+		}
+		changes.push({
+			fromLine: line,
+			fromCh: oldFrom,
+			toLine: line,
+			toCh: oldAt,
+			text: newLine.slice(newFrom, newAt),
+		});
+	}
 }
 
 function firstError(e: BeancountSyntaxError): FormatError {
@@ -236,8 +262,7 @@ function rewriteLines(lines: string[], directives: readonly Directive[]): void {
 			const posting = postingAt.get(i);
 			if (posting?.location) {
 				const postingEnd = Math.min(posting.location.end.line - 1, end);
-				const afterLine = rewriteIndented(lines, i, postingEnd, POSTING_INDENT);
-				let j = afterLine;
+				let j = rewriteIndented(lines, i, postingEnd, POSTING_INDENT);
 				while (j <= postingEnd) {
 					if (isIndentedComment(lines[j])) {
 						lines[j] = normalizeComment(lines[j], POSTING_INDENT);
@@ -246,8 +271,10 @@ function rewriteLines(lines: string[], directives: readonly Directive[]): void {
 					}
 					j = rewriteIndented(lines, j, postingEnd, POSTING_META_INDENT);
 				}
-				markConsumed(consumed, i, postingEnd);
-				i = postingEnd + 1;
+				// A string still open at the reported end consumes lines past it.
+				const consumedTo = Math.max(postingEnd, j - 1);
+				markConsumed(consumed, i, consumedTo);
+				i = consumedTo + 1;
 				continue;
 			}
 			if (isIndentedComment(lines[i])) {
@@ -273,12 +300,14 @@ function markConsumed(consumed: boolean[], from: number, to: number): void {
 
 /**
  * Header logical line, which may span physical lines while a string is open.
- * Returns the 0-based index of the first line after it.
+ * Returns the 0-based index of the first line after it. A string still open
+ * at `end` keeps going: the parser's end line can stop short of a multi-line
+ * string at EOF, and those continuation lines are still this header.
  */
 function rewriteHeader(lines: string[], start: number, end: number): number {
 	let inString = false;
 	let i = start;
-	while (i <= end) {
+	while (i < lines.length && (i <= end || inString)) {
 		const collapsed = collapseHeaderLine(lines[i], inString);
 		lines[i] = collapsed.text;
 		inString = collapsed.inString;
@@ -290,13 +319,14 @@ function rewriteHeader(lines: string[], start: number, end: number): number {
 
 /**
  * An indented logical line (posting, metadata, tag/link). Only the first
- * physical line is reindented; later lines are inside a string.
+ * physical line is reindented; later lines are inside a string. A string
+ * still open at `end` keeps going, same as a header.
  */
 function rewriteIndented(lines: string[], start: number, end: number, indent: string): number {
 	let inString = false;
 	let i = start;
 	let first = true;
-	while (i <= end) {
+	while (i < lines.length && (i <= end || inString)) {
 		let line = lines[i];
 		if (first) line = withIndent(line, indent);
 		const still = endsInString(line, inString);
@@ -393,19 +423,3 @@ function collapseHeaderLine(line: string, inStringStart: boolean): { text: strin
 	return { text: inString ? out : stripTrailing(out), inString };
 }
 
-function endsInString(line: string, inStringStart: boolean): boolean {
-	let inString = inStringStart;
-	for (let i = 0; i < line.length; i += 1) {
-		const ch = line[i];
-		if (!inString) {
-			if (ch === '"') inString = true;
-			continue;
-		}
-		if (ch === '\\' && i + 1 < line.length) {
-			i += 1;
-			continue;
-		}
-		if (ch === '"') inString = false;
-	}
-	return inString;
-}

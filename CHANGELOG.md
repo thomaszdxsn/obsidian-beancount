@@ -12,6 +12,17 @@
 
 ### Fixed
 
+- Format ledger no longer treats a `"` inside a `;` comment as an open string,
+  so the next metadata line keeps its indent. A multi-line string at the end
+  of the file keeps its continuation lines.
+- Decimal alignment skips a line that continues an open string, so a
+  posting-shaped line inside a string is left alone — on Format ledger, Align
+  decimal points, and save-time alignment.
+- A caret in an unchanged token between two format edits stays on that token.
+  Format ledger rewrites each whitespace run on its own.
+- Format ledger rewrites a whole buffer only for `.bean` / `.beancount` files.
+  An untitled buffer, or any other file, formats ```beancount / ```bean fences
+  and leaves the rest.
 - Format ledger no longer appends a blank line when an unclosed ```beancount
   fence sits at the end of a note that already ends with a newline.
 

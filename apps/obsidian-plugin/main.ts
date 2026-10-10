@@ -282,14 +282,17 @@ function alignCommand(editor: Editor): void {
 	alignInEditor(editor, commandScope(editor, editorLines(editor)));
 }
 /**
- * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger; a markdown
- * note formats each ```beancount / ```bean fence and leaves the prose. A
- * syntax error names the document line and changes nothing. No notice when
- * the text is already formatted — same as alignment finding nothing to do.
+ * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger. Any other
+ * file, including an untitled buffer, formats each ```beancount / ```bean
+ * fence and leaves the rest. A syntax error names the document line and
+ * changes nothing. No notice when the text is already formatted — same as
+ * alignment finding nothing to do.
  */
-function formatInEditor(editor: Editor, file: { extension: string } | null): void {
+function formatInEditor(editor: Editor, file: { path: string; extension: string } | null): void {
 	const result =
-		file && file.extension === 'md' ? formatFencedDocument(editor.getValue()) : formatLedger(editor.getValue());
+		file !== null && isLedgerFile(file)
+			? formatLedger(editor.getValue())
+			: formatFencedDocument(editor.getValue());
 	if (!result.ok) {
 		new Notice(formatErrorNotice(result.error));
 		return;
@@ -302,10 +305,11 @@ function formatInEditor(editor: Editor, file: { extension: string } | null): voi
 		to: { line: edit.toLine, ch: edit.toCh },
 		text: edit.text,
 	}));
-	// One transaction, and the same lone-caret mapping as decimal alignment:
-	// a caret inside a rewritten span lands at the end of the replacement,
-	// one past it shifts by the length delta, and a selection is left to the
-	// editor so it is not collapsed.
+	// One transaction. A lone caret maps through each whitespace run in the
+	// original coordinates: one inside a run lands at the end of that run's
+	// replacement, one past a run shifts by its length delta, and a token
+	// between two runs stays on that token. A selection is left to the editor
+	// so it is not collapsed.
 	const carets = editor.listSelections();
 	if (carets.length !== 1 || editor.somethingSelected()) {
 		editor.transaction({ changes });
@@ -313,12 +317,20 @@ function formatInEditor(editor: Editor, file: { extension: string } | null): voi
 	}
 	const caret = editor.getCursor();
 	let ch = caret.ch;
+	let shift = 0;
 	for (const edit of edits) {
 		if (edit.fromLine !== caret.line) continue;
-		if (ch >= edit.toCh) ch += edit.text.length - (edit.toCh - edit.fromCh);
-		else if (ch > edit.fromCh) ch = edit.fromCh + edit.text.length;
+		if (ch >= edit.toCh) {
+			shift += edit.text.length - (edit.toCh - edit.fromCh);
+		} else if (ch > edit.fromCh) {
+			ch = edit.fromCh + shift + edit.text.length;
+			shift = 0;
+			break;
+		} else {
+			break;
+		}
 	}
-	editor.transaction({ changes, selection: { from: { line: caret.line, ch } } });
+	editor.transaction({ changes, selection: { from: { line: caret.line, ch: ch + shift } } });
 }
 
 function applyEditorEdit(editor: Editor, edit: TextEdit): void {

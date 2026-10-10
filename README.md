@@ -81,7 +81,7 @@ A missing or rejected `bean-check` shows:
 | Command | Notes |
 | --- | --- |
 | Align decimal points | Current transaction block, or the selection when there is one. No default hotkey; bind one under Settings → Hotkeys. |
-| Format ledger | Whole `.bean` / `.beancount` file, or each ```beancount / ```bean fence in a note. A syntax error names the line and changes nothing. No default hotkey. |
+| Format ledger | Whole `.bean` / `.beancount` file, or each ```beancount / ```bean fence in any other buffer. A syntax error names the line and changes nothing. No default hotkey. |
 | Insert today's date | `YYYY-MM-DD` at the cursor. No default hotkey; bind one under Settings → Hotkeys. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
 | Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
@@ -164,7 +164,8 @@ A missing or rejected `bean-check` shows:
   decimal points of the posting amounts in the transaction block at the cursor
   — or in the selection, when there is one. Each block gets its own column:
   the amounts' `sign + integer` blocks right-align at it (integers at the
-  units place) and cost/price annotations stay put. An optional setting walks
+  units place) and cost/price annotations stay put. A line inside a multi-line
+  string is not a posting, even if it looks like one. An optional setting walks
   every block of each markdown/beancount file the same way whenever it is
   saved. Instant alignment (on by default) intercepts `.` in a posting amount,
   aligns that transaction block onto the separator column (default 50), and
@@ -172,12 +173,13 @@ A missing or rejected `bean-check` shows:
   Alignment pads with spaces, so `.bean` / `.beancount` editors switch to the
   monospace font (`--font-monospace`); fences are already code blocks.
 - **Format ledger**: the "Format ledger" command rewrites a `.bean` /
-  `.beancount` file, or each ```beancount / ```bean fence in a markdown note,
-  in one undo step. Postings and directive metadata use the two-space indent;
-  posting metadata is indented one level further. Header lines collapse runs
-  of spaces, strings and `;` comments keep their text, and each transaction's
-  decimal points are aligned. A syntax error raises a Notice with the document
-  line and changes nothing.
+  `.beancount` file, or each ```beancount / ```bean fence in any other buffer
+  (a markdown note, an untitled file), in one undo step. Postings and directive
+  metadata use the two-space indent; posting metadata is indented one level
+  further. Header lines collapse runs of spaces, strings and `;` comments keep
+  their text (a `"` in a comment does not start a string), and each
+  transaction's decimal points are aligned. A syntax error raises a Notice
+  with the document line and changes nothing.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
   selection when there is one. It has no default hotkey; bind one under

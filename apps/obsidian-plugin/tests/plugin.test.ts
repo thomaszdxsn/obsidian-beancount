@@ -2033,23 +2033,30 @@ describe('BeancountPlugin', () => {
 		expect(bean.transactions).toEqual([]);
 	});
 
-	it('maps a lone caret through a rewritten gap and leaves other carets alone', async () => {
+	it('maps a lone caret through each whitespace run and leaves other carets alone', async () => {
 		const { plugin } = await loadPlugin();
 		const command = plugin.registrations.commands.find((entry) => entry.id === 'format-ledger');
 		const lines = ['2026-10-01   *   "Store"', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD'];
 
 		const inside = createEditor([...lines]);
-		// On the `*` inside the collapsed header spaces.
+		// On the `*`, between the two collapsed runs. It stays on that token.
 		inside.setCursor({ line: 0, ch: 13 });
 		command?.editorCallback?.(inside, { file: { extension: 'bean' } });
 		expect(inside.lines[0]).toBe('2026-10-01 * "Store"');
-		expect(inside.getCursor()).toEqual({ line: 0, ch: 12 });
+		expect(inside.getCursor()).toEqual({ line: 0, ch: 11 });
 
 		const after = createEditor([...lines]);
-		// On the `S` of the payee, past the rewritten span.
+		// On the `S` of the payee, past both runs.
 		after.setCursor({ line: 0, ch: 18 });
-		command?.editorCallback?.(after, { file: null });
+		command?.editorCallback?.(after, { file: { extension: 'bean' } });
 		expect(after.getCursor()).toEqual({ line: 0, ch: 14 });
+
+		const token = createEditor(['2022-01-01   open   Assets:A']);
+		// On the `p` of `open`, between the two collapsed runs.
+		token.setCursor({ line: 0, ch: 14 });
+		command?.editorCallback?.(token, { file: { extension: 'bean' } });
+		expect(token.lines[0]).toBe('2022-01-01 open Assets:A');
+		expect(token.getCursor()).toEqual({ line: 0, ch: 12 });
 
 		const other = createEditor([...lines]);
 		other.setCursor({ line: 1, ch: 4 });
@@ -2074,6 +2081,25 @@ describe('BeancountPlugin', () => {
 		command?.editorCallback?.(range, { file: { extension: 'bean' } });
 		expect(range.lines[0]).toBe('2026-10-01 * "Store"');
 		expect(range.selections).toEqual([{ anchor: { line: 0, ch: 17 }, head: { line: 0, ch: 22 } }]);
+	});
+
+	it('formats a whole buffer only for a ledger file', async () => {
+		const { plugin } = await loadPlugin();
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'format-ledger');
+		const loose = '2022-01-01   open   Assets:A';
+
+		const untitled = createEditor([loose]);
+		command?.editorCallback?.(untitled, { file: null });
+		expect(untitled.getValue()).toBe(loose);
+		expect(untitled.transactions).toEqual([]);
+
+		const text = createEditor([loose]);
+		command?.editorCallback?.(text, { file: { extension: 'txt' } });
+		expect(text.getValue()).toBe(loose);
+
+		const fenced = createEditor(['note  ', '```beancount', loose, '```']);
+		command?.editorCallback?.(fenced, { file: null });
+		expect(fenced.lines).toEqual(['note  ', '```beancount', '2022-01-01 open Assets:A', '```']);
 	});
 
 
