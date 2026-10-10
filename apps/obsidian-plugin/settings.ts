@@ -4,6 +4,7 @@
  * `main`, so the two modules never form a cycle.
  */
 import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import type { SettingDefinitionItem, SettingGroupItem } from 'obsidian';
 import { DEFAULT_FLAG_WARNINGS } from './flag-warnings';
 import type { FlagWarningLevel } from './flag-warnings';
 import { DEFAULT_FAVA_PORT, normalizeFavaPort } from './fava';
@@ -99,15 +100,223 @@ export interface SettingsHost {
 	saveSettings(): Promise<void>;
 }
 
-const FLAG_LEVEL_OPTIONS: Array<[string, FlagWarningLevel]> = [
-	['None', null],
-	['Warning', 'warning'],
-	['Error', 'error'],
+type ToggleKey = {
+	[K in keyof BeancountSettings]: BeancountSettings[K] extends boolean ? K : never;
+}[keyof BeancountSettings];
+
+interface SpecText {
+	name: string;
+	desc: string;
+}
+
+/**
+ * One row of the settings tab. The same table drives the declarative
+ * definitions Obsidian 1.13+ renders and searches, and the imperative
+ * `display()` older versions call, so the two cannot drift.
+ */
+type SettingSpec = SpecText &
+	(
+		| { kind: 'toggle'; key: ToggleKey }
+		| { kind: 'text'; key: 'beanCheckPath' | 'entryLedger' | 'favaPath'; placeholder: string }
+		| {
+				kind: 'int';
+				key: 'separatorColumn' | 'favaPort';
+				placeholder: string;
+				/** Rejected input leaves the stored value unchanged. */
+				accepts: (value: number) => boolean;
+		  }
+		| { kind: 'flag'; key: `flagWarnings.${string}`; flag: string }
+	);
+
+const FLAG_LEVEL_OPTIONS: Record<string, string> = { none: 'None', warning: 'Warning', error: 'Error' };
+
+const SETTING_GROUPS: ReadonlyArray<{ heading: string; items: readonly SettingSpec[] }> = [
+	{
+		heading: 'Alignment',
+		items: [
+			{
+				kind: 'toggle',
+				key: 'alignOnSave',
+				name: 'Align amounts on save',
+				desc: 'Re-align the decimal points of posting amounts whenever a Markdown or Beancount file is saved.',
+			},
+			{
+				kind: 'toggle',
+				key: 'instantAlignment',
+				name: 'Instant alignment',
+				desc: 'When typing a decimal point in a posting amount, align that transaction block and keep the cursor after the point.',
+			},
+			{
+				kind: 'int',
+				key: 'separatorColumn',
+				name: 'Separator column',
+				desc: '1-based column the decimal point jumps to during instant alignment. Wide accounts still push past it.',
+				placeholder: '50',
+				accepts: (column) => column >= 1,
+			},
+			{
+				kind: 'toggle',
+				key: 'showRuler',
+				name: 'Show separator ruler',
+				desc: 'Draw a dotted vertical line at the separator column in .bean and .beancount files.',
+			},
+		],
+	},
+	{
+		heading: 'Validation',
+		items: [
+			{
+				kind: 'text',
+				key: 'beanCheckPath',
+				name: 'Bean-check executable',
+				desc: 'Path to bean-check; leave empty to run `bean-check` from PATH. Install beancount with `pip install beancount`.',
+				placeholder: 'bean-check',
+			},
+			{
+				kind: 'text',
+				key: 'entryLedger',
+				name: 'Entry ledger',
+				desc: 'Vault path of the ledger entry file. Saving a .bean file checks that file’s whole include chain. Saving a markdown note with ```beancount / ```bean fences checks those fences: with an entry ledger they are validated as if included after it (opens and accounts apply); without one, the fences are checked on their own. Leave empty to validate each saved ledger file on its own.',
+				placeholder: 'main.bean',
+			},
+			{
+				kind: 'toggle',
+				key: 'inlayHints',
+				name: 'Balance inlay hints',
+				desc: 'Show the single-commodity difference (asserted minus accumulated) at the end of balance lines. Hidden when an entry ledger is set, because postings outside this file are unknown.',
+			},
+		],
+	},
+	{
+		heading: 'Completion',
+		items: [
+			{
+				kind: 'toggle',
+				key: 'completePayee',
+				name: 'Complete payees',
+				desc: 'Typing the first quoted field of a transaction line (2026-09-30 * "Am…) suggests payees found in the vault.',
+			},
+			{
+				kind: 'toggle',
+				key: 'payeeAutofill',
+				name: 'Autofill payee postings',
+				desc: "Picking a payee inserts the postings of that payee's most recent transaction when the entry has none yet. Amounts are selected so the next numbers can be typed; Tab moves between them.",
+			},
+			{
+				kind: 'toggle',
+				key: 'completeNarration',
+				name: 'Complete narrations',
+				desc: 'Typing the second quoted field of a transaction line ("payee" "na…) suggests narrations found in the vault, and picking one closes the field.',
+			},
+			{
+				kind: 'toggle',
+				key: 'pinyinMatching',
+				name: 'Pinyin initials matching',
+				desc: 'Also match payees, narrations and accounts by pinyin initials: `餐饮` completes from `cy`, and `Expenses:餐饮` from `Expenses:cy`. Direct matches still rank first.',
+			},
+		],
+	},
+	{
+		heading: 'Fava',
+		items: [
+			{
+				kind: 'text',
+				key: 'favaPath',
+				name: 'Fava executable',
+				desc: 'Path to Fava; leave empty to run `fava` from PATH. Only a program named `fava` is accepted.',
+				placeholder: 'fava',
+			},
+			{
+				kind: 'int',
+				key: 'favaPort',
+				name: 'Fava port',
+				desc: 'TCP port Fava binds on 127.0.0.1. Default 5000.',
+				placeholder: String(DEFAULT_FAVA_PORT),
+				accepts: (port) => port >= 1 && port <= 65535,
+			},
+			{
+				kind: 'toggle',
+				key: 'runFavaOnActivate',
+				name: 'Run Fava on activate',
+				desc: 'Start Fava against the entry ledger (or the active ledger file) when the plugin loads.',
+			},
+		],
+	},
+	{
+		heading: 'Flag warnings',
+		items: [
+			{
+				kind: 'flag',
+				key: 'flagWarnings.!',
+				flag: '!',
+				name: 'Incomplete transactions (!)',
+				desc: 'Marker style for transactions flagged `!`. Default: warning.',
+			},
+			{
+				kind: 'flag',
+				key: 'flagWarnings.*',
+				flag: '*',
+				name: 'Cleared transactions (*)',
+				desc: 'Marker style for transactions flagged `*` or `txn`. Default: none.',
+			},
+		],
+	},
 ];
 
-function parseFlagLevel(value: string): FlagWarningLevel {
-	if (value === 'warning' || value === 'error') return value;
-	return null;
+const SPEC_BY_KEY = new Map<string, SettingSpec>(
+	SETTING_GROUPS.flatMap((group) => group.items.map((spec): [string, SettingSpec] => [spec.key, spec]))
+);
+
+/** The value a control shows: text inputs and dropdowns take strings. */
+function readSetting(settings: BeancountSettings, spec: SettingSpec): boolean | string {
+	switch (spec.kind) {
+		case 'toggle':
+			return settings[spec.key];
+		case 'text':
+			return settings[spec.key];
+		case 'int':
+			return String(settings[spec.key]);
+		case 'flag':
+			return settings.flagWarnings[spec.flag] ?? 'none';
+	}
+}
+
+/** Store a control's new value; `false` when the input is rejected. */
+function writeSetting(settings: BeancountSettings, spec: SettingSpec, value: unknown): boolean {
+	switch (spec.kind) {
+		case 'toggle':
+			if (typeof value !== 'boolean') return false;
+			settings[spec.key] = value;
+			return true;
+		case 'text':
+			if (typeof value !== 'string') return false;
+			settings[spec.key] = value;
+			return true;
+		case 'int': {
+			const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : Number.NaN;
+			if (!Number.isInteger(parsed) || !spec.accepts(parsed)) return false;
+			settings[spec.key] = parsed;
+			return true;
+		}
+		case 'flag': {
+			const level: FlagWarningLevel = value === 'warning' || value === 'error' ? value : null;
+			settings.flagWarnings[spec.flag] = level;
+			return true;
+		}
+	}
+}
+
+function controlDefinition(spec: SettingSpec): SettingGroupItem {
+	const { name, desc, key } = spec;
+	switch (spec.kind) {
+		case 'toggle':
+			return { name, desc, control: { type: 'toggle', key } };
+		case 'text':
+		case 'int':
+			return { name, desc, control: { type: 'text', key, placeholder: spec.placeholder } };
+		case 'flag':
+			return { name, desc, control: { type: 'dropdown', key, options: FLAG_LEVEL_OPTIONS } };
+	}
 }
 
 export class BeancountSettingTab extends PluginSettingTab {
@@ -120,196 +329,49 @@ export class BeancountSettingTab extends PluginSettingTab {
 		this.host = plugin;
 	}
 
+	/** Obsidian 1.13+: renders and indexes the tab for settings search. */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return SETTING_GROUPS.map((group) => ({
+			type: 'group',
+			heading: group.heading,
+			items: group.items.map(controlDefinition),
+		}));
+	}
+
+	getControlValue(key: string): unknown {
+		const spec = SPEC_BY_KEY.get(key);
+		return spec ? readSetting(this.host.settings, spec) : undefined;
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		const spec = SPEC_BY_KEY.get(key);
+		if (!spec || !writeSetting(this.host.settings, spec, value)) return;
+		await this.host.saveSettings();
+	}
+
+	/** Obsidian before 1.13 renders the same table imperatively. */
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-
-		new Setting(containerEl).setName('Alignment').setHeading();
-		new Setting(containerEl)
-			.setName('Align amounts on save')
-			.setDesc('Re-align the decimal points of posting amounts whenever a Markdown or Beancount file is saved.')
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.alignOnSave).onChange(async (value) => {
-					this.host.settings.alignOnSave = value;
-					await this.host.saveSettings();
-				})
-			);
-		new Setting(containerEl)
-			.setName('Instant alignment')
-			.setDesc('When typing a decimal point in a posting amount, align that transaction block and keep the cursor after the point.')
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.instantAlignment).onChange(async (value) => {
-					this.host.settings.instantAlignment = value;
-					await this.host.saveSettings();
-				})
-			);
-		new Setting(containerEl)
-			.setName('Separator column')
-			.setDesc('1-based column the decimal point jumps to during instant alignment. Wide accounts still push past it.')
-			.addText((text) =>
-				text
-					.setPlaceholder('50')
-					.setValue(String(this.host.settings.separatorColumn))
-					.onChange(async (value) => {
-						const column = Number.parseInt(value, 10);
-						if (!Number.isFinite(column) || column < 1) return;
-						this.host.settings.separatorColumn = column;
-						await this.host.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName('Show separator ruler')
-			.setDesc('Draw a dotted vertical line at the separator column in .bean and .beancount files.')
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.showRuler).onChange(async (value) => {
-					this.host.settings.showRuler = value;
-					await this.host.saveSettings();
-				})
-			);
-
-		new Setting(containerEl).setName('Validation').setHeading();
-		new Setting(containerEl)
-			.setName('Bean-check executable')
-			.setDesc(
-				'Path to bean-check; leave empty to run `bean-check` from PATH. Install beancount with `pip install beancount`.'
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder('bean-check')
-					.setValue(this.host.settings.beanCheckPath)
-					.onChange(async (value) => {
-						this.host.settings.beanCheckPath = value;
-						await this.host.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName('Entry ledger')
-			.setDesc(
-				'Vault path of the ledger entry file. Saving a .bean file checks that file’s whole include chain. Saving a markdown note with ```beancount / ```bean fences checks those fences: with an entry ledger they are validated as if included after it (opens and accounts apply); without one, the fences are checked on their own. Leave empty to validate each saved ledger file on its own.'
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder('main.bean')
-					.setValue(this.host.settings.entryLedger)
-					.onChange(async (value) => {
-						this.host.settings.entryLedger = value;
-						await this.host.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName('Balance inlay hints')
-			.setDesc(
-				'Show the single-commodity difference (asserted minus accumulated) at the end of balance lines. Hidden when an entry ledger is set, because postings outside this file are unknown.'
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.inlayHints).onChange(async (value) => {
-					this.host.settings.inlayHints = value;
-					await this.host.saveSettings();
-				})
-			);
-
-		new Setting(containerEl).setName('Completion').setHeading();
-		new Setting(containerEl)
-			.setName('Complete payees')
-			.setDesc(
-				'Typing the first quoted field of a transaction line (2026-09-30 * "Am…) suggests payees found in the vault.'
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.completePayee).onChange(async (value) => {
-					this.host.settings.completePayee = value;
-					await this.host.saveSettings();
-				})
-			);
-		new Setting(containerEl)
-			.setName('Autofill payee postings')
-			.setDesc(
-				'Picking a payee inserts the postings of that payee\'s most recent transaction when the entry has none yet. Amounts are selected so the next numbers can be typed; Tab moves between them.'
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.payeeAutofill).onChange(async (value) => {
-					this.host.settings.payeeAutofill = value;
-					await this.host.saveSettings();
-				})
-			);
-		new Setting(containerEl)
-			.setName('Complete narrations')
-			.setDesc(
-				'Typing the second quoted field of a transaction line ("payee" "na…) suggests narrations found in the vault, and picking one closes the field.'
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.completeNarration).onChange(async (value) => {
-					this.host.settings.completeNarration = value;
-					await this.host.saveSettings();
-				})
-			);
-		new Setting(containerEl)
-			.setName('Pinyin initials matching')
-			.setDesc(
-				'Also match payees, narrations and accounts by pinyin initials: `餐饮` completes from `cy`, and `Expenses:餐饮` from `Expenses:cy`. Direct matches still rank first.'
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.pinyinMatching).onChange(async (value) => {
-					this.host.settings.pinyinMatching = value;
-					await this.host.saveSettings();
-				})
-			);
-
-		new Setting(containerEl).setName('Fava').setHeading();
-		new Setting(containerEl)
-			.setName('Fava executable')
-			.setDesc('Path to Fava; leave empty to run `fava` from PATH. Only a program named `fava` is accepted.')
-			.addText((text) =>
-				text
-					.setPlaceholder('fava')
-					.setValue(this.host.settings.favaPath)
-					.onChange(async (value) => {
-						this.host.settings.favaPath = value;
-						await this.host.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName('Fava port')
-			.setDesc('TCP port Fava binds on 127.0.0.1. Default 5000.')
-			.addText((text) =>
-				text
-					.setPlaceholder(String(DEFAULT_FAVA_PORT))
-					.setValue(String(this.host.settings.favaPort))
-					.onChange(async (value) => {
-						const port = Number.parseInt(value, 10);
-						if (!Number.isInteger(port) || port < 1 || port > 65535) return;
-						this.host.settings.favaPort = port;
-						await this.host.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName('Run Fava on activate')
-			.setDesc('Start Fava against the entry ledger (or the active ledger file) when the plugin loads.')
-			.addToggle((toggle) =>
-				toggle.setValue(this.host.settings.runFavaOnActivate).onChange(async (value) => {
-					this.host.settings.runFavaOnActivate = value;
-					await this.host.saveSettings();
-				})
-			);
-
-		new Setting(containerEl).setName('Flag warnings').setHeading();
-		this.addFlagLevelSetting('!', 'Incomplete transactions (!)', 'Marker style for transactions flagged `!`. Default: warning.');
-		this.addFlagLevelSetting('*', 'Cleared transactions (*)', 'Marker style for transactions flagged `*` or `txn`. Default: none.');
-	}
-
-	private addFlagLevelSetting(flag: string, name: string, desc: string): void {
-		new Setting(this.containerEl)
-			.setName(name)
-			.setDesc(desc)
-			.addDropdown((dropdown) => {
-				for (const [label, level] of FLAG_LEVEL_OPTIONS) {
-					dropdown.addOption(level ?? 'none', label);
+		for (const group of SETTING_GROUPS) {
+			new Setting(containerEl).setName(group.heading).setHeading();
+			for (const spec of group.items) {
+				const setting = new Setting(containerEl).setName(spec.name).setDesc(spec.desc);
+				const value = readSetting(this.host.settings, spec);
+				const save = (next: unknown) => this.setControlValue(spec.key, next);
+				switch (spec.kind) {
+					case 'toggle':
+						setting.addToggle((toggle) => toggle.setValue(value === true).onChange(save));
+						break;
+					case 'text':
+					case 'int':
+						setting.addText((text) => text.setPlaceholder(spec.placeholder).setValue(String(value)).onChange(save));
+						break;
+					case 'flag':
+						setting.addDropdown((dropdown) => dropdown.addOptions(FLAG_LEVEL_OPTIONS).setValue(String(value)).onChange(save));
+						break;
 				}
-				dropdown
-					.setValue(this.host.settings.flagWarnings[flag] ?? 'none')
-					.onChange(async (value) => {
-						this.host.settings.flagWarnings[flag] = parseFlagLevel(value);
-						await this.host.saveSettings();
-					});
-			});
+			}
+		}
 	}
 }

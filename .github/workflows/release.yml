@@ -10,6 +10,9 @@ on:
 
 permissions:
   contents: write
+  # Build provenance attestations for the release assets.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -37,6 +40,14 @@ jobs:
       - run: pnpm build
 
       - run: pnpm test
+
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            apps/obsidian-plugin/main.js
+            manifest.json
+            apps/obsidian-plugin/styles.css
 
       - name: Draft release
         env:

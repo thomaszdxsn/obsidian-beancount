@@ -1,16 +1,27 @@
-/* Lines bean-check complains about: a wavy underline on the text, and a dot in the diagnostics gutter. */
+/* Lines bean-check complains about: a zigzag underline on the text, and a dot in the diagnostics gutter.
+ * The zigzag is two crossed gradients, not `text-decoration: wavy`, which
+ * Obsidian's CSS review reports as only partially supported. */
+
+.cm-beancount-error-underline,
+.cm-beancount-warning-underline {
+	background-image:
+		linear-gradient(45deg, transparent 35%, var(--beancount-squiggle) 35% 60%, transparent 60%),
+		linear-gradient(-45deg, transparent 35%, var(--beancount-squiggle) 35% 60%, transparent 60%);
+	background-repeat: repeat-x;
+	background-position: left bottom;
+	background-size: 4px 3px;
+}
 
 .cm-beancount-error-underline {
-	text-decoration: underline wavy var(--text-error, #e45649);
-	text-decoration-skip-ink: none;
+	--beancount-squiggle: var(--text-error, #e45649);
+}
+
+.cm-beancount-warning-underline {
+	--beancount-squiggle: var(--text-warning, #d19a66);
 }
 
 .cm-beancount-error-gutter {
 	cursor: pointer;
-}
-.cm-beancount-warning-underline {
-	text-decoration: underline wavy var(--text-warning, #d19a66);
-	text-decoration-skip-ink: none;
 }
 
 .cm-gutterElement.cm-beancount-error-gutter-marker::after {

@@ -22,7 +22,7 @@
 import type { Extension } from '@codemirror/state';
 import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
-import { Notice, editorInfoField } from 'obsidian';
+import { Notice, Platform, editorInfoField } from 'obsidian';
 import type { App, PaneType } from 'obsidian';
 import { extractBeancountFences } from './fences';
 import { isLedgerFile } from './vault-index';
@@ -399,16 +399,10 @@ export function includeLinkMouseDown(view: EditorView, event: MouseEvent, app: A
  * Mirrors `Keymap.isModEvent` for a primary-button click: Cmd on macOS,
  * Ctrl elsewhere; Alt splits; Alt+Shift opens a window. Middle-click is
  * not a Mod-click here — reading view and plain clicks stay out of scope.
- * A host with no platform (tests) treats either modifier as Mod.
  */
 function modPane(event: MouseEvent): PaneType | null {
 	if (event.button !== 0) return null;
-	const platform =
-		typeof globalThis.navigator === 'object' && globalThis.navigator !== null
-			? String(globalThis.navigator.platform ?? '')
-			: '';
-	const mac = /Mac|iPhone|iPad|iPod/.test(platform);
-	const mod = platform === '' ? event.metaKey || event.ctrlKey : mac ? event.metaKey : event.ctrlKey;
+	const mod = Platform.isMacOS ? event.metaKey : event.ctrlKey;
 	if (!mod) return null;
 	if (event.altKey && event.shiftKey) return 'window';
 	if (event.altKey) return 'split';

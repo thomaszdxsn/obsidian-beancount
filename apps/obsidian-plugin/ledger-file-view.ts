@@ -362,10 +362,7 @@ function rulerPlugin(host: LedgerFileHost, views: Set<EditorView>) {
 					return;
 				}
 				if (!this.ruler) {
-					const ruler = document.createElement('div');
-					ruler.className = RULER_CLASS;
-					ruler.setAttribute('aria-hidden', 'true');
-					view.dom.appendChild(ruler);
+					const ruler = view.dom.createDiv({ cls: RULER_CLASS, attr: { 'aria-hidden': 'true' } });
 					this.ruler = ruler;
 				}
 				const ruler = this.ruler;

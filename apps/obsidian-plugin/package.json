@@ -1,6 +1,6 @@
 {
 	"name": "beancount-obsidian",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Edit Beancount ledgers with completion, alignment, outline, and bean-check validation.",
 	"main": "main.js",
 	"scripts": {

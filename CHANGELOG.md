@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.1
+
+Clears the community directory's automated review findings.
+
+### Changed
+
+- Settings are declared through `getSettingDefinitions()` on Obsidian 1.13+,
+  so they show up in settings search; older versions render the same table
+  imperatively.
+- Diagnostic underlines are a gradient zigzag instead of
+  `text-decoration: wavy`.
+- Mod-click on `include` paths reads the OS from Obsidian's `Platform`.
+- DOM is built with Obsidian's `createEl` helpers; timers and globals go
+  through `window` for popout windows.
+- Root `pnpm build` runs the workspace build directly instead of through
+  Turborepo, so a clean `pnpm install && pnpm run build` succeeds.
+- Release assets carry GitHub build provenance attestations.
+
 ## 0.1.0
 
 First community plugin release (`beancount`).

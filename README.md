@@ -175,7 +175,7 @@ A missing or rejected `bean-check` shows:
   selection when there is one. It has no default hotkey; bind one under
   Settings → Hotkeys.
 - **Save-time validation**: saving a `.bean` or `.beancount` file runs
-  `bean-check` (debounced) and marks every line it complains about — a wavy
+  `bean-check` (debounced) and marks every line it complains about — a zigzag
   underline whose tooltip is the message, plus a dot in the gutter. The
   message is parsed from stderr, which is the whole report: the exit code is
   not consulted. Markdown notes with ```beancount / ```bean fences are

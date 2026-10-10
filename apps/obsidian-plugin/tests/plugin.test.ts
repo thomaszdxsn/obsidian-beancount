@@ -1110,6 +1110,39 @@ describe('BeancountPlugin', () => {
 		await delay(600);
 	});
 
+	it('serves the same settings declaratively for Obsidian 1.13+ search and rendering', async () => {
+		const { plugin } = await loadPlugin(new FakeVault());
+		const tab = new BeancountSettingTab({} as App, plugin);
+		tab.display();
+		const imperative = (tab.containerEl as unknown as FakeSettingContainer).settings.map((setting) => setting.name);
+		const groups = tab.getSettingDefinitions() as Array<{
+			heading: string;
+			items: Array<{ name: string; control: { key: string; type: string } }>;
+		}>;
+		// One table drives both renderers: same headings and rows, same order.
+		expect(groups.flatMap((group) => [group.heading, ...group.items.map((item) => item.name)])).toEqual(imperative);
+
+		const controls = Object.fromEntries(groups.flatMap((group) => group.items.map((item) => [item.name, item.control])));
+		// Every declared key resolves to the stored value.
+		for (const { key } of Object.values(controls)) expect(tab.getControlValue(key)).not.toBeUndefined();
+		expect(tab.getControlValue(controls['Instant alignment'].key)).toBe(true);
+		expect(tab.getControlValue(controls['Fava port'].key)).toBe('5000');
+		expect(tab.getControlValue(controls['Incomplete transactions (!)'].key)).toBe('warning');
+		expect(tab.getControlValue('constructor')).toBeUndefined();
+
+		await tab.setControlValue(controls['Fava port'].key, '8080');
+		await tab.setControlValue(controls['Separator column'].key, '0');
+		await tab.setControlValue(controls['Cleared transactions (*)'].key, 'error');
+		await tab.setControlValue(controls['Pinyin initials matching'].key, true);
+		expect(plugin.settings).toMatchObject({
+			favaPort: 8080,
+			separatorColumn: 50,
+			pinyinMatching: true,
+			flagWarnings: { '*': 'error' },
+		});
+		expect(plugin.savedData?.at(-1)).toMatchObject({ favaPort: 8080, pinyinMatching: true });
+	});
+
 	// The stderr bean-check prints for a ledger saved with a deliberate
 	// mistake: one report per line, an indented source echo after each. It
 	// names the real, vault-rooted path the plugin hands the tool.
