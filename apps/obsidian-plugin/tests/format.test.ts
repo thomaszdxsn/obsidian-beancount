@@ -202,6 +202,72 @@ describe('formatLedger', () => {
 	it('strips trailing whitespace but not a missing final newline', () => {
 		expect(formatted('2022-01-01 close Assets:A   ')).toBe('2022-01-01 close Assets:A');
 	});
+
+	it('formats an empty ledger without inventing a newline', () => {
+		expect(formatted('')).toBe('');
+		expect(formatted('\n')).toBe('\n');
+		expect(formatted('\r\n')).toBe('\r\n');
+		expect(formatted('   \t  ')).toBe('');
+	});
+
+	it('keeps CRLF and does not add a trailing newline that was not there', () => {
+		expect(formatted('2022-01-01   open   Assets:A\r\n2022-01-02 close Assets:B')).toBe(
+			'2022-01-01 open Assets:A\r\n2022-01-02 close Assets:B'
+		);
+	});
+
+	it('treats a mix of CRLF and LF as LF', () => {
+		expect(formatted('2022-01-01 open Assets:A\r\n2022-01-02   close   Assets:B\n')).toBe(
+			'2022-01-01 open Assets:A\n2022-01-02 close Assets:B\n'
+		);
+	});
+
+	it('keeps tabs and semicolons inside a multi-line header string', () => {
+		const input = [
+			'2026-10-01\t*\t"a\tb;  c',
+			'  more"   #tag   ;  note  ',
+			'  Assets:A 1 USD',
+			'  Assets:B -1 USD',
+			'',
+		].join('\n');
+		expect(formatted(input)).toBe(
+			[
+				'2026-10-01 * "a\tb;  c',
+				'  more" #tag ;  note',
+				'  Assets:A  1 USD',
+				'  Assets:B -1 USD',
+				'',
+			].join('\n')
+		);
+	});
+
+	it('keeps a posting string open across a trailing backslash and still strips closed trailing space', () => {
+		const input = [
+			'2022-01-15 * "x"',
+			'  Assets:A 1 USD {"a\\"b',
+			'  and\\',
+			'c"}  ',
+			'  Assets:B -1 USD',
+			'',
+		].join('\n');
+		expect(formatted(input)).toBe(
+			[
+				'2022-01-15 * "x"',
+				'  Assets:A 1 USD {"a\\"b',
+				'  and\\',
+				'c"}',
+				'  Assets:B -1 USD',
+				'',
+			].join('\n')
+		);
+	});
+
+	it('keeps a tab and semicolon inside posting metadata and strips the trailing space', () => {
+		const input = ['2022-01-15 * "x"', '  Assets:A 1 USD', '    note: "a\tb; c"  ', '  Assets:B -1 USD', ''].join('\n');
+		expect(formatted(input)).toBe(
+			['2022-01-15 * "x"', '  Assets:A  1 USD', '    note: "a\tb; c"', '  Assets:B -1 USD', ''].join('\n')
+		);
+	});
 });
 
 describe('formatFencedDocument', () => {
@@ -306,6 +372,59 @@ describe('formatFencedDocument', () => {
 			error: { line: 2, column: 17, message: "missing ACCOUNT at '\\n'" },
 		});
 	});
+
+	it('leaves a note with no ledger fence, and an empty fence, unchanged', () => {
+		expect(formatFencedDocument('# prose  \n')).toEqual({ ok: true, text: '# prose  \n' });
+		expect(formatFencedDocument('```beancount\n```\n')).toEqual({ ok: true, text: '```beancount\n```\n' });
+	});
+
+	it('formats a 3-space CommonMark fence and restores a shorter body indent', () => {
+		const note = ['   ```beancount', ' 2022-01-01   open   Assets:A', '   ```', ''].join('\n');
+		expect(formatFencedDocument(note)).toEqual({
+			ok: true,
+			text: ['   ```beancount', ' 2022-01-01 open Assets:A', '   ```', ''].join('\n'),
+		});
+	});
+
+	it('does not treat a 4-space or tab-indented opener as a fence', () => {
+		const indented = ['    ```beancount', '    2022-01-01   open   Assets:A', '    ```', ''].join('\n');
+		expect(formatFencedDocument(indented)).toEqual({ ok: true, text: indented });
+		const tabbed = '\t```beancount\n2022-01-01   open   Assets:A\n```\n';
+		expect(formatFencedDocument(tabbed)).toEqual({ ok: true, text: tabbed });
+	});
+
+	it('formats an unclosed fence without a phantom blank line from the trailing newline', () => {
+		expect(formatFencedDocument('intro\n```beancount\n2022-01-01   open   Assets:A\n')).toEqual({
+			ok: true,
+			text: 'intro\n```beancount\n2022-01-01 open Assets:A\n',
+		});
+		expect(formatFencedDocument('```bean\n2022-01-01   close   Assets:A')).toEqual({
+			ok: true,
+			text: '```bean\n2022-01-01 close Assets:A',
+		});
+		expect(formatFencedDocument('```beancount\n2022-01-01   open   Assets:A\n\n')).toEqual({
+			ok: true,
+			text: '```beancount\n2022-01-01 open Assets:A\n\n',
+		});
+	});
+
+	it('keeps CRLF around a fence and a missing final newline', () => {
+		expect(formatFencedDocument('```beancount\r\n2022-01-01   open   Assets:A\r\n```\r\n')).toEqual({
+			ok: true,
+			text: '```beancount\r\n2022-01-01 open Assets:A\r\n```\r\n',
+		});
+		expect(formatFencedDocument('```beancount\n2022-01-01   open   Assets:A\n```')).toEqual({
+			ok: true,
+			text: '```beancount\n2022-01-01 open Assets:A\n```',
+		});
+	});
+
+	it('maps an error in an unclosed fence and changes nothing', () => {
+		expect(formatFencedDocument('intro\n```beancount\n2022-01-01 open\n')).toEqual({
+			ok: false,
+			error: { line: 3, column: 15, message: "missing ACCOUNT at '\\n'" },
+		});
+	});
 });
 
 describe('lineChanges', () => {
@@ -320,5 +439,16 @@ describe('lineChanges', () => {
 			lines[change.fromLine] = line.slice(0, change.fromCh) + change.text + line.slice(change.toCh);
 		}
 		expect(lines.join('\n')).toBe(after);
+	});
+
+	it('returns no edits when the text is unchanged', () => {
+		expect(lineChanges('2022-01-01 open Assets:A\n', '2022-01-01 open Assets:A\n')).toEqual([]);
+	});
+
+	it('replaces the whole document when the line count changes', () => {
+		expect(lineChanges('2022-01-01 open Assets:A\n', '2022-01-01 open Assets:A')).toEqual([
+			{ fromLine: 0, fromCh: 0, toLine: 1, toCh: 0, text: '2022-01-01 open Assets:A' },
+		]);
+		expect(lineChanges('a\nb', 'a')).toEqual([{ fromLine: 0, fromCh: 0, toLine: 1, toCh: 1, text: 'a' }]);
 	});
 });

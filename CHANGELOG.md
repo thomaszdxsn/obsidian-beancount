@@ -10,6 +10,11 @@
   ledger; a markdown note formats each ```beancount / ```bean fence. A syntax
   error names the document line and changes nothing.
 
+### Fixed
+
+- Format ledger no longer appends a blank line when an unclosed ```beancount
+  fence sits at the end of a note that already ends with a newline.
+
 ## 0.1.1
 
 Clears the community directory's automated review findings.

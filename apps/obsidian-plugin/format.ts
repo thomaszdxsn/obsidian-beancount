@@ -103,9 +103,12 @@ export function formatFencedDocument(text: string): FormatResult {
 		const indent = openerIndent(split.lines, fence);
 		for (let i = 0; i < fence.lines.length; i += 1) {
 			const at = fence.startLine + i;
-			const original = split.lines[at] ?? '';
+			// An unclosed fence's body includes the empty element `split(/\r?\n/)`
+			// adds for a trailing newline; splitDocument already dropped that line.
+			if (at >= split.lines.length) break;
+			const original = split.lines[at];
 			const prefix = countStripped(original, indent);
-			split.lines[at] = original.slice(0, prefix) + (body[i] ?? '');
+			split.lines[at] = original.slice(0, prefix) + body[i];
 		}
 	}
 	return { ok: true, text: joinDocument(split.lines, split.newline, split.trailing) };
@@ -128,7 +131,7 @@ export function lineChanges(before: string, after: string): LineChange[] {
 				fromLine: 0,
 				fromCh: 0,
 				toLine: last,
-				toCh: oldLines[last]?.length ?? 0,
+				toCh: oldLines[last].length,
 				text: newLines.join('\n'),
 			},
 		];
@@ -191,13 +194,14 @@ function formatFenceBody(fence: BeancountFence): { ok: true; lines: string[] } |
 	if (!result.ok) return result;
 	const lines = result.text.split('\n');
 	lines.pop();
-	if (lines.length !== fence.lines.length) return { ok: true, lines: [...fence.lines] };
 	return { ok: true, lines };
 }
 
 function openerIndent(lines: readonly string[], fence: BeancountFence): number {
-	const opener = lines[fence.startLine - 1] ?? '';
-	return (/^ */.exec(opener) ?? [''])[0].length;
+	const opener = lines[fence.startLine - 1];
+	let n = 0;
+	while (n < opener.length && opener[n] === ' ') n += 1;
+	return n;
 }
 
 function countStripped(line: string, indent: number): number {
@@ -314,8 +318,8 @@ function rewriteUncovered(line: string): string {
 		return stripTrailing(line);
 	}
 	// pushtag / poptag / pushmeta / popmeta parse but are not in the model.
-	if (line[0] !== ' ' && line[0] !== '\t') return collapseHeaderLine(line, false).text;
-	return stripTrailing(line);
+	// An indented non-comment line never reaches here: the parser rejects it.
+	return collapseHeaderLine(line, false).text;
 }
 
 function isIndentedComment(line: string): boolean {
