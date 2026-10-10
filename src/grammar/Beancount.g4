@@ -8,7 +8,9 @@ grammar Beancount;
     }
 }
 
-// Mirrors upstream beancount v2 (beancount/parser/grammar.y + lexer.l).
+// Mirrors upstream beancount master / v3 (beancount/parser/grammar.y + lexer.l).
+// v3 is a superset of v2 here: it adds single-letter (CAPITAL) and `/FUTURES`
+// currencies; v2 flags `PSTCURM` are covered by CAPITAL.
 // Line structure matters: every directive ends with `eol`, and lines that
 // belong to a directive (postings, metadata, tag/link lines) start with INDENT.
 
