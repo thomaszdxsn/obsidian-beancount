@@ -49,6 +49,13 @@ function texts(nodes: readonly FakeNode[]): string[] {
 	return out;
 }
 
+/** Every text the view drew. */
+function shownIn(view: BeancountBalancesView): string[] {
+	// The mock `ItemView.contentEl` builds `FakeNode`-shaped children; its declared type is Obsidian's HTMLElement.
+	const content = view.contentEl as unknown as { children: FakeNode[] };
+	return texts(content.children);
+}
+
 describe('drawBalances', () => {
 	it('draws one right-aligned amount line per currency and a placeholder when empty', () => {
 		const mount = mountOf();
@@ -152,34 +159,63 @@ describe('BeancountBalancesView', () => {
 
 		const note = viewFor(vault, { path: 'note.md', extension: 'md' });
 		await note.view.onOpen();
-		expect(texts((note.view.contentEl as unknown as { children: FakeNode[] }).children)).toContain('2 EUR');
+		expect(shownIn(note.view)).toContain('2 EUR');
 
 		const prose = viewFor(vault, { path: 'note.md', extension: 'md' });
 		vault.write('empty.md', '# no fences\n');
 		prose.box.file = { path: 'empty.md', extension: 'md' };
 		await prose.view.onOpen();
-		expect(texts((prose.view.contentEl as unknown as { children: FakeNode[] }).children)).toEqual([
+		expect(shownIn(prose.view)).toEqual([
 			'This note has no Beancount fences.',
 		]);
 
 		const entry = viewFor(vault, { path: 'ledger.bean', extension: 'bean' }, 'main.bean');
 		await entry.view.onOpen();
-		expect(texts((entry.view.contentEl as unknown as { children: FakeNode[] }).children)).toContain('9 USD');
-		expect(texts((entry.view.contentEl as unknown as { children: FakeNode[] }).children)).not.toContain('1 USD');
+		expect(shownIn(entry.view)).toContain('9 USD');
+		expect(shownIn(entry.view)).not.toContain('1 USD');
 	});
 
 	it('shows a missing entry and a parse error instead of numbers', async () => {
 		const vault = new FakeVault();
 		const missing = viewFor(vault, null, 'gone.bean');
 		await missing.view.onOpen();
-		expect(texts((missing.view.contentEl as unknown as { children: FakeNode[] }).children)[0]).toMatch(/Entry ledger not found/);
+		expect(shownIn(missing.view)[0]).toMatch(/Entry ledger not found/);
 
 		vault.write('bad.bean', '2020-01-01 open\n');
 		const broken = viewFor(vault, { path: 'bad.bean', extension: 'bean' });
 		await broken.view.onOpen();
-		const shown = texts((broken.view.contentEl as unknown as { children: FakeNode[] }).children);
+		const shown = shownIn(broken.view);
 		expect(shown.some((text) => text.startsWith('bad.bean:'))).toBe(true);
 		expect(shown.some((text) => text.includes('USD'))).toBe(false);
+	});
+
+	it("reports a fence error at the note's line and keeps fences from merging", async () => {
+		const vault = new FakeVault();
+		const note = [
+			'# Spending', // 1
+			'```beancount', // 2
+			'2020-01-01 * "a"', // 3
+			'  Assets:Cash  1 USD', // 4
+			'  Expenses:Food', // 5
+			'```', // 6
+			'prose', // 7
+			'```beancount', // 8
+			'2020-01-02 open', // 9
+			'```', // 10
+		].join('\n');
+		vault.write('note.md', note);
+		const broken = viewFor(vault, { path: 'note.md', extension: 'md' });
+		await broken.view.onOpen();
+		const shown = shownIn(broken.view);
+		expect(shown.some((text) => text.startsWith('note.md:9'))).toBe(true);
+
+		// An indented line opening the second fence must not join the first fence's entry.
+		vault.write('two.md', '```bean\n2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n```\n```bean\n  Assets:Bank  5 USD\n```\n');
+		const split = viewFor(vault, { path: 'two.md', extension: 'md' });
+		await split.view.onOpen();
+		const splitShown = shownIn(split.view);
+		expect(splitShown.some((text) => text.includes('5 USD'))).toBe(false);
+		expect(splitShown.some((text) => text.startsWith('two.md:7'))).toBe(true);
 	});
 
 	it('keeps the last ledger when focus leaves the file, and clears a non-ledger file', async () => {
@@ -190,16 +226,16 @@ describe('BeancountBalancesView', () => {
 		box.file = null;
 		events[0].callback();
 		await Promise.resolve();
-		expect(texts((view.contentEl as unknown as { children: FakeNode[] }).children)).toContain('Assets:Cash');
+		expect(shownIn(view)).toContain('Assets:Cash');
 
 		box.file = { path: 'pic.png', extension: 'png' };
 		events[0].callback();
 		await Promise.resolve();
-		expect(texts((view.contentEl as unknown as { children: FakeNode[] }).children)).toEqual([
+		expect(shownIn(view)).toEqual([
 			'Open a Beancount file to see account balances.',
 		]);
 		events[0].callback({ view });
-		expect(texts((view.contentEl as unknown as { children: FakeNode[] }).children)).toEqual([
+		expect(shownIn(view)).toEqual([
 			'Open a Beancount file to see account balances.',
 		]);
 	});
@@ -215,7 +251,7 @@ describe('BeancountBalancesView', () => {
 		const opening = view.onOpen();
 		await vi.runAllTimersAsync();
 		await opening;
-		const shown = () => texts((view.contentEl as unknown as { children: FakeNode[] }).children);
+		const shown = () => shownIn(view);
 		expect(shown()).toContain('1 USD');
 
 		const modify = vault.handlers.get('modify') ?? [];
@@ -250,7 +286,7 @@ describe('BeancountBalancesView', () => {
 		await second;
 		pending[0]('2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n');
 		await first;
-		expect(texts((view.contentEl as unknown as { children: FakeNode[] }).children)).toContain('4 USD');
-		expect(texts((view.contentEl as unknown as { children: FakeNode[] }).children)).not.toContain('1 USD');
+		expect(shownIn(view)).toContain('4 USD');
+		expect(shownIn(view)).not.toContain('1 USD');
 	});
 });

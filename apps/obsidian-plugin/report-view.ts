@@ -10,7 +10,7 @@ import { ItemView } from 'obsidian';
 import type { App, TFile, WorkspaceLeaf } from 'obsidian';
 import { loadAccountBalances } from './balances';
 import type { BalanceIssue, BalanceReport, BalanceRow } from './balances';
-import { extractBeancountFences } from './fences';
+import { buildFenceLedger, extractBeancountFences } from './fences';
 
 export const VIEW_TYPE_BALANCES = 'beancount-balances';
 
@@ -175,8 +175,14 @@ export class BeancountBalancesView extends ItemView {
 			const text = await this.app.vault.read(file);
 			const fences = extractBeancountFences(text);
 			if (fences.length === 0) return { draw: { kind: 'empty', message: EMPTY_FENCES }, files: [source.path] };
-			const report = await this.report(source.path, fences.map((fence) => fence.lines.join('\n')).join('\n'));
-			return { draw: drawOf(report), files: report.files };
+			// A blank line between fences keeps one fence's entry from absorbing the
+			// next fence's indented lines; errors report the note's own line.
+			const ledger = buildFenceLedger(fences);
+			const report = await this.report(source.path, ledger.text);
+			const errors = report.errors.map((issue) =>
+				issue.file === source.path ? { ...issue, line: ledger.hostLine(issue.line) ?? issue.line } : issue
+			);
+			return { draw: drawOf({ ...report, errors }), files: report.files };
 		}
 		if (!isVaultFile(file)) {
 			return {
