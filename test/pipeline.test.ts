@@ -2,10 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BaseErrorListener, CharStream, CommonTokenStream } from "antlr4ng";
 import { BeancountParser } from "../src";
-import { BeancountLexer } from "../src/parser/BeancountLexer";
-import { BeancountParser as AntlrBeancountParser } from "../src/parser/BeancountParser";
+import { parseRaw } from "./antlr";
 import {
   Balance,
   Close,
@@ -23,25 +21,6 @@ import {
   Query,
   Transaction,
 } from "../src/model";
-
-// parse() still recovers from syntax errors silently, so dispatch assertions
-// alone would pass on a grammar that no longer accepts the input.
-function syntaxErrors(input: string): string[] {
-  const errors: string[] = [];
-  const listener = new (class extends BaseErrorListener {
-    override syntaxError(_r: unknown, _s: unknown, line: number, column: number, msg: string) {
-      errors.push(`${line}:${column} ${msg}`);
-    }
-  })();
-  const lexer = new BeancountLexer(CharStream.fromString(input));
-  lexer.removeErrorListeners();
-  lexer.addErrorListener(listener);
-  const parser = new AntlrBeancountParser(new CommonTokenStream(lexer));
-  parser.removeErrorListeners();
-  parser.addErrorListener(listener);
-  parser.beancountFile();
-  return errors;
-}
 
 // Covers the antlr4ng lexer → parser → visitor wiring: every directive rule
 // must reach its model class. Field values are out of scope here.
@@ -65,7 +44,7 @@ describe("antlr4ng pipeline: directive dispatch", () => {
   ];
 
   test.each(cases)("%s directive becomes its model class", (_name, input, cls) => {
-    expect(syntaxErrors(`${input}\n`)).toEqual([]);
+    expect(parseRaw(`${input}\n`).errors).toEqual([]);
     const { directives } = BeancountParser.parse(`${input}\n`);
     expect(directives).toHaveLength(1);
     expect(directives[0]).toBeInstanceOf(cls);
@@ -80,9 +59,24 @@ describe("antlr4ng pipeline: directive dispatch", () => {
       "2022-12-31 close Assets:Checking",
       "",
     ].join("\n");
-    expect(syntaxErrors(input)).toEqual([]);
+    expect(parseRaw(input).errors).toEqual([]);
     const { directives } = BeancountParser.parse(input);
     expect(directives.map((d) => d.constructor)).toEqual([Option, Open, Commodity, Note, Close]);
+  });
+
+  test("pushtag/poptag/pushmeta/popmeta have no model and are dropped without losing neighbours", () => {
+    const input = [
+      "pushtag #trip",
+      'pushmeta location: "Paris"',
+      "2022-01-01 open Assets:Checking",
+      "popmeta location:",
+      "poptag #trip",
+      "2022-12-31 close Assets:Checking",
+      "",
+    ].join("\n");
+    expect(parseRaw(input).errors).toEqual([]);
+    const { directives } = BeancountParser.parse(input);
+    expect(directives.map((d) => d.constructor)).toEqual([Open, Close]);
   });
 
   test.each([
@@ -90,7 +84,7 @@ describe("antlr4ng pipeline: directive dispatch", () => {
     ["whitespace only", "  \n\t\n"],
     ["comment only", "; just a comment\n"],
   ])("%s yields no directives", (_name, input) => {
-    expect(syntaxErrors(input)).toEqual([]);
+    expect(parseRaw(input).errors).toEqual([]);
     expect(BeancountParser.parse(input).directives).toEqual([]);
   });
 });

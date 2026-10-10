@@ -1,8 +1,23 @@
 grammar Beancount;
 
+@lexer::members {
+    // True when the next char starts real content (not whitespace, newline or EOF).
+    private isFollowedByContent(): boolean {
+        const next = this.inputStream.LA(1);
+        return next !== -1 && next !== 0x20 && next !== 0x09 && next !== 0x0d && next !== 0x0a;
+    }
+}
+
+// Mirrors upstream beancount v2 (beancount/parser/grammar.y + lexer.l).
+// Line structure matters: every directive ends with `eol`, and lines that
+// belong to a directive (postings, metadata, tag/link lines) start with INDENT.
+
+// ---------------------------------------------------------------------------
 // Parser rules
+// ---------------------------------------------------------------------------
+
 beancountFile
-    : directive* EOF
+    : (EOL | directive)* EOF
     ;
 
 directive
@@ -21,142 +36,314 @@ directive
     | options
     | plugin
     | include
-    | COMMENT
+    | pushtag
+    | poptag
+    | pushmeta
+    | popmeta
     ;
 
-// Transaction directive
+eol
+    : EOL
+    | EOF
+    ;
+
+// Transaction: header line, then indented metadata / tag-link lines, then
+// postings. Metadata lines directly under a posting belong to that posting.
+// Tag/link lines after the first posting are rejected (upstream rejects them
+// in its builder: "Tags or links not allowed after first Posting").
 transaction
-    : DATE txn_flag? (STRING STRING?)? posting*
+    : DATE txn_flag txn_strings? tags_links eol (key_value_line | tags_links_line)* posting*
     ;
 
 txn_flag
     : TXN
-    | FLAG
+    | flag
     ;
 
-// Postings under a transaction
+flag
+    : ASTERISK
+    | HASH
+    | FLAG
+    | CAPITAL
+    ;
+
+// One string is the narration; two are payee + narration (PIPE is the legacy separator).
+txn_strings
+    : (payee=STRING PIPE?)? narration=STRING
+    ;
+
+tags_links
+    : (TAG | LINK)*
+    ;
+
+tags_links_line
+    : INDENT (TAG | LINK)+ eol
+    ;
+
 posting
-    : INDENT account (amount)? cost? price_annotation? metadata?
+    : INDENT flag? account incomplete_amount? cost? price_annotation? eol metadata
+    ;
+
+// Posting amounts may omit the number or the currency (interpolated later).
+incomplete_amount
+    : number commodity?
+    | commodity
     ;
 
 amount
     : number commodity
     ;
 
+// Arithmetic expression; precedence follows grammar.y.
 number
     : NUMBER
+    | LPAREN number RPAREN
+    | (MINUS | PLUS) number
+    | number (ASTERISK | SLASH) number
+    | number (PLUS | MINUS) number
     ;
 
 commodity
-    : COMMODITY
+    : CURRENCY
+    | CAPITAL
     ;
 
+// `{...}` is per-unit cost, `{{...}}` is total cost.
 cost
-    : '{' (amount)? ( ',' (DATE | STRING))* '}'
-    | '{{' (amount)? '}}'
+    : LCURL cost_comp_list? RCURL
+    | LCURLCURL cost_comp_list? RCURLCURL
     ;
 
+cost_comp_list
+    : cost_comp (COMMA cost_comp)*
+    ;
+
+cost_comp
+    : compound_amount
+    | DATE
+    | STRING
+    | ASTERISK
+    ;
+
+// `per # total CUR` combines per-unit and total cost.
+compound_amount
+    : perUnit=number? HASH total=number? commodity
+    | number commodity?
+    | commodity
+    ;
+
+// `@` is per-unit price, `@@` is total price.
 price_annotation
-    : AT (amount | ('(' amount ')'))
+    : (AT | ATAT) incomplete_amount?
     ;
 
 metadata
-    : (INDENT TAG_KEY (STRING | DATE | number))*
+    : key_value_line*
     ;
 
-// Price directive
+key_value_line
+    : INDENT key_value eol
+    ;
+
+key_value
+    : KEY key_value_value?
+    ;
+
+key_value_value
+    : STRING
+    | account
+    | DATE
+    | commodity
+    | TAG
+    | BOOL
+    | NONE
+    | amount
+    | number
+    ;
+
 price
-    : DATE 'price' commodity amount
+    : DATE PRICE commodity amount eol metadata
     ;
 
-// Balance assertion directive
+// `100.00 ~ 0.01 USD` carries an explicit tolerance.
 balance
-    : DATE 'balance' account amount
+    : DATE BALANCE account balanceNumber=number (TILDE tolerance=number)? commodity eol metadata
     ;
 
-// Account open directive
 open
-    : DATE 'open' account (commodity (',' commodity)*)? booking?
+    : DATE OPEN account (commodity (COMMA commodity)*)? booking? eol metadata
     ;
 
 booking
     : STRING
     ;
 
-// Account close directive
 close
-    : DATE 'close' account
+    : DATE CLOSE account eol metadata
     ;
 
-// Commodity directive
 commodity_directive
-    : DATE 'commodity' COMMODITY metadata?
+    : DATE COMMODITY commodity eol metadata
     ;
 
-// Pad directive
 pad
-    : DATE 'pad' account account
+    : DATE PAD account account eol metadata
     ;
 
-// Note directive
 note
-    : DATE 'note' account STRING
+    : DATE NOTE account STRING tags_links eol metadata
     ;
 
-// Document directive
 document
-    : DATE 'document' account STRING metadata?
+    : DATE DOCUMENT account STRING tags_links eol metadata
     ;
 
-// Event directive
 event
-    : DATE 'event' STRING STRING
+    : DATE EVENT STRING STRING eol metadata
     ;
 
-// Query directive
 query
-    : DATE 'query' STRING STRING
+    : DATE QUERY STRING STRING eol metadata
     ;
 
-// Custom directive
 custom
-    : DATE 'custom' STRING (STRING | DATE | number | amount | account | TAG | LINK)*
+    : DATE CUSTOM STRING custom_value* eol metadata
     ;
 
-// Options directive
+custom_value
+    : STRING
+    | DATE
+    | BOOL
+    | amount
+    | number
+    | account
+    ;
+
 options
-    : 'option' STRING STRING
+    : OPTION STRING STRING eol
     ;
 
-// Plugin directive
 plugin
-    : 'plugin' STRING (STRING)?
+    : PLUGIN STRING STRING? eol
     ;
 
-// Include directive
 include
-    : 'include' STRING
+    : INCLUDE STRING eol
     ;
 
-// Account name (Assets:Checking, etc.)
+pushtag
+    : PUSHTAG TAG eol
+    ;
+
+poptag
+    : POPTAG TAG eol
+    ;
+
+pushmeta
+    : PUSHMETA key_value eol
+    ;
+
+popmeta
+    : POPMETA KEY eol
+    ;
+
 account
     : ACCOUNT
     ;
 
+// ---------------------------------------------------------------------------
 // Lexer rules
+// ---------------------------------------------------------------------------
+// Order matters for equal-length matches: earlier rules win.
+//
+// Column-0 checks use `currentTokenColumn` and sit after the first char:
+// a predicate at the left edge of a rule stops ANTLR from caching the DFA
+// start state, which made lexing ~10x slower.
+
+EOL: '\r'? '\n';
+
+// Leading whitespace at column 0 followed by content. Whitespace-only lines
+// fall through to WS so they read as plain blank lines.
+INDENT: [ \t]+ {this.currentTokenColumn === 0 && this.isFollowedByContent()}?;
+
+// An indented comment line vanishes entirely (newline included) so it can
+// sit between postings or metadata without ending the directive.
+INDENTED_COMMENT_LINE: [ \t]+ {this.currentTokenColumn === 0}? ';' ~[\r\n]* ('\r'? '\n')? -> skip;
+
+// Org-mode headings/drawers and flag-prefixed lines at column 0 are ignored.
+IGNORED_LINE: [*:#!&?%] {this.currentTokenColumn === 0}? ~[\r\n]* -> skip;
+
+WS: [ \t\r]+ -> skip;
+COMMENT: ';' ~[\r\n]* -> skip;
+
+// Keywords
 TXN: 'txn';
-FLAG: '*' | '!' | '#' | '?' | '&' | '/' | '^' | '(' | ')' | '%' | '"' | '\'';
-DATE: [0-9][0-9][0-9][0-9]'-'[0-9][0-9]'-'[0-9][0-9];
-NUMBER: '-'? [0-9]+ ('.' [0-9]+)?;
-ACCOUNT: [A-Z][A-Za-z0-9-]+ (':' [A-Z][A-Za-z0-9-]+)+;
-COMMODITY: [A-Z][A-Z0-9'.'-]*;
-TAG: '#' [A-Za-z0-9-_/.]+;
-LINK: '^' [A-Za-z0-9-_/.]+;
-TAG_KEY: [a-z][a-z0-9-_]+ ':';
+BALANCE: 'balance';
+OPEN: 'open';
+CLOSE: 'close';
+COMMODITY: 'commodity';
+PAD: 'pad';
+EVENT: 'event';
+QUERY: 'query';
+CUSTOM: 'custom';
+PRICE: 'price';
+NOTE: 'note';
+DOCUMENT: 'document';
+PUSHTAG: 'pushtag';
+POPTAG: 'poptag';
+PUSHMETA: 'pushmeta';
+POPMETA: 'popmeta';
+OPTION: 'option';
+PLUGIN: 'plugin';
+INCLUDE: 'include';
+
+BOOL: 'TRUE' | 'FALSE';
+NONE: 'NULL';
+
+DATE: ('17' | '18' | '19' | '20') DIGIT DIGIT [-/] DIGIT+ [-/] DIGIT+;
+
+ACCOUNT: ACCOUNT_TYPE (':' ACCOUNT_NAME)+;
+
+// A lone capital letter is both a valid currency and a valid flag.
+CAPITAL: [A-Z];
+
+// Starts with a letter (or `/` for futures), ends with a letter or digit.
+CURRENCY
+    : [A-Z] CURRENCY_CHAR* [A-Z0-9]
+    | '/' CURRENCY_CHAR* [A-Z] (CURRENCY_CHAR* [A-Z0-9])?
+    ;
+
+STRING: '"' (~["\\] | '\\' .)* '"';
+
+NUMBER: ([0-9]+ | [0-9] [0-9,]+ [0-9]) ('.' [0-9]*)?;
+
+TAG: '#' TAG_CHAR+;
+LINK: '^' TAG_CHAR+;
+
+// Metadata key including its trailing colon, e.g. `invoice:`.
+KEY: [a-z] [a-zA-Z0-9_-]+ ':';
+
+PIPE: '|';
+ATAT: '@@';
 AT: '@';
-INDENT: '  ';  // Two spaces for indentation
+LCURLCURL: '{{';
+RCURLCURL: '}}';
+LCURL: '{';
+RCURL: '}';
+COMMA: ',';
+TILDE: '~';
+PLUS: '+';
+MINUS: '-';
+SLASH: '/';
+LPAREN: '(';
+RPAREN: ')';
+HASH: '#';
+ASTERISK: '*';
+FLAG: [!&?%];
 
-STRING: '"' (~["\r\n] | '\\"')* '"';
-
-COMMENT: (';' | '*' | '#') ~[\r\n]* -> skip;
-WS: [ \t\r\n]+ -> skip;
+fragment DIGIT: [0-9];
+fragment NON_ASCII: ~[\u0000-\u007F];
+fragment ACCOUNT_TYPE: ([A-Z] | NON_ASCII) ([A-Za-z0-9-] | NON_ASCII)*;
+fragment ACCOUNT_NAME: ([A-Z0-9] | NON_ASCII) ([A-Za-z0-9-] | NON_ASCII)*;
+fragment CURRENCY_CHAR: [A-Z0-9'._-];
+fragment TAG_CHAR: [A-Za-z0-9_/.-];
