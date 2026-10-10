@@ -537,20 +537,22 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				if (target.endsWith('.md')) continue;
 				this.validateSeq.set(target, seq + 1);
 			}
+			await this.refreshBalanceViews();
 		}
 		this.balanceInlays.refresh();
 		this.flagWarnings.refresh();
 		this.ledgerFile.refresh();
-		this.refreshBalanceViews();
 	}
 
-	private refreshBalanceViews(): void {
+	private async refreshBalanceViews(): Promise<void> {
 		const lookup = this.app.workspace.getLeavesOfType;
 		if (typeof lookup !== 'function') return;
+		const pending: Array<Promise<void>> = [];
 		for (const leaf of lookup.call(this.app.workspace, VIEW_TYPE_BALANCES)) {
 			const view = leaf.view;
-			if (view instanceof BeancountBalancesView) void view.sync();
+			if (view instanceof BeancountBalancesView) pending.push(view.sync());
 		}
+		await Promise.all(pending);
 	}
 
 	private async writePluginData(): Promise<void> {

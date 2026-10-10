@@ -1,33 +1,36 @@
 /**
  * Per-account unit balances for the sidebar report.
  *
- * Numbers are summed with `Decimal`, not JS floats. A transaction with exactly
+ * Numbers are summed with `Decimal`, not JS floats. A plain literal uses its
+ * source spelling (`numberText`) so `1.00` and amounts past 2^53 stay exact;
+ * an arithmetic expression falls back to the float. A transaction with exactly
  * one posting whose amount is omitted (or is an `IncompleteAmount` that names
- * only a currency) is filled with the negated weight residual of the others.
- * Weight is the units, unless a cost or price converts them: `{x C}` is
- * units × x in C, `{{t C}}` is sign(units) × t, `@ p` is units × p, `@@ t` is
- * sign(units) × t. Cost wins over price. Several residual currencies expand
- * the omitted posting into one position per currency. A currency-only posting
- * is filled only in that currency; leftover currencies are an error. Two
- * incomplete postings, a number without a currency, or a cost/price that
- * itself must be interpolated are errors — the report shows those instead of
- * a partial table.
+ * only a currency) is filled with the negated weight residual of the others,
+ * then quantized the way beancount 2.3.5 interpolates: tolerance comes from
+ * the other postings' exponents, `inferred_tolerance_multiplier` (default
+ * 0.5), `inferred_tolerance_default`, and `infer_tolerance_from_cost`.
  *
- * `pad A B` plus a later `balance A` inserts the difference between the
- * asserted amount and A's units in that currency at the start of the balance
- * date (entries strictly before it, including child accounts). Only the first
- * balance per currency after a pad consumes it. A same-day balance sorts
- * before the pad, so it does not consume it. Directives are ordered by date,
- * then beancount's same-day order (open, balance, other, document, close),
- * then source line, then include order. Line number is per file, matching
- * `entry_sortkey`, so a later include with a smaller line number sorts first.
+ * Weight is the units, unless a cost or price converts them. `{per # total}`
+ * is units × per + sign(units) × total. `{{t}}` and `@@ t` are sign(units) × t.
+ * Cost wins over price. Several residual currencies expand the omitted posting
+ * into one position per currency. A currency-only posting is filled only in
+ * that currency; leftover currencies are an error. Two incomplete postings, a
+ * number without a currency, or a cost/price that itself must be interpolated
+ * are errors — the report shows those instead of a partial table.
+ *
+ * `pad A B` plus a later `balance` on A or a child inserts the difference
+ * between the asserted amount and the subtree's units at the start of the
+ * balance date. The insert is skipped when the difference is within the
+ * balance tolerance (explicit `~ tol`, or twice the multiplier times the
+ * balance number's last digit); that currency is still consumed. Only the
+ * first balance per currency after a pad consumes it. A same-day balance
+ * sorts before the pad, so it does not consume it. Directives are ordered by
+ * date, then beancount's same-day order (open, balance, other, document,
+ * close), then source line, then include order.
  *
  * The table sums units, not cost lots. Accounts whose units are all zero are
- * omitted — bean-query drops empty positions the same way. Display scale is
- * the maximum fractional digits in the shortest round-trip of each parsed
- * number of that currency. The model does not keep the original `10.00` text,
- * so that amount displays as an integer unless some other number of the
- * currency had a fraction. Arithmetic expressions are already JS numbers.
+ * omitted. Each amount renders like Python's `str(Decimal)`, so the scale is
+ * the sum's own exponent, not a currency-wide pad.
  */
 import {
 	Amount,
@@ -36,6 +39,7 @@ import {
 	BeancountSyntaxError,
 	Include,
 	IncompleteAmount,
+	Option,
 	Pad,
 	Transaction,
 } from '@repo/beancount-parser';
@@ -64,6 +68,11 @@ export interface BalanceReport {
 	errors: BalanceIssue[];
 	/** Vault paths that were read. The view refreshes when one of these changes. */
 	files: readonly string[];
+	/**
+	 * A newly created vault file may change the includes: a glob was used, or
+	 * an include (or the entry itself) failed to resolve.
+	 */
+	watchCreates: boolean;
 }
 
 export interface LedgerVault {
@@ -77,6 +86,11 @@ const NUMBER_ONLY = 'Cannot interpolate a posting that specifies only a number';
 const HAS_COST = 'Cannot interpolate a posting that has a cost or a price';
 const COST_INTERPOLATION = 'Cannot interpolate a cost or a price on this transaction';
 const OTHER_CURRENCIES = 'Residual has currencies other than the posting currency';
+const MAX_TOLERANCE_DIGITS = 5;
+
+const TWO = new Decimal(BigInt(2), 0);
+const HALF = Decimal.fromLiteral('0.5') as Decimal;
+const MAXIMUM_TOLERANCE = Decimal.fromLiteral('0.5') as Decimal;
 
 interface Sourced {
 	file: string;
@@ -116,9 +130,30 @@ interface BalanceEvent extends EventKey {
 	account: string;
 	currency: string;
 	amount: Decimal;
+	tolerance: Decimal;
 }
 
 type LedgerEvent = PostingEvent | PadEvent | BalanceEvent;
+
+interface LedgerOptions {
+	multiplier: Decimal;
+	defaults: Map<string, Decimal>;
+	useCost: boolean;
+}
+
+interface Tolerances {
+	values: Map<string, Decimal>;
+	fallback: Decimal;
+}
+
+interface ParsedLedger {
+	text: string;
+	directives: Directive[];
+	errors: BalanceIssue[];
+}
+
+/** One entry per path, replaced when that file's text changes. */
+const parsedByPath = new Map<string, ParsedLedger>();
 
 /**
  * Balances of `entryPath` and the `include` chain found in `files`.
@@ -131,9 +166,9 @@ export function accountBalances(
 	vaultFiles: readonly string[],
 ): BalanceReport {
 	const loaded = loadSources(entryPath, files, vaultRoot, vaultFiles);
-	if (loaded.errors.length > 0) return { rows: [], errors: loaded.errors, files: loaded.files };
+	if (loaded.errors.length > 0) return { rows: [], errors: loaded.errors, files: loaded.files, watchCreates: loaded.watchCreates };
 	const computed = compute(loaded.sources);
-	return { rows: computed.rows, errors: computed.errors, files: loaded.files };
+	return { rows: computed.rows, errors: computed.errors, files: loaded.files, watchCreates: loaded.watchCreates };
 }
 
 /** Read `entryPath` and every included file, then compute balances. */
@@ -161,19 +196,21 @@ export async function loadAccountBalances(entryPath: string, vault: LedgerVault)
 			continue;
 		}
 		files.set(path, text);
-		for (const next of includePaths(text, path, vault.vaultRoot, vault.vaultFiles)) queue.push(next);
+		// Parse once here; the compute walk reuses this result.
+		const parsed = parseLedger(path, text);
+		if (parsed.errors.length > 0) continue;
+		for (const next of includePaths(parsed.directives, path, vault.vaultRoot, vault.vaultFiles)) queue.push(next);
 	}
-	if (readErrors.length > 0) return { rows: [], errors: readErrors, files: [...files.keys()] };
+	if (readErrors.length > 0) return { rows: [], errors: readErrors, files: [...files.keys()], watchCreates: true };
 	return accountBalances(entryPath, files, vault.vaultRoot, vault.vaultFiles);
 }
 
-function includePaths(text: string, sourcePath: string, vaultRoot: string, vaultFiles: readonly string[]): string[] {
-	let directives: Directive[];
-	try {
-		directives = BeancountParser.parse(text).directives;
-	} catch {
-		return [];
-	}
+function includePaths(
+	directives: readonly Directive[],
+	sourcePath: string,
+	vaultRoot: string,
+	vaultFiles: readonly string[],
+): string[] {
 	const paths: string[] = [];
 	for (const directive of directives) {
 		if (!(directive instanceof Include)) continue;
@@ -184,24 +221,43 @@ function includePaths(text: string, sourcePath: string, vaultRoot: string, vault
 	return paths;
 }
 
+function parseLedger(path: string, text: string): ParsedLedger {
+	const hit = parsedByPath.get(path);
+	if (hit && hit.text === text) return hit;
+	const parsed: ParsedLedger = { text, directives: [], errors: [] };
+	try {
+		parsed.directives = BeancountParser.parse(text).directives;
+	} catch (err) {
+		if (err instanceof BeancountSyntaxError) {
+			for (const item of err.errors) parsed.errors.push({ file: path, line: item.line, message: item.message });
+		} else {
+			parsed.errors.push({ file: path, line: 1, message: err instanceof Error ? err.message : 'Parse failed' });
+		}
+	}
+	parsedByPath.set(path, parsed);
+	return parsed;
+}
+
 function loadSources(
 	entryPath: string,
 	files: ReadonlyMap<string, string>,
 	vaultRoot: string,
 	vaultFiles: readonly string[],
-): { sources: Sourced[]; errors: BalanceIssue[]; files: string[] } {
+): { sources: Sourced[]; errors: BalanceIssue[]; files: string[]; watchCreates: boolean } {
 	const sources: Sourced[] = [];
 	const errors: BalanceIssue[] = [];
 	const visited: string[] = [];
 	const seen = new Set<string>();
 	const queue = [entryPath];
 	let seq = 0;
+	let watchCreates = false;
 	while (queue.length > 0) {
 		const path = queue.shift() as string;
 		if (seen.has(path)) continue;
 		seen.add(path);
 		const text = files.get(path);
 		if (text === undefined) {
+			watchCreates = true;
 			errors.push({
 				file: path,
 				line: 1,
@@ -210,18 +266,12 @@ function loadSources(
 			continue;
 		}
 		visited.push(path);
-		let directives: Directive[];
-		try {
-			directives = BeancountParser.parse(text).directives;
-		} catch (err) {
-			if (err instanceof BeancountSyntaxError) {
-				for (const item of err.errors) errors.push({ file: path, line: item.line, message: item.message });
-			} else {
-				errors.push({ file: path, line: 1, message: err instanceof Error ? err.message : 'Parse failed' });
-			}
+		const parsed = parseLedger(path, text);
+		if (parsed.errors.length > 0) {
+			for (const issue of parsed.errors) errors.push(issue);
 			continue;
 		}
-		for (const directive of directives) {
+		for (const directive of parsed.directives) {
 			const line = directive.location?.start.line ?? 1;
 			sources.push({ file: path, directive, line, seq });
 			seq += 1;
@@ -230,30 +280,32 @@ function loadSources(
 			if (resolved.kind === 'file') {
 				queue.push(resolved.vaultPath);
 			} else if (resolved.kind === 'glob') {
+				watchCreates = true;
 				if (resolved.matches.length === 0) {
 					errors.push({ file: path, line, message: `No files match include "${directive.filename}"` });
 				} else {
 					for (const match of resolved.matches) queue.push(match);
 				}
 			} else if (resolved.kind === 'missing') {
+				watchCreates = true;
 				errors.push({ file: path, line, message: `Included file not found: ${directive.filename}` });
 			} else {
+				watchCreates = true;
 				errors.push({ file: path, line, message: `Include is outside the vault: ${directive.filename}` });
 			}
 		}
 	}
-	return { sources, errors, files: visited };
+	return { sources, errors, files: visited, watchCreates };
 }
 
 function compute(sources: readonly Sourced[]): { rows: BalanceRow[]; errors: BalanceIssue[] } {
-	const scales = new Map<string, number>();
+	const options = readOptions(sources);
 	const events: LedgerEvent[] = [];
 	const errors: BalanceIssue[] = [];
 	for (const source of sources) {
 		const directive = source.directive;
 		if (directive instanceof Transaction) {
-			noteTransaction(directive, scales);
-			const filled = interpolate(directive);
+			const filled = interpolate(directive, options);
 			if (typeof filled === 'string') {
 				errors.push({ file: source.file, line: source.line, message: filled });
 				continue;
@@ -281,13 +333,13 @@ function compute(sources: readonly Sourced[]): { rows: BalanceRow[]; errors: Bal
 				seq: source.seq,
 			});
 		} else if (directive instanceof Balance) {
-			const amount = parsedDecimal(directive.amount.number);
-			noteDecimal(scales, directive.amount.currency, amount);
+			const amount = decimalOf(directive.amount);
 			events.push({
 				kind: 'balance',
 				account: directive.account,
 				currency: directive.amount.currency,
 				amount,
+				tolerance: balanceTolerance(amount, explicitTolerance(directive), options.multiplier),
 				dateKey: dateKey(directive.date),
 				typeOrder: -1,
 				line: source.line,
@@ -298,10 +350,31 @@ function compute(sources: readonly Sourced[]): { rows: BalanceRow[]; errors: Bal
 	if (errors.length > 0) return { rows: [], errors };
 	events.sort(compareEvent);
 	for (const synthetic of padPostings(events)) events.push(synthetic);
-	return { rows: rowsOf(events, scales), errors: [] };
+	return { rows: rowsOf(events), errors: [] };
 }
 
-function interpolate(txn: Transaction): UnitLeg[] | string {
+function readOptions(sources: readonly Sourced[]): LedgerOptions {
+	const options: LedgerOptions = { multiplier: HALF, defaults: new Map(), useCost: false };
+	for (const source of sources) {
+		const directive = source.directive;
+		if (!(directive instanceof Option)) continue;
+		if (directive.name === 'inferred_tolerance_multiplier') {
+			const parsed = Decimal.fromLiteral(directive.value.trim());
+			if (parsed) options.multiplier = parsed;
+		} else if (directive.name === 'infer_tolerance_from_cost') {
+			const lower = directive.value.trim().toLowerCase();
+			options.useCost = lower === '1' || lower === 'true' || lower === 'yes';
+		} else if (directive.name === 'inferred_tolerance_default') {
+			const colon = directive.value.indexOf(':');
+			if (colon <= 0) continue;
+			const parsed = Decimal.fromLiteral(directive.value.slice(colon + 1).trim());
+			if (parsed) options.defaults.set(directive.value.slice(0, colon), parsed);
+		}
+	}
+	return options;
+}
+
+function interpolate(txn: Transaction, options: LedgerOptions): UnitLeg[] | string {
 	const missing = txn.postings.filter((posting) => !(posting.amount instanceof Amount));
 	if (missing.length > 1) return TOO_MANY;
 	if (missing.length === 0) return unitLegs(txn.postings);
@@ -315,11 +388,14 @@ function interpolate(txn: Transaction): UnitLeg[] | string {
 		addCurrency(residual, weight.currency, weight.units);
 	}
 	dropZeros(residual);
+	const tolerances = inferTolerances(txn.postings, options);
 	const known = unitLegs(txn.postings.filter((other) => other !== posting));
 	if (posting.amount === undefined) {
 		for (const currency of sortedKeys(residual)) {
 			const units = residual.get(currency) as Decimal;
-			known.push({ account: posting.account, currency, units: units.neg() });
+			const filled = quantizeWithTolerance(tolerances, currency, units.neg());
+			if (filled.isZero()) continue;
+			known.push({ account: posting.account, currency, units: filled });
 		}
 		return known;
 	}
@@ -328,7 +404,10 @@ function interpolate(txn: Transaction): UnitLeg[] | string {
 	const currency = posting.amount.currency;
 	for (const other of residual.keys()) if (other !== currency) return OTHER_CURRENCIES;
 	const have = residual.get(currency);
-	if (have) known.push({ account: posting.account, currency, units: have.neg() });
+	if (have) {
+		const filled = quantizeWithTolerance(tolerances, currency, have.neg());
+		if (!filled.isZero()) known.push({ account: posting.account, currency, units: filled });
+	}
 	return known;
 }
 
@@ -336,41 +415,43 @@ function unitLegs(postings: readonly Posting[]): UnitLeg[] {
 	const legs: UnitLeg[] = [];
 	for (const posting of postings) {
 		// The omitted posting is removed before this call; every remaining amount is complete.
-		const amount = posting.amount as Amount;
-		const units = parsedDecimal(amount.number);
+		if (!(posting.amount instanceof Amount)) continue;
+		const units = decimalOf(posting.amount);
 		if (units.isZero()) continue;
-		legs.push({ account: posting.account, currency: amount.currency, units });
+		legs.push({ account: posting.account, currency: posting.amount.currency, units });
 	}
 	return legs;
 }
 
 function postingWeight(posting: Posting): { currency: string; units: Decimal } | string {
 	// The omitted posting is skipped by the caller; every other posting has an amount.
-	const amount = posting.amount as Amount;
-	const units = parsedDecimal(amount.number);
+	if (!(posting.amount instanceof Amount)) return COST_INTERPOLATION;
+	const units = decimalOf(posting.amount);
 	if (posting.cost) {
 		const weighted = costWeight(units, posting.cost);
 		return weighted ?? COST_INTERPOLATION;
 	}
 	if (posting.priceAnnotation) return priceWeight(units, posting.priceAnnotation);
-	return { currency: amount.currency, units };
+	return { currency: posting.amount.currency, units };
 }
 
 function costWeight(units: Decimal, cost: Cost): { currency: string; units: Decimal } | null {
 	if (cost.amount instanceof IncompleteAmount || cost.total instanceof IncompleteAmount) return null;
-	if (cost.amount instanceof Amount) {
-		return { currency: cost.amount.currency, units: units.mul(parsedDecimal(cost.amount.number)) };
-	}
-	if (cost.total instanceof Amount) {
-		return { currency: cost.total.currency, units: signed(units, parsedDecimal(cost.total.number)) };
-	}
-	// `{}`, a date, or a label: the cost number is what interpolation would fill.
-	return null;
+	const per = cost.amount instanceof Amount ? cost.amount : null;
+	const total = cost.total instanceof Amount ? cost.total : null;
+	if (!per && !total) return null;
+	if (per && total && per.currency !== total.currency) return null;
+	const currency = per ? per.currency : total ? total.currency : '';
+	if (!currency) return null;
+	let weight = Decimal.zero();
+	if (per) weight = weight.add(units.mul(decimalOf(per)));
+	if (total) weight = weight.add(signed(units, decimalOf(total)));
+	return { currency, units: weight };
 }
 
 function priceWeight(units: Decimal, price: PriceAnnotation): { currency: string; units: Decimal } | string {
 	if (!(price.amount instanceof Amount)) return COST_INTERPOLATION;
-	const number = parsedDecimal(price.amount.number);
+	const number = decimalOf(price.amount);
 	return { currency: price.amount.currency, units: price.isTotal ? signed(units, number) : units.mul(number) };
 }
 
@@ -380,6 +461,71 @@ function signed(units: Decimal, total: Decimal): Decimal {
 	if (sign < 0) return total.neg();
 	if (sign > 0) return total;
 	return Decimal.zero();
+}
+
+function inferTolerances(postings: readonly Posting[], options: LedgerOptions): Tolerances {
+	const values = new Map(options.defaults);
+	const fromCost = new Map<string, Decimal>();
+	for (const posting of postings) {
+		if (!(posting.amount instanceof Amount)) continue;
+		const units = decimalOf(posting.amount);
+		if (units.scale <= 0) continue;
+		const tolerance = new Decimal(BigInt(1), units.scale).mul(options.multiplier);
+		const prev = values.get(posting.amount.currency);
+		values.set(posting.amount.currency, prev ? maxDecimal(tolerance, prev) : tolerance);
+		if (!options.useCost) continue;
+		noteCostTolerance(fromCost, tolerance, posting);
+	}
+	for (const [currency, extra] of fromCost) {
+		const prev = values.get(currency);
+		values.set(currency, prev ? maxDecimal(extra, prev) : extra);
+	}
+	const fallback = values.get('*') ?? Decimal.zero();
+	values.delete('*');
+	return { values, fallback };
+}
+
+function noteCostTolerance(into: Map<string, Decimal>, unitTolerance: Decimal, posting: Posting): void {
+	if (posting.cost) {
+		const per = posting.cost.amount instanceof Amount ? posting.cost.amount : null;
+		const total = posting.cost.total instanceof Amount ? posting.cost.total : null;
+		if (per || total) {
+			const currency = per ? per.currency : total ? total.currency : '';
+			if (currency) {
+				let costTolerance = MAXIMUM_TOLERANCE;
+				if (per) costTolerance = minDecimal(unitTolerance.mul(decimalOf(per)), costTolerance);
+				if (total) costTolerance = minDecimal(unitTolerance.mul(decimalOf(total)), costTolerance);
+				addCurrency(into, currency, costTolerance);
+			}
+		}
+	}
+	const price = posting.priceAnnotation?.amount;
+	if (price instanceof Amount) {
+		addCurrency(into, price.currency, minDecimal(unitTolerance.mul(decimalOf(price)), MAXIMUM_TOLERANCE));
+	}
+}
+
+function quantizeWithTolerance(tolerances: Tolerances, currency: string, number: Decimal): Decimal {
+	const tolerance = tolerances.values.get(currency) ?? tolerances.fallback;
+	if (tolerance.isZero()) return number;
+	const quantum = tolerance.mul(TWO).normalized();
+	if (quantum.significantDigits() >= MAX_TOLERANCE_DIGITS) return number;
+	return number.quantizeExponent(quantum.exponent());
+}
+
+function explicitTolerance(balance: Balance): Decimal | undefined {
+	if (balance.tolerance === undefined) return undefined;
+	if (balance.toleranceText !== undefined) {
+		const parsed = Decimal.fromLiteral(balance.toleranceText);
+		if (parsed) return parsed;
+	}
+	return Decimal.fromNumber(balance.tolerance) ?? Decimal.zero();
+}
+
+function balanceTolerance(amount: Decimal, explicit: Decimal | undefined, multiplier: Decimal): Decimal {
+	if (explicit) return explicit;
+	if (amount.scale <= 0) return Decimal.zero();
+	return multiplier.mul(TWO).mul(new Decimal(BigInt(1), amount.scale));
 }
 
 function padPostings(events: readonly LedgerEvent[]): PostingEvent[] {
@@ -399,11 +545,11 @@ function padPostings(events: readonly LedgerEvent[]): PostingEvent[] {
 			} else if (event.kind === 'pad' && event.account === account) {
 				active = event;
 				consumed.clear();
-			} else if (event.kind === 'balance' && event.account === account && active && !consumed.has(event.currency)) {
+			} else if (event.kind === 'balance' && isUnder(account, event.account) && active && !consumed.has(event.currency)) {
 				consumed.add(event.currency);
 				const have = running.get(event.currency) ?? Decimal.zero();
 				const diff = event.amount.sub(have);
-				if (diff.isZero()) continue;
+				if (!exceeds(diff, event.tolerance)) continue;
 				synthetic.push(copyPosting(active, active.account, event.currency, diff));
 				synthetic.push(copyPosting(active, active.source, event.currency, diff.neg()));
 				addCurrency(running, event.currency, diff);
@@ -411,6 +557,11 @@ function padPostings(events: readonly LedgerEvent[]): PostingEvent[] {
 		}
 	}
 	return synthetic;
+}
+
+function exceeds(diff: Decimal, tolerance: Decimal): boolean {
+	const abs = diff.sign() < 0 ? diff.neg() : diff;
+	return abs.compare(tolerance) > 0;
 }
 
 function copyPosting(pad: PadEvent, account: string, currency: string, units: Decimal): PostingEvent {
@@ -426,7 +577,7 @@ function copyPosting(pad: PadEvent, account: string, currency: string, units: De
 	};
 }
 
-function rowsOf(events: readonly LedgerEvent[], scales: ReadonlyMap<string, number>): BalanceRow[] {
+function rowsOf(events: readonly LedgerEvent[]): BalanceRow[] {
 	const totals = new Map<string, Map<string, Decimal>>();
 	for (const event of events) {
 		if (event.kind !== 'posting' || event.units.isZero()) continue;
@@ -445,37 +596,19 @@ function rowsOf(events: readonly LedgerEvent[], scales: ReadonlyMap<string, numb
 		const amounts: BalanceAmount[] = [];
 		for (const currency of sortedKeys(currencies)) {
 			const units = currencies.get(currency) as Decimal;
-			amounts.push({ currency, text: units.format(scales.get(currency) ?? 0) });
+			amounts.push({ currency, text: units.render() });
 		}
 		rows.push({ account, amounts });
 	}
 	return rows;
 }
 
-function noteTransaction(txn: Transaction, scales: Map<string, number>): void {
-	for (const posting of txn.postings) {
-		noteMaybe(scales, posting.amount);
-		if (posting.cost) {
-			noteMaybe(scales, posting.cost.amount);
-			noteMaybe(scales, posting.cost.total);
-		}
-		if (posting.priceAnnotation) noteMaybe(scales, posting.priceAnnotation.amount);
+function decimalOf(amount: Amount): Decimal {
+	if (amount.numberText !== undefined) {
+		const parsed = Decimal.fromLiteral(amount.numberText);
+		if (parsed) return parsed;
 	}
-}
-
-function noteMaybe(scales: Map<string, number>, amount: Amount | IncompleteAmount | undefined): void {
-	if (!(amount instanceof Amount)) return;
-	noteDecimal(scales, amount.currency, parsedDecimal(amount.number));
-}
-
-/** Parser `number()` rejects non-finite values, so a parsed amount always converts. */
-function parsedDecimal(n: number): Decimal {
-	return Decimal.fromNumber(n) as Decimal;
-}
-
-function noteDecimal(scales: Map<string, number>, currency: string, decimal: Decimal): void {
-	const prev = scales.get(currency) ?? 0;
-	if (decimal.scale > prev) scales.set(currency, decimal.scale);
+	return Decimal.fromNumber(amount.number) ?? Decimal.zero();
 }
 
 /** A child account's units count toward a pad of its parent; `Cashier` is not under `Cash`. */
@@ -491,6 +624,14 @@ function dropZeros(map: Map<string, Decimal>): void {
 	for (const currency of [...map.keys()]) {
 		if ((map.get(currency) as Decimal).isZero()) map.delete(currency);
 	}
+}
+
+function maxDecimal(a: Decimal, b: Decimal): Decimal {
+	return a.compare(b) >= 0 ? a : b;
+}
+
+function minDecimal(a: Decimal, b: Decimal): Decimal {
+	return a.compare(b) <= 0 ? a : b;
 }
 
 function dateKey(date: Date): number {

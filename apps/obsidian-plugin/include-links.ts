@@ -101,11 +101,10 @@ export type IncludeResolution =
  * a fence. `vaultRoot` is the adapter base path, slashes either way.
  * `vaultFiles` are the vault paths a glob or a missing check consults;
  * comparison is exact, so a same-named file in another folder does not
- * match. Glob metacharacters (`*`, `?`, `[`) never cross `/`, matching
- * beancount's non-recursive `glob.glob`, and a leading `.` in a segment
- * is matched only by a pattern that asks for it. Matches are sorted
- * lexicographically: that order is the order beancount includes them, so
- * "first" is stable.
+ * match. `*` and `?` never cross `/`. A `**` path segment matches zero or
+ * more directories, like Python's `glob.glob(..., recursive=True)`, and
+ * does not see a name that starts with `.` unless the pattern asks for it.
+ * Matches are sorted lexicographically so "first" is stable.
  */
 export function resolveIncludePath(
 	includePath: string,
@@ -497,15 +496,40 @@ function underVaultRoot(abs: string, vaultRoot: string): string | null {
 	return path.slice(prefix.length);
 }
 
-/** `pattern` and `file` are vault-relative, forward-slash paths. `*` does not cross `/`. */
+/** `pattern` and `file` are vault-relative, forward-slash paths. `*` does not cross `/`; `**` matches directories. */
 function globMatch(pattern: string, file: string): boolean {
-	const pat = pattern.split('/');
-	const parts = file.split('/');
-	if (pat.length !== parts.length) return false;
-	for (let i = 0; i < pat.length; i += 1) {
-		if (!segmentMatch(pat[i], parts[i])) return false;
+	return matchPath(pattern.split('/'), file.split('/'), 0, 0);
+}
+
+/**
+ * `**` as a whole segment matches zero or more directories. A trailing `**`
+ * still needs a file under that prefix — the directory itself is not a vault
+ * file. Names starting with `.` are skipped unless a later segment asks for them.
+ */
+function matchPath(pat: readonly string[], parts: readonly string[], pi: number, fi: number): boolean {
+	while (pi < pat.length) {
+		if (pat[pi] !== '**') {
+			if (fi >= parts.length || !segmentMatch(pat[pi], parts[fi])) return false;
+			pi += 1;
+			fi += 1;
+			continue;
+		}
+		let next = pi + 1;
+		while (next < pat.length && pat[next] === '**') next += 1;
+		if (next === pat.length) {
+			if (fi >= parts.length) return false;
+			for (let i = fi; i < parts.length; i += 1) {
+				if (parts[i].startsWith('.')) return false;
+			}
+			return true;
+		}
+		for (let k = fi; k <= parts.length; k += 1) {
+			if (k > fi && parts[k - 1].startsWith('.')) return false;
+			if (matchPath(pat, parts, next, k)) return true;
+		}
+		return false;
 	}
-	return true;
+	return fi === parts.length;
 }
 
 /**

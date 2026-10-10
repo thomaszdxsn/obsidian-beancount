@@ -7,8 +7,19 @@
 - **Show account balances**: a sidebar table of per-account unit balances
   (one line per currency), following the entry ledger's `include` chain or
   the active ledger / note fences. Missing amounts are interpolated from
-  posting weights; `pad` / `balance` insert the start-of-day difference.
-  A parse or interpolation error replaces the numbers.
+  posting weights and quantized like beancount; `pad` / `balance` insert the
+  start-of-day difference when it exceeds tolerance. A parse or interpolation
+  error replaces the numbers.
+
+### Fixed
+
+- Balance weights include both parts of `{per # total}`, interpolated amounts
+  follow beancount's inferred tolerance, and a pad is skipped when the gap is
+  within the balance tolerance. A child `balance` consumes its parent's pad.
+  Literal amounts keep their written scale, including values past 2^53.
+  `include "**"` matches zero or more directories. The balance view refreshes
+  when an involved file is created, deleted, or renamed, and when a new file
+  can satisfy an include glob or a missing include.
 
 ## 0.1.1
 

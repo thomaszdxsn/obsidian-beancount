@@ -48,10 +48,10 @@ describe('Decimal', () => {
 		expect(dec('0.1').add(dec('-0.1')).isZero()).toBe(true);
 		expect(dec('1').sub(dec('0.1')).format(0)).toBe('0.9');
 		expect(dec('0.10').sub(dec('0.1')).isZero()).toBe(true);
-		expect(dec('1.5').mul(dec('2')).format(0)).toBe('3');
-		expect(dec('-1.5').mul(dec('-2')).format(0)).toBe('3');
+		expect(dec('1.5').mul(dec('2')).format(0)).toBe('3.0');
+		expect(dec('-1.5').mul(dec('-2')).format(0)).toBe('3.0');
 		expect(dec('-1.5').mul(dec('2')).format(1)).toBe('-3.0');
-		expect(dec('0.2').mul(dec('0.5')).format(0)).toBe('0.1');
+		expect(dec('0.2').mul(dec('0.5')).format(0)).toBe('0.10');
 		expect(dec('5').mul(dec('0')).isZero()).toBe(true);
 		expect(dec('1.5').neg().format(0)).toBe('-1.5');
 		expect(dec('-1.5').neg().format(2)).toBe('1.50');
@@ -81,5 +81,22 @@ describe('Decimal', () => {
 		expect(Decimal.fromNumber(Number.NaN)).toBeNull();
 		expect(Decimal.fromNumber(Number.POSITIVE_INFINITY)).toBeNull();
 		expect(Decimal.fromNumber(Number.NEGATIVE_INFINITY)).toBeNull();
+	});
+
+	it('keeps a literal exponent and renders like Python Decimal', () => {
+		expect(Decimal.fromLiteral('1.00')?.render()).toBe('1.00');
+		expect(Decimal.fromLiteral('1,234.50')).toBeNull();
+		expect(Decimal.fromLiteral('0.00')?.render()).toBe('0.00');
+		expect(Decimal.fromLiteral('0.0000001')?.render()).toBe('1E-7');
+		expect(Decimal.fromLiteral('0.000001')?.render()).toBe('0.000001');
+		expect(Decimal.fromLiteral('-1.00')?.add(Decimal.fromLiteral('2.5') as Decimal).render()).toBe('1.50');
+		expect(Decimal.fromLiteral('4.8333')?.quantizeExponent(-1).render()).toBe('4.8');
+		expect(Decimal.fromLiteral('4.5')?.quantizeExponent(0).render()).toBe('4');
+		expect(Decimal.fromLiteral('5.5')?.quantizeExponent(0).render()).toBe('6');
+		expect(Decimal.fromLiteral('-1.25')?.quantizeExponent(-1).render()).toBe('-1.2');
+		expect(Decimal.fromLiteral('-1.35')?.quantizeExponent(-1).render()).toBe('-1.4');
+		expect(Decimal.fromLiteral('25')?.quantizeExponent(1).render()).toBe('2E+1');
+		expect(Decimal.fromLiteral('0.10')?.normalized().render()).toBe('0.1');
+		expect(Decimal.fromLiteral('0.10')?.significantDigits()).toBe(1);
 	});
 });

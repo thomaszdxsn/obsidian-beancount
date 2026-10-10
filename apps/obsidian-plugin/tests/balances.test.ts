@@ -69,7 +69,7 @@ describe('accountBalances', () => {
 		});
 		expect(result.errors).toEqual([]);
 		expect(lines(result)).toEqual([
-			'Assets:Cash -31.7 USD',
+			'Assets:Cash -51.7 USD',
 			'Assets:Stocks 1 AAPL, 2 HOOL, 3 MSFT',
 			'Expenses:Food -0.3 USD',
 		]);
@@ -400,7 +400,7 @@ describe('accountBalances', () => {
 		expect(included.errors.some((issue) => issue.file === 'main.bean')).toBe(false);
 	});
 
-	it('pads display to the widest fraction of that currency and keeps a tiny amount exact', () => {
+	it('renders each sum at its own scale, and keeps a tiny amount in scientific form', () => {
 		expect(
 			lines(
 				report({
@@ -414,7 +414,7 @@ describe('accountBalances', () => {
 					].join('\n'),
 				}),
 			),
-		).toEqual(['Assets:Bank 0.5 USD', 'Assets:Cash 2.0 USD', 'Expenses:A -2.0 USD', 'Expenses:B -0.5 USD']);
+		).toEqual(['Assets:Bank 0.5 USD', 'Assets:Cash 2 USD', 'Expenses:A -2 USD', 'Expenses:B -0.5 USD']);
 
 		expect(
 			lines(
@@ -422,7 +422,142 @@ describe('accountBalances', () => {
 					'main.bean': ['2020-01-03 * "tiny"', '  Assets:Petty  0.0000001 USD', '  Expenses:C'].join('\n'),
 				}),
 			),
-		).toEqual(['Assets:Petty 0.0000001 USD', 'Expenses:C -0.0000001 USD']);
+		).toEqual(['Assets:Petty 1E-7 USD', 'Expenses:C -1E-7 USD']);
+	});
+
+	it('weights a compound cost as units times per plus the signed total', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': ['2020-01-02 * "compound"', '  Assets:Stk  4 STK {10 # 5 USD}', '  Assets:Cash'].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash -45 USD', 'Assets:Stk 4 STK']);
+	});
+
+	it('quantizes an interpolated amount to the other postings exponent', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'2020-01-03 * "interp"',
+						'  Assets:Stk  3 STK {1.1111 USD}',
+						'  Expenses:Fee  1.5 USD',
+						'  Assets:Cash',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash -4.8 USD', 'Assets:Stk 3 STK', 'Expenses:Fee 1.5 USD']);
+	});
+
+	it('skips a pad inside tolerance but still consumes that currency', () => {
+		const skipped = report({
+			'main.bean': [
+				'2020-01-01 * "dust"',
+				'  Assets:Cash  0.004 USD',
+				'  Equity:Opening',
+				'2020-01-02 pad Assets:Cash Equity:Opening',
+				'2020-01-03 balance Assets:Cash 0.00 USD',
+				'2020-01-04 balance Assets:Cash 100 USD',
+			].join('\n'),
+		});
+		expect(lines(skipped)).toEqual(['Assets:Cash 0.004 USD', 'Equity:Opening -0.004 USD']);
+
+		const explicit = report({
+			'main.bean': [
+				'2020-01-01 * "near"',
+				'  Assets:Cash  10.004 USD',
+				'  Equity:Opening',
+				'2020-01-02 pad Assets:Cash Equity:Opening',
+				'2020-01-03 balance Assets:Cash 10.00 ~ 0.01 USD',
+			].join('\n'),
+		});
+		expect(lines(explicit)).toEqual(['Assets:Cash 10.004 USD', 'Equity:Opening -10.004 USD']);
+	});
+
+	it('lets a child balance fire the parent pad, then a second pad fill the next gap', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'2020-01-01 * "child"',
+						'  Assets:Bank:Checking  10 USD',
+						'  Equity:Opening',
+						'2020-01-02 pad Assets:Bank Equity:Opening',
+						'2020-01-03 balance Assets:Bank:Checking 40 USD',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Bank 30 USD', 'Assets:Bank:Checking 10 USD', 'Equity:Opening -40 USD']);
+
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'2020-01-01 pad Assets:Cash Equity:Opening',
+						'2020-01-02 balance Assets:Cash 40 USD',
+						'2020-01-03 pad Assets:Cash Equity:Later',
+						'2020-01-04 balance Assets:Cash 45 USD',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash 45 USD', 'Equity:Later -5 USD', 'Equity:Opening -40 USD']);
+	});
+
+	it('keeps an 18-digit literal and an integer past 2^53 exact', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'2020-01-01 * "exact"',
+						'  Assets:Cash  0.000000000000000001 USD',
+						'  Assets:Cash  9007199254740993 USD',
+						'  Equity:Opening',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash 9007199254740993.000000000000000001 USD', 'Equity:Opening -9007199254740993.000000000000000001 USD']);
+	});
+
+	it('honors tolerance options when quantizing an interpolated amount', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'option "inferred_tolerance_multiplier" "1.1"',
+						'2020-01-03 * "wider"',
+						'  Assets:Stk  3 STK {1.1111 USD}',
+						'  Expenses:Fee  1.5 USD',
+						'  Assets:Cash',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash -4.83 USD', 'Assets:Stk 3 STK', 'Expenses:Fee 1.5 USD']);
+
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'option "infer_tolerance_from_cost" "TRUE"',
+						'2020-01-03 * "cost"',
+						'  Assets:Stk  1.1 HOOL {10.00 USD}',
+						'  Expenses:Fee  1.111 USD',
+						'  Assets:Cash',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash -12 USD', 'Assets:Stk 1.1 HOOL', 'Expenses:Fee 1.111 USD']);
+	});
+
+	it('follows a ** include through zero or more directories', () => {
+		const nested = report({
+			'main.bean': 'include "sub/**/*.bean"\n',
+			'sub/y.bean': '2020-02-02 * "zero"\n  Assets:Cash  0.50 USD\n  Equity:Opening\n',
+			'sub/nested/x.bean': '2020-02-01 * "deep"\n  Assets:Cash  2.50 USD\n  Equity:Opening\n',
+			'sub/.hidden/z.bean': '2020-02-03 * "hide"\n  Assets:Cash  9 USD\n  Equity:Opening\n',
+		});
+		expect(lines(nested)).toEqual(['Assets:Cash 3.00 USD', 'Equity:Opening -3.00 USD']);
+		expect(nested.files).toEqual(['main.bean', 'sub/nested/x.bean', 'sub/y.bean']);
 	});
 
 	it('reports an include that resolved but was not loaded', () => {

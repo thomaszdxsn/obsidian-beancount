@@ -98,6 +98,7 @@ interface Source {
 export class BeancountBalancesView extends ItemView {
 	private source: Source | null = null;
 	private involved = new Set<string>();
+	private watchCreates = false;
 	private seq = 0;
 	private timer: number | null = null;
 
@@ -124,12 +125,31 @@ export class BeancountBalancesView extends ItemView {
 		this.registerEvent(
 			this.app.workspace.on('active-leaf-change', (leaf) => {
 				if (leaf && leaf.view === this) return;
+				if (sameSource(this.pickSource(), this.source)) return;
 				void this.sync();
 			}),
 		);
 		this.registerEvent(
 			this.app.vault.on('modify', (file) => {
 				if (!this.involved.has(file.path)) return;
+				this.schedule();
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on('create', (file) => {
+				if (!this.watchCreates && !this.involved.has(file.path)) return;
+				this.schedule();
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on('delete', (file) => {
+				if (!this.involved.has(file.path)) return;
+				this.schedule();
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on('rename', (file, oldPath) => {
+				if (!this.involved.has(file.path) && !this.involved.has(oldPath)) return;
 				this.schedule();
 			}),
 		);
@@ -141,7 +161,6 @@ export class BeancountBalancesView extends ItemView {
 		this.clearTimer();
 	}
 
-	/** Rebuild now. Cancels a pending debounced rebuild so it cannot overwrite this one. */
 	async sync(): Promise<void> {
 		this.clearTimer();
 		const seq = ++this.seq;
@@ -167,14 +186,23 @@ export class BeancountBalancesView extends ItemView {
 
 	private async gather(): Promise<{ draw: BalanceDraw; files: readonly string[] }> {
 		const source = this.pickSource();
-		if (!source) return { draw: { kind: 'empty', message: EMPTY_LEDGER }, files: [] };
 		this.source = source;
+		if (!source) {
+			this.watchCreates = false;
+			return { draw: { kind: 'empty', message: EMPTY_LEDGER }, files: [] };
+		}
 		const file = this.app.vault.getAbstractFileByPath(source.path);
 		if (source.fences) {
-			if (!isVaultFile(file)) return { draw: { kind: 'empty', message: EMPTY_FENCES }, files: [] };
+			if (!isVaultFile(file)) {
+				this.watchCreates = false;
+				return { draw: { kind: 'empty', message: EMPTY_FENCES }, files: [] };
+			}
 			const text = await this.app.vault.read(file);
 			const fences = extractBeancountFences(text);
-			if (fences.length === 0) return { draw: { kind: 'empty', message: EMPTY_FENCES }, files: [source.path] };
+			if (fences.length === 0) {
+				this.watchCreates = false;
+				return { draw: { kind: 'empty', message: EMPTY_FENCES }, files: [source.path] };
+			}
 			// A blank line between fences keeps one fence's entry from absorbing the
 			// next fence's indented lines; errors report the note's own line.
 			const ledger = buildFenceLedger(fences);
@@ -182,9 +210,11 @@ export class BeancountBalancesView extends ItemView {
 			const errors = report.errors.map((issue) =>
 				issue.file === source.path ? { ...issue, line: ledger.hostLine(issue.line) ?? issue.line } : issue
 			);
+			this.watchCreates = report.watchCreates;
 			return { draw: drawOf({ ...report, errors }), files: report.files };
 		}
 		if (!isVaultFile(file)) {
+			this.watchCreates = true;
 			return {
 				draw: {
 					kind: 'errors',
@@ -194,6 +224,7 @@ export class BeancountBalancesView extends ItemView {
 			};
 		}
 		const report = await this.report(source.path, null);
+		this.watchCreates = report.watchCreates;
 		return { draw: drawOf(report), files: report.files };
 	}
 
@@ -216,7 +247,8 @@ export class BeancountBalancesView extends ItemView {
 	/**
 	 * Entry ledger when configured. Otherwise the active ledger or note.
 	 * A missing active file — the report pane itself took focus — keeps the
-	 * last source. A non-ledger file clears it.
+	 * last source. A non-ledger file clears it. This does not write `source`;
+	 * only a sync that actually runs does, so a no-op leaf change cannot drop it.
 	 */
 	private pickSource(): Source | null {
 		const entry = this.host.settings.entryLedger.trim();
@@ -225,9 +257,14 @@ export class BeancountBalancesView extends ItemView {
 		if (!file) return this.source;
 		if (file.extension === 'bean' || file.extension === 'beancount') return { path: file.path, fences: false };
 		if (file.extension === 'md') return { path: file.path, fences: true };
-		this.source = null;
 		return null;
 	}
+}
+
+function sameSource(a: Source | null, b: Source | null): boolean {
+	if (a === b) return true;
+	if (!a || !b) return false;
+	return a.path === b.path && a.fences === b.fences;
 }
 
 function drawOf(report: BalanceReport): BalanceDraw {

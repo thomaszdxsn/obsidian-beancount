@@ -1,5 +1,6 @@
-import type { App, WorkspaceLeaf } from 'obsidian';
+import type { App, PluginManifest, WorkspaceLeaf } from 'obsidian';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import BeancountPlugin from '../main';
 import { BALANCE_REFRESH_MS, BeancountBalancesView, drawBalances, revealBalancesView, VIEW_TYPE_BALANCES } from '../report-view';
 import type { BalanceDraw, BalanceEl, BalanceMount } from '../report-view';
 import { FakeVault } from './fakes';
@@ -223,18 +224,21 @@ describe('BeancountBalancesView', () => {
 		vault.write('ledger.bean', '2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n');
 		const { view, events, box } = viewFor(vault, { path: 'ledger.bean', extension: 'bean' });
 		await view.onOpen();
+		vault.write('ledger.bean', '2020-01-01 * "a"\n  Assets:Cash  8 USD\n  Expenses:Food\n');
+		events[0].callback({ view });
+		await Promise.resolve();
+		expect(shownIn(view)).toContain('1 USD');
+		expect(shownIn(view)).not.toContain('8 USD');
+
 		box.file = null;
 		events[0].callback();
 		await Promise.resolve();
-		expect(shownIn(view)).toContain('Assets:Cash');
+		expect(shownIn(view)).toContain('1 USD');
+		expect(shownIn(view)).not.toContain('8 USD');
 
 		box.file = { path: 'pic.png', extension: 'png' };
 		events[0].callback();
 		await Promise.resolve();
-		expect(shownIn(view)).toEqual([
-			'Open a Beancount file to see account balances.',
-		]);
-		events[0].callback({ view });
 		expect(shownIn(view)).toEqual([
 			'Open a Beancount file to see account balances.',
 		]);
@@ -255,9 +259,11 @@ describe('BeancountBalancesView', () => {
 		expect(shown()).toContain('1 USD');
 
 		const modify = vault.handlers.get('modify') ?? [];
+		vault.write('child.bean', '2020-01-01 * "c"\n  Assets:Cash  4 USD\n  Expenses:Food\n');
 		modify[0](vault.files.get('other.md') as never);
 		await vi.advanceTimersByTimeAsync(BALANCE_REFRESH_MS);
 		expect(shown()).toContain('1 USD');
+		expect(shown()).not.toContain('4 USD');
 
 		vault.write('child.bean', '2020-01-01 * "c"\n  Assets:Cash  6 USD\n  Expenses:Food\n');
 		modify[0](vault.files.get('child.bean') as never);
@@ -271,6 +277,74 @@ describe('BeancountBalancesView', () => {
 		await view.onClose();
 		await vi.advanceTimersByTimeAsync(BALANCE_REFRESH_MS);
 		expect(shown()).toContain('6 USD');
+		expect(shown()).not.toContain('8 USD');
+	});
+
+	it('refreshes when an involved file is created, deleted, or renamed, and when a glob can match a new file', async () => {
+		vi.useFakeTimers();
+		const afterEvent = async (view: BeancountBalancesView, fire: () => void) => {
+			const sync = vi.spyOn(view, 'sync');
+			fire();
+			await vi.advanceTimersByTimeAsync(BALANCE_REFRESH_MS);
+			const pending = sync.mock.results.map((result) => result.value as Promise<void>);
+			sync.mockRestore();
+			await Promise.all(pending);
+		};
+		const vault = new FakeVault();
+		vault.write('main.bean', 'include "child.bean"\n');
+		vault.write('child.bean', '2020-01-01 * "c"\n  Assets:Cash  1 USD\n  Expenses:Food\n');
+		const { view } = viewFor(vault, null, 'main.bean');
+		const opening = view.onOpen();
+		await vi.runAllTimersAsync();
+		await opening;
+		expect(shownIn(view)).toContain('1 USD');
+
+		vault.write('child.bean', '2020-01-01 * "c"\n  Assets:Cash  2 USD\n  Expenses:Food\n');
+		const created = vault.write('other.md', 'prose');
+		await afterEvent(view, () => {
+			vault.handlers.get('create')?.[0](created);
+		});
+		expect(shownIn(view)).toContain('1 USD');
+		expect(shownIn(view)).not.toContain('2 USD');
+
+		const child = vault.files.get('child.bean');
+		if (!child) throw new Error('missing child');
+		vault.delete('child.bean');
+		const deleteHandlers = vault.handlers.get('delete') ?? [];
+		if (deleteHandlers.length === 0) throw new Error('no delete handler');
+		await afterEvent(view, () => {
+			deleteHandlers[0](child);
+		});
+		expect(shownIn(view).join('\n')).toContain('Included file not found');
+
+		vault.write('child.bean', '2020-01-01 * "c"\n  Assets:Cash  3 USD\n  Expenses:Food\n');
+		const createHandlers = vault.handlers.get('create') ?? [];
+		if (createHandlers.length === 0) throw new Error('no create handler');
+		await afterEvent(view, () => {
+			createHandlers[0](vault.files.get('child.bean') as never);
+		});
+		expect(shownIn(view)).toContain('3 USD');
+
+		const renamed = vault.rename('child.bean', 'moved.bean');
+		const renameHandlers = vault.handlers.get('rename') ?? [];
+		if (renameHandlers.length === 0) throw new Error('no rename handler');
+		await afterEvent(view, () => {
+			renameHandlers[0](renamed, 'child.bean');
+		});
+		expect(shownIn(view).join('\n')).toContain('Included file not found');
+
+		vault.write('glob.bean', 'include "books/**/*.bean"\n');
+		const globbed = viewFor(vault, null, 'glob.bean');
+		const globOpen = globbed.view.onOpen();
+		await vi.runAllTimersAsync();
+		await globOpen;
+		expect(shownIn(globbed.view).join('\n')).toContain('No files match');
+		vault.write('books/a.bean', '2020-01-01 * "a"\n  Assets:Cash  7 USD\n  Expenses:Food\n');
+		const creates = vault.handlers.get('create') ?? [];
+		await afterEvent(globbed.view, () => {
+			creates[creates.length - 1](vault.files.get('books/a.bean') as never);
+		});
+		expect(shownIn(globbed.view)).toContain('7 USD');
 	});
 
 	it('drops a stale read when a newer sync finishes first', async () => {
@@ -320,5 +394,41 @@ describe('BeancountBalancesView', () => {
 		const folder = viewFor(nested, { path: 'main.bean', extension: 'bean' });
 		await folder.view.onOpen();
 		expect(shownIn(folder.view)).toEqual(['books:1  Included file not found: books']);
+	});
+
+	it('redraws an open view when saveSettings changes the entry ledger, and not when another setting changes', async () => {
+		const vault = new FakeVault();
+		vault.write('a.bean', '2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n');
+		vault.write('b.bean', '2020-01-01 * "b"\n  Assets:Cash  9 USD\n  Expenses:Food\n');
+		const balanceLeaves: Array<{ view: BeancountBalancesView }> = [];
+		const app = {
+			vault: vault.api,
+			workspace: {
+				getLeavesOfType: (type: string) => (type === VIEW_TYPE_BALANCES ? balanceLeaves : []),
+				getActiveFile: () => null,
+				activeEditor: null,
+				on: () => ({}),
+				revealLeaf: async () => undefined,
+				getRightLeaf: () => ({ setViewState: async () => undefined }),
+			},
+		};
+		const plugin = new BeancountPlugin(app as unknown as App, { id: 'beancount-obsidian' } as PluginManifest);
+		await plugin.onload();
+		const view = new BeancountBalancesView({ app } as unknown as WorkspaceLeaf, plugin);
+		balanceLeaves.push({ view });
+		plugin.settings.entryLedger = 'a.bean';
+		await view.onOpen();
+		expect(shownIn(view)).toContain('1 USD');
+
+		plugin.settings.entryLedger = 'b.bean';
+		await plugin.saveSettings();
+		expect(shownIn(view)).toContain('9 USD');
+		expect(shownIn(view)).not.toContain('1 USD');
+
+		vault.write('b.bean', '2020-01-01 * "b"\n  Assets:Cash  4 USD\n  Expenses:Food\n');
+		plugin.settings.alignOnSave = !plugin.settings.alignOnSave;
+		await plugin.saveSettings();
+		expect(shownIn(view)).toContain('9 USD');
+		expect(shownIn(view)).not.toContain('4 USD');
 	});
 });
