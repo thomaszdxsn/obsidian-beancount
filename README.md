@@ -2,8 +2,8 @@
 
 Edit [Beancount](https://beancount.github.io/) ledgers in Obsidian: syntax
 highlighting, account/payee completion, directive snippets, posting auto-indent,
-decimal-point alignment, ledger formatting, date insert, outline, and `bean-check` validation on
-save.
+decimal-point alignment, ledger formatting, date insert, outline, and
+`bean-check` validation on save.
 
 Desktop only — validation shells out to the `bean-check` executable.
 
