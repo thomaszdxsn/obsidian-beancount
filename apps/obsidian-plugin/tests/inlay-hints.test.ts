@@ -111,14 +111,15 @@ function editor(
 		},
 	};
 }
-function installDocument(): () => void {
-	const previous = globalThis.document;
-	globalThis.document = {
-		createElement: (tag: string) => ({ tagName: tag, className: '', textContent: null }),
-	} as unknown as Document;
+/** Obsidian injects `createSpan` as a global; install a fake one. */
+function installDom(): () => void {
+	Object.defineProperty(globalThis, 'createSpan', {
+		value: (info: { cls: string; text: string }) => ({ tagName: 'span', className: info.cls, textContent: info.text }),
+		configurable: true,
+		writable: true,
+	});
 	return () => {
-		if (previous === undefined) Reflect.deleteProperty(globalThis, 'document');
-		else globalThis.document = previous;
+		Reflect.deleteProperty(globalThis, 'createSpan');
 	};
 }
 
@@ -229,7 +230,7 @@ describe('balance inlay editor lifecycle', () => {
 		for (const cleanup of reloaded.registrations.cleanups) cleanup();
 	});
 	it('draws balance, inferred, and unbalanced hints and rewrites a stale element instead of replacing it', () => {
-		const restore = installDocument();
+		const restore = installDom();
 		try {
 			const host = { settings: { inlayHints: true, entryLedger: '', separatorColumn: undefined as number | undefined } };
 			const controller = new BalanceInlayController(host);

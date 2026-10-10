@@ -38,21 +38,37 @@ function source(accounts: AccountIndex) {
 	return (accountHoverTooltip(accounts) as unknown as MockHoverTooltip).source;
 }
 
+/** The slice of Obsidian's `DomElementInfo` the hover card passes. */
+interface FakeElInfo {
+	cls?: string;
+	text?: string;
+}
+
 class FakeEl {
 	className = '';
 	textContent: string | null = '';
 	childNodes: FakeEl[] = [];
-	constructor(readonly tagName: string) {}
-	appendChild(child: FakeEl): FakeEl {
+	constructor(readonly tagName: string, info: FakeElInfo = {}) {
+		this.className = info.cls ?? '';
+		this.textContent = info.text ?? '';
+	}
+	createEl(tag: string, info?: FakeElInfo): FakeEl {
+		const child = new FakeEl(tag, info);
 		this.childNodes.push(child);
 		return child;
 	}
+	createDiv(info?: FakeElInfo): FakeEl {
+		return this.createEl('div', info);
+	}
 }
 
-function installDocument(): void {
-	globalThis.document = {
-		createElement: (tag: string) => new FakeEl(tag),
-	} as unknown as Document;
+/** Obsidian injects `createDiv` as a global; install a fake one. */
+function installDom(): void {
+	Object.defineProperty(globalThis, 'createDiv', {
+		value: (info?: FakeElInfo) => new FakeEl('div', info),
+		configurable: true,
+		writable: true,
+	});
 }
 
 function ledger(): AccountIndex {
@@ -70,7 +86,7 @@ function ledger(): AccountIndex {
 }
 
 afterEach(() => {
-	Reflect.deleteProperty(globalThis, 'document');
+	Reflect.deleteProperty(globalThis, 'createDiv');
 });
 
 describe('accountHoverTooltip', () => {
@@ -110,7 +126,7 @@ describe('accountHoverTooltip', () => {
 	});
 
 	it('creates a markdown-list card with open, close and currencies', () => {
-		installDocument();
+		installDom();
 		const hover = source(ledger());
 		const tooltip = hover(view('Assets:Cash'), 0);
 		const { dom } = tooltip!.create() as { dom: FakeEl };
@@ -126,7 +142,7 @@ describe('accountHoverTooltip', () => {
 	});
 
 	it('omits the list when a known name has no lifecycle fields', () => {
-		installDocument();
+		installDom();
 		const hover = source(ledger());
 		const { dom } = hover(view('Expenses:Food'), 0)!.create() as { dom: FakeEl };
 		expect(dom.childNodes).toHaveLength(1);
@@ -136,7 +152,7 @@ describe('accountHoverTooltip', () => {
 
 describe('renderAccountHover', () => {
 	it('renders only the name when there are no extra lines', () => {
-		installDocument();
+		installDom();
 		const dom = renderAccountHover({ name: 'Assets:Cash', lines: [] }) as unknown as FakeEl;
 		expect(dom.className).toBe(ACCOUNT_HOVER_CLASS);
 		expect(dom.childNodes).toHaveLength(1);

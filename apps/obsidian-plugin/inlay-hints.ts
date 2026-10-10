@@ -99,10 +99,7 @@ class BalanceHintWidget extends WidgetType {
 	}
 
 	toDOM(): HTMLElement {
-		const span = document.createElement('span');
-		span.className = BALANCE_HINT_CLASS;
-		span.textContent = this.label;
-		return span;
+		return createSpan({ cls: BALANCE_HINT_CLASS, text: this.label });
 	}
 
 	updateDOM(dom: HTMLElement): boolean {
@@ -130,10 +127,7 @@ class PostingHintWidget extends WidgetType {
 	}
 
 	toDOM(): HTMLElement {
-		const span = document.createElement('span');
-		span.className = this.className;
-		span.textContent = this.label;
-		return span;
+		return createSpan({ cls: this.className, text: this.label });
 	}
 
 	updateDOM(dom: HTMLElement): boolean {

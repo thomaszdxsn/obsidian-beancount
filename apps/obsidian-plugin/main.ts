@@ -76,7 +76,7 @@ interface CmModeRegistry {
 
 // Obsidian injects `CodeMirror` onto the global at startup; it is not in the
 // typings, so narrow the host object once here and treat the rest as checked.
-const host = globalThis as { CodeMirror?: CmModeRegistry };
+const host = window as unknown as { CodeMirror?: CmModeRegistry };
 
 const MODE_NAMES = ['beancount', 'bean'];
 
@@ -187,7 +187,7 @@ function matchesTempFile(reported: string, absPath: string): boolean {
 
 /** A vault file, not a folder: folders have no `extension` to stamp an mtime on. */
 function isVaultFile(file: TAbstractFile | null): file is TFile {
-	return !!file && typeof (file as TFile).extension === 'string';
+	return !!file && 'extension' in file && typeof file.extension === 'string';
 }
 
 /**
@@ -294,9 +294,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly pairings = new PairingIndex();
 	private readonly openFiles = new OpenFileIndex();
 	/** Pending on-save alignment per file path. */
-	private readonly alignTimers = new Map<string, NodeJS.Timeout>();
+	private readonly alignTimers = new Map<string, number>();
 	/** Pending on-save validation per run target. */
-	private readonly validateTimers = new Map<string, NodeJS.Timeout>();
+	private readonly validateTimers = new Map<string, number>();
 	/**
 	 * In-flight `validateFile` calls per target. A count, not a flag: an older
 	 * run's `finally` must not clear a newer run still checking the same target.
@@ -498,9 +498,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		this.register(() => {
 			this.validateLive = false;
 			this.validateSeq.clear();
-			for (const timer of this.alignTimers.values()) clearTimeout(timer);
+			for (const timer of this.alignTimers.values()) window.clearTimeout(timer);
 			this.alignTimers.clear();
-			for (const timer of this.validateTimers.values()) clearTimeout(timer);
+			for (const timer of this.validateTimers.values()) window.clearTimeout(timer);
 			this.validateTimers.clear();
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
@@ -814,7 +814,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		this.lastValidatedMtime.delete(path);
 		const pending = this.validateTimers.get(path);
 		if (pending !== undefined) {
-			clearTimeout(pending);
+			window.clearTimeout(pending);
 			this.validateTimers.delete(path);
 		}
 		const seq = this.validateSeq.get(path);
@@ -823,10 +823,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 
 
 	private scheduleAlign(file: TFile): void {
-		clearTimeout(this.alignTimers.get(file.path));
+		window.clearTimeout(this.alignTimers.get(file.path));
 		this.alignTimers.set(
 			file.path,
-			setTimeout(() => {
+			window.setTimeout(() => {
 				this.alignTimers.delete(file.path);
 				// The setting may have been toggled off while waiting; a file
 				// that vanished (or a write that failed) is not worth a retry.
@@ -841,10 +841,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// ledger file are one run. Markdown notes keep their own window —
 		// they check a temp file, not the entry ledger itself.
 		const target = file.extension === 'md' ? file.path : this.settings.entryLedger.trim() || file.path;
-		clearTimeout(this.validateTimers.get(target));
+		window.clearTimeout(this.validateTimers.get(target));
 		this.validateTimers.set(
 			target,
-			setTimeout(() => {
+			window.setTimeout(() => {
 				this.validateTimers.delete(target);
 				this.validateFile(file).catch(() => undefined);
 			}, VALIDATE_DEBOUNCE_MS)

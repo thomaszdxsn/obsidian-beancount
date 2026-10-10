@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { App, PaneType } from 'obsidian';
-import { notices } from './mocks/obsidian';
+import { Platform, notices } from './mocks/obsidian';
 import {
 	globCountNotice,
 	INCLUDE_LINK_CLASS,
@@ -484,15 +484,13 @@ describe('includeLinkMouseDown', () => {
 		return { handled, opened, prevented: event.defaultPrevented };
 	}
 
-	/** `null` drops navigator; a string stubs `platform`; `undefined` leaves it unset. */
-	function withNavigator<T>(platform: string | null | undefined, run: () => T): T {
-		const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-		const value = platform === null ? undefined : ({ platform } as Navigator);
-		Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
+	function onMac<T>(isMacOS: boolean, run: () => T): T {
+		const previous = Platform.isMacOS;
+		Platform.isMacOS = isMacOS;
 		try {
 			return run();
 		} finally {
-			if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
+			Platform.isMacOS = previous;
 		}
 	}
 
@@ -554,7 +552,7 @@ describe('includeLinkMouseDown', () => {
 
 	it('chooses the pane from the platform Mod key, Alt, and Alt+Shift', () => {
 		const line = 'include "a.bean"';
-		withNavigator('MacIntel', () => {
+		onMac(true, () => {
 			const tab = click(line, bean, 8, { meta: true });
 			expect(tab.opened).toEqual(['tab:ledger/a.bean']);
 			const split = click(line, bean, 8, { meta: true, alt: true });
@@ -567,24 +565,13 @@ describe('includeLinkMouseDown', () => {
 			const altOnly = click(line, bean, 8, { alt: true, shift: true });
 			expect(altOnly.handled).toBe(false);
 		});
-		withNavigator('Win32', () => {
+		onMac(false, () => {
 			const tab = click(line, bean, 8, { ctrl: true });
 			expect(tab.opened).toEqual(['tab:ledger/a.bean']);
 			const meta = click(line, bean, 8, { meta: true });
 			expect(meta.handled).toBe(false);
 			expect(meta.opened).toEqual([]);
-		});
-		withNavigator('iPad', () => {
-			expect(click(line, bean, 8, { meta: true }).opened).toEqual(['tab:ledger/a.bean']);
-			expect(click(line, bean, 8, { ctrl: true }).handled).toBe(false);
-		});
-		withNavigator(null, () => {
-			expect(click(line, bean, 8, { ctrl: true }).opened).toEqual(['tab:ledger/a.bean']);
-			expect(click(line, bean, 8, { meta: true }).opened).toEqual(['tab:ledger/a.bean']);
 			expect(click(line, bean, 8, {}).handled).toBe(false);
-		});
-		withNavigator(undefined, () => {
-			expect(click(line, bean, 8, { ctrl: true }).opened).toEqual(['tab:ledger/a.bean']);
 		});
 	});
 

@@ -154,6 +154,9 @@ export class Modal {}
 export class MarkdownView {}
 export class Editor {}
 
+/** Host OS flags; tests flip `isMacOS` to pick the Mod key. */
+export const Platform = { isMacOS: false };
+
 /**
  * Obsidian's per-editor file field. Inlay hints import it; they only read it
  * once a view exists, which these tests never build.
@@ -218,7 +221,7 @@ export interface FakeDropdown {
 	value: string;
 	options: Array<{ value: string; label: string }>;
 	onChangeHandler: ((value: string) => unknown) | null;
-	addOption(value: string, label: string): FakeDropdown;
+	addOptions(options: Record<string, string>): FakeDropdown;
 	setValue(value: string): FakeDropdown;
 	onChange(callback: (value: string) => unknown): FakeDropdown;
 }
@@ -331,8 +334,8 @@ export class Setting {
 			value: '',
 			options: [],
 			onChangeHandler: null,
-			addOption(value: string, label: string): FakeDropdown {
-				this.options.push({ value, label });
+			addOptions(options: Record<string, string>): FakeDropdown {
+				for (const [value, label] of Object.entries(options)) this.options.push({ value, label });
 				return this;
 			},
 			setValue(value: string): FakeDropdown {

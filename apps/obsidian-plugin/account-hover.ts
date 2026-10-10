@@ -18,20 +18,11 @@ export const ACCOUNT_HOVER_NAME_CLASS = 'beancount-account-hover-name';
 
 /** The inner DOM of the account hover card. */
 export function renderAccountHover(card: { name: string; lines: readonly string[] }): HTMLElement {
-	const dom = document.createElement('div');
-	dom.className = ACCOUNT_HOVER_CLASS;
-	const title = document.createElement('div');
-	title.className = ACCOUNT_HOVER_NAME_CLASS;
-	title.textContent = card.name;
-	dom.appendChild(title);
+	const dom = createDiv({ cls: ACCOUNT_HOVER_CLASS });
+	dom.createDiv({ cls: ACCOUNT_HOVER_NAME_CLASS, text: card.name });
 	if (card.lines.length === 0) return dom;
-	const list = document.createElement('ul');
-	for (const line of card.lines) {
-		const item = document.createElement('li');
-		item.textContent = line;
-		list.appendChild(item);
-	}
-	dom.appendChild(list);
+	const list = dom.createEl('ul');
+	for (const line of card.lines) list.createEl('li', { text: line });
 	return dom;
 }
 

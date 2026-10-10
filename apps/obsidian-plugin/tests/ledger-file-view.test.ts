@@ -169,11 +169,11 @@ class FakeEl {
 	paddingLeft = '0px';
 	line: FakeEl | null = null;
 
-	setAttribute(name: string, value: string): void {
-		this.attributes[name] = value;
-	}
-
-	appendChild(child: FakeEl): FakeEl {
+	/** Obsidian's `HTMLElement.createDiv`, limited to the info the ruler passes. */
+	createDiv(info: { cls: string; attr: Record<string, string> }): FakeEl {
+		const child = new FakeEl();
+		child.className = info.cls;
+		child.attributes = { ...info.attr };
 		child.parent = this;
 		this.children.push(child);
 		return child;
@@ -243,9 +243,6 @@ function normalLines(count: number): string[] {
 }
 
 function installDom(): void {
-	globalThis.document = {
-		createElement: () => new FakeEl(),
-	} as unknown as Document;
 	globalThis.getComputedStyle = ((elt: FakeEl) => ({
 		paddingLeft: elt.paddingLeft,
 	})) as unknown as typeof getComputedStyle;
@@ -371,7 +368,6 @@ function mount(
 describe('ledger file editor plugins', () => {
 	beforeEach(installDom);
 	afterEach(() => {
-		Reflect.deleteProperty(globalThis, 'document');
 		Reflect.deleteProperty(globalThis, 'getComputedStyle');
 	});
 
