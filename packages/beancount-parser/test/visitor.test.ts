@@ -4,13 +4,13 @@ import {
   Amount,
   Cost,
   Custom,
+  type Directive,
   Document,
   Event,
   IncompleteAmount,
   Include,
   Open,
   Option,
-  Pad,
   Plugin,
   PriceAnnotation,
   Query,
@@ -67,6 +67,16 @@ describe("transaction header", () => {
   test("string escapes are decoded", () => {
     const txn = only<Transaction>('2022-01-01 * "a\\tb\\nc\\\\d\\"e\\ff\\bg\\qh"\n');
     expect(txn.narration).toBe('a\tb\nc\\d"e\ff\bgqh');
+  });
+});
+
+describe("postings", () => {
+  test("keep account, flag and source order", () => {
+    const txn = only<Transaction>('2022-01-01 * "x"\n  Assets:A  -1 USD\n  ! Expenses:B\n');
+    expect(txn.postings.map((p) => [p.account, p.flag])).toEqual([
+      ["Assets:A", undefined],
+      ["Expenses:B", "!"],
+    ]);
   });
 });
 
@@ -137,22 +147,44 @@ describe("metadata values", () => {
   });
 });
 
+describe("directive metadata and location", () => {
+  test.each([
+    ["open", "2022-01-01 open Assets:A"],
+    ["close", "2022-01-01 close Assets:A"],
+    ["commodity", "2022-01-01 commodity USD"],
+    ["price", "2022-01-01 price EUR 1 USD"],
+    ["balance", "2022-01-01 balance Assets:A 1 USD"],
+    ["pad", "2022-01-01 pad Assets:A Equity:B"],
+    ["note", '2022-01-01 note Assets:A "n"'],
+    ["document", '2022-01-01 document Assets:A "a.pdf"'],
+    ["event", '2022-01-01 event "t" "d"'],
+    ["query", '2022-01-01 query "q" "SELECT 1"'],
+    ["custom", '2022-01-01 custom "b" 1'],
+  ])("%s attaches metadata and its location spans the metadata line", (_name, header) => {
+    const directive = only<Directive>(`${header}\n  kk: 1\n`);
+    expect(directive.metadata).toEqual({ kk: 1 });
+    expect(directive.location).toEqual({ start: { line: 1, column: 0 }, end: { line: 2, column: 7 } });
+  });
+});
+
 describe("other directives", () => {
-  test("open with booking method", () => {
-    const open = only<Open>('2022-01-01 open Assets:A USD "STRICT"\n');
-    expect([open.currencies, open.booking]).toEqual([["USD"], "STRICT"]);
-  });
-
-  test("open without currencies", () => {
-    const open = only<Open>("2022-01-01 open Assets:A\n");
-    expect([open.currencies, open.booking]).toEqual([[], undefined]);
-  });
-
-  test("pad", () => {
-    expect(only<Pad>("2022-01-01 pad Assets:A Equity:B\n")).toMatchObject({
-      account: "Assets:A",
-      sourceAccount: "Equity:B",
-    });
+  test.each([
+    [
+      "open with several currencies",
+      "2022-01-01 open Assets:A USD,EUR",
+      { account: "Assets:A", currencies: ["USD", "EUR"], booking: undefined },
+    ],
+    ["open with booking method", '2022-01-01 open Assets:A USD "STRICT"', { currencies: ["USD"], booking: "STRICT" }],
+    ["open without currencies", "2022-01-01 open Assets:A", { currencies: [], booking: undefined }],
+    ["close", "2022-01-01 close Assets:A", { account: "Assets:A" }],
+    ["pad", "2022-01-01 pad Assets:A Equity:B", { account: "Assets:A", sourceAccount: "Equity:B" }],
+    ["note", '2022-01-01 note Assets:A "call"', { account: "Assets:A", comment: "call", tags: [], links: [] }],
+    ["note with tags and links", '2022-01-01 note Assets:A "call" #t ^l', { tags: ["t"], links: ["l"] }],
+    ["price", "2022-01-01 price EUR 1.08 USD", { currency: "EUR", amount: new Amount(1.08, "USD") }],
+    ["commodity", "2022-01-01 commodity USD", { currency: "USD" }],
+    ["balance", "2022-01-01 balance Assets:A 1.5 USD", { account: "Assets:A", amount: new Amount(1.5, "USD"), tolerance: undefined }],
+  ])("%s", (_name, input, fields) => {
+    expect(only<Directive>(`${input}\n`)).toMatchObject(fields);
   });
 
   test("document with tags and links", () => {
@@ -188,6 +220,12 @@ describe("other directives", () => {
   test("pushmeta/popmeta parse but do not change metadata", () => {
     const input = 'pushmeta kk: "v"\n2022-01-01 open Assets:A\npopmeta kk:\n';
     expect(only<Open>(input).metadata).toEqual({});
+  });
+});
+
+describe("Amount", () => {
+  test("renders as number then currency", () => {
+    expect(String(new Amount(-1.5, "USD"))).toBe("-1.5 USD");
   });
 });
 
