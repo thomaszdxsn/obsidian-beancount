@@ -28,8 +28,8 @@ build
 dist
 main.js
 
-# Nested sibling clone (local workspace only)
-beancount-parser/
+# Legacy nested clone of beancount-parser (now packages/beancount-parser)
+/beancount-parser/
 
 
 # Debug

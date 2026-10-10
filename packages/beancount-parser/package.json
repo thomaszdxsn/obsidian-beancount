@@ -1,0 +1,21 @@
+{
+  "name": "@repo/beancount-parser",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "module": "index.ts",
+  "types": "index.ts",
+  "scripts": {
+    "generate": "antlr-ng -Dlanguage=TypeScript --generate-visitor --generate-listener false -o src/parser src/grammar/Beancount.g4",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "antlr4ng": "^3.0.16"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "antlr-ng": "^1.0.10",
+    "bun": "^1.3.14",
+    "typescript": "^5"
+  }
+}
