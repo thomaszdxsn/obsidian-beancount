@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Format ledger** command: normalizes posting and metadata indents, collapses
+  header whitespace (leaving strings and `;` comments intact), strips trailing
+  whitespace, and aligns decimal points. A `.bean` / `.beancount` file is one
+  ledger; any other note formats each ```beancount / ```bean fence. A syntax
+  error names the document line and changes nothing.
+- Transactions fold to their header line in ledger files and fences
+  (including fences indented under list items). Each entry is parsed on its
+  own, so an entry with a syntax error loses only its own fold; an entry
+  over 300 lines gets no fold.
 - **Show account balances**: a sidebar table of per-account unit balances
   (one line per currency), following the entry ledger's `include` chain or
   the active ledger / note fences. Missing amounts are interpolated from
@@ -11,15 +20,18 @@
   start-of-day difference when it exceeds tolerance. A parse or interpolation
   error replaces the numbers.
 
+### Changed
+
+- The bundle targets ES2022 with esbuild 0.25, so the bundled Beancount
+  parser runs about 6x faster than with ES2018 output.
+- `include "**/…"` globs match zero or more directories, as beancount's
+  recursive glob does (Mod-click and the balance view).
+
 ### Fixed
 
-- Balance weights include both parts of `{per # total}`, interpolated amounts
-  follow beancount's inferred tolerance, and a pad is skipped when the gap is
-  within the balance tolerance. A child `balance` consumes its parent's pad.
-  Literal amounts keep their written scale, including values past 2^53.
-  `include "**"` matches zero or more directories. The balance view refreshes
-  when an involved file is created, deleted, or renamed, and when a new file
-  can satisfy an include glob or a missing include.
+- Decimal alignment skips a line that continues an open string, so a
+  posting-shaped line inside a string is left alone — on Align decimal
+  points and save-time alignment too.
 
 ## 0.1.1
 
