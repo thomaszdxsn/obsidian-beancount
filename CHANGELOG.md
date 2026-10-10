@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Show account balances**: a sidebar table of per-account unit balances
+  (one line per currency), following the entry ledger's `include` chain or
+  the active ledger / note fences. Missing amounts are interpolated from
+  posting weights; `pad` / `balance` insert the start-of-day difference.
+  A parse or interpolation error replaces the numbers.
+
 ## 0.1.1
 
 Clears the community directory's automated review findings.

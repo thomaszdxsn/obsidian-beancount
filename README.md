@@ -2,8 +2,8 @@
 
 Edit [Beancount](https://beancount.github.io/) ledgers in Obsidian: syntax
 highlighting, account/payee completion, directive snippets, posting auto-indent,
-decimal-point alignment, date insert, outline, and `bean-check` validation on
-save.
+decimal-point alignment, date insert, outline, account balances, and
+`bean-check` validation on save.
 
 Desktop only — validation shells out to the `bean-check` executable.
 
@@ -83,7 +83,7 @@ A missing or rejected `bean-check` shows:
 | Align decimal points | Current transaction block, or the selection when there is one. No default hotkey; bind one under Settings → Hotkeys. |
 | Insert today's date | `YYYY-MM-DD` at the cursor. No default hotkey; bind one under Settings → Hotkeys. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
-| Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
+| Show account balances | Sidebar table of per-account unit balances, one line per currency. Uses the entry ledger when set, otherwise the active ledger or the active note's fences, and follows `include`. |
 | Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
 | Stop Fava | Kills the Fava process started by this plugin. |
 
@@ -196,6 +196,20 @@ A missing or rejected `bean-check` shows:
   DocumentSymbolProvider does (including `_` fillers for skipped levels).
   Dated transactions, `open`, `close` and `balance` directives hang under
   consecutive date groups; clicking a row jumps the editor to that line.
+- **Account balances**: **Show account balances** opens a sidebar table of
+  each account's units, one line per currency, sorted by account. Zero
+  balances are hidden. The configured entry ledger wins; otherwise the
+  active `.bean` / `.beancount` file, or the `beancount` / `bean` fences of
+  the active note. `include` is followed (including globs). A posting that
+  omits its amount is filled from the other postings' weights (cost before
+  price; `{{ }}` and `@@` use the total). `pad` plus a later `balance`
+  inserts the start-of-day difference, and only the first balance of each
+  currency consumes that pad. Child accounts count toward the parent's pad.
+  If a file fails to parse, or a transaction cannot be interpolated, the
+  view shows the error instead of numbers. Sums use exact decimals, not
+  floating-point addition. The original `10.00` text is not in the parse
+  model, so display precision is the most fractional digits that survive
+  a round-trip of each number.
 
 ## Install
 

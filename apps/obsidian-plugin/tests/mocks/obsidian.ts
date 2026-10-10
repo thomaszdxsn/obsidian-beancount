@@ -163,30 +163,50 @@ export const Platform = { isMacOS: false };
  */
 export const editorInfoField = {};
 
+interface FakeEl {
+	className: string;
+	text: string;
+	clicks: Array<() => void>;
+	style: { paddingLeft: string };
+	children: FakeEl[];
+	empty(): void;
+	createDiv(opts?: { cls?: string; text?: string }): FakeEl;
+	addEventListener(type: 'click', listener: () => void): void;
+}
+
+function fakeEl(opts?: { cls?: string; text?: string }): FakeEl {
+	const el: FakeEl = {
+		className: opts?.cls ?? '',
+		text: opts?.text ?? '',
+		clicks: [],
+		style: { paddingLeft: '' },
+		children: [],
+		empty() {
+			this.children = [];
+		},
+		createDiv(nested) {
+			const child = fakeEl(nested);
+			this.children.push(child);
+			return child;
+		},
+		addEventListener(_type, listener) {
+			this.clicks.push(listener);
+		},
+	};
+	return el;
+}
+
 /** Sidebar content host: `empty`/`createDiv` match the Obsidian HTMLElement helpers. */
 export class ItemView {
 	app: { workspace: unknown };
 	leaf: unknown;
 	contentEl = {
-		children: [] as Array<{
-			className: string;
-			text: string;
-			clicks: Array<() => void>;
-			style: { paddingLeft: string };
-		}>,
+		children: [] as FakeEl[],
 		empty() {
 			this.children = [];
 		},
 		createDiv(opts?: { cls?: string; text?: string }) {
-			const child = {
-				className: opts?.cls ?? '',
-				text: opts?.text ?? '',
-				clicks: [] as Array<() => void>,
-				style: { paddingLeft: '' },
-				addEventListener(_type: 'click', listener: () => void) {
-					this.clicks.push(listener);
-				},
-			};
+			const child = fakeEl(opts);
 			this.children.push(child);
 			return child;
 		},
