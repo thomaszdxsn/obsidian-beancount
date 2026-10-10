@@ -410,7 +410,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       const kv = line.key_value();
       const value = kv.key_value_value();
       const key = kv.KEY().getText().slice(0, -1);
-      if (Object.hasOwn(meta, key)) this.error(kv.KEY().symbol, `duplicate metadata key '${key}'`);
+      // Not `Object.hasOwn`: the Obsidian plugin type-checks this source against ES2021.
+      if (Object.prototype.hasOwnProperty.call(meta, key)) this.error(kv.KEY().symbol, `duplicate metadata key '${key}'`);
       meta[key] = value ? this.metadataValue(value) : null;
     }
     return meta;

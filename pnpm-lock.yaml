@@ -35,6 +35,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.5
         version: 1.2.5
+      '@repo/beancount-parser':
+        specifier: workspace:*
+        version: link:../../packages/beancount-parser
       '@types/node':
         specifier: ^16.11.6
         version: 16.18.73
@@ -880,7 +883,6 @@ packages:
 
   bun@1.4.3:
     resolution: {integrity: sha512-EvQQ2dUJlixjKgJjeXZvdsHUWIKnVfYufrQNDHa++0YM4XksQ4GtGofEdRnQSiyNp/yUWiX6SlqS8zugZCo+2A==}
-    cpu: [arm64, x64]
     os: [darwin, linux, android, freebsd, win32]
     hasBin: true
 
