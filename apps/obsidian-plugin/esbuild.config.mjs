@@ -33,7 +33,10 @@ const context = await esbuild.context({
 		"@lezer/lr",
 		...builtins],
 	format: "cjs",
-	target: "es2018",
+	// Electron's Chromium has native ES2022 class features (Chrome 94+). Below
+	// es2022, antlr4ng's private fields lower to WeakMap helpers and the
+	// beancount parser runs ~6x slower. esbuild 0.17 crashed on es2022 here.
+	target: "es2022",
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
