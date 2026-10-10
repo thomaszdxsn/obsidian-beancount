@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Transactions fold to their header line in ledger files and fences. Each
+  entry is parsed on its own, so an entry with a syntax error loses only its
+  own fold.
+
 ## 0.1.1
 
 Clears the community directory's automated review findings.
