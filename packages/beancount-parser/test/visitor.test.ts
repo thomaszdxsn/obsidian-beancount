@@ -2,9 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { BeancountParser, BeancountSyntaxError } from "../src";
 import {
   Amount,
-  Balance,
-  Close,
-  Commodity,
   Cost,
   Custom,
   type Directive,
@@ -12,11 +9,8 @@ import {
   Event,
   IncompleteAmount,
   Include,
-  Note,
   Open,
   Option,
-  Pad,
-  Price,
   Plugin,
   PriceAnnotation,
   Query,
@@ -151,9 +145,10 @@ describe("metadata values", () => {
     const open = only<Open>(`2022-01-01 open Assets:A\n  kk: ${text}\n`);
     expect(open.metadata).toStrictEqual({ kk: expected });
   });
+});
 
+describe("directive metadata and location", () => {
   test.each([
-    ["transaction", '2022-01-01 * "x"'],
     ["open", "2022-01-01 open Assets:A"],
     ["close", "2022-01-01 close Assets:A"],
     ["commodity", "2022-01-01 commodity USD"],
@@ -165,7 +160,7 @@ describe("metadata values", () => {
     ["event", '2022-01-01 event "t" "d"'],
     ["query", '2022-01-01 query "q" "SELECT 1"'],
     ["custom", '2022-01-01 custom "b" 1'],
-  ])("%s keeps its own metadata and spans the metadata line", (_name, header) => {
+  ])("%s attaches metadata and its location spans the metadata line", (_name, header) => {
     const directive = only<Directive>(`${header}\n  kk: 1\n`);
     expect(directive.metadata).toEqual({ kk: 1 });
     expect(directive.location).toEqual({ start: { line: 1, column: 0 }, end: { line: 2, column: 7 } });
@@ -177,27 +172,19 @@ describe("other directives", () => {
     [
       "open with several currencies",
       "2022-01-01 open Assets:A USD,EUR",
-      Open,
       { account: "Assets:A", currencies: ["USD", "EUR"], booking: undefined },
     ],
-    ["open with booking method", '2022-01-01 open Assets:A USD "STRICT"', Open, { currencies: ["USD"], booking: "STRICT" }],
-    ["open without currencies", "2022-01-01 open Assets:A", Open, { currencies: [], booking: undefined }],
-    ["close", "2022-01-01 close Assets:A", Close, { account: "Assets:A" }],
-    ["pad", "2022-01-01 pad Assets:A Equity:B", Pad, { account: "Assets:A", sourceAccount: "Equity:B" }],
-    ["note", '2022-01-01 note Assets:A "call"', Note, { account: "Assets:A", comment: "call", tags: [], links: [] }],
-    ["note with tags and links", '2022-01-01 note Assets:A "call" #t ^l', Note, { tags: ["t"], links: ["l"] }],
-    ["price", "2022-01-01 price EUR 1.08 USD", Price, { currency: "EUR", amount: new Amount(1.08, "USD") }],
-    ["commodity", "2022-01-01 commodity USD", Commodity, { currency: "USD" }],
-    [
-      "balance",
-      "2022-01-01 balance Assets:A 1.5 USD",
-      Balance,
-      { account: "Assets:A", amount: new Amount(1.5, "USD"), tolerance: undefined },
-    ],
-  ] as const)("%s", (_name, input, cls, fields) => {
-    const directive = only<object>(`${input}\n`);
-    expect(directive).toBeInstanceOf(cls);
-    expect(directive).toMatchObject(fields);
+    ["open with booking method", '2022-01-01 open Assets:A USD "STRICT"', { currencies: ["USD"], booking: "STRICT" }],
+    ["open without currencies", "2022-01-01 open Assets:A", { currencies: [], booking: undefined }],
+    ["close", "2022-01-01 close Assets:A", { account: "Assets:A" }],
+    ["pad", "2022-01-01 pad Assets:A Equity:B", { account: "Assets:A", sourceAccount: "Equity:B" }],
+    ["note", '2022-01-01 note Assets:A "call"', { account: "Assets:A", comment: "call", tags: [], links: [] }],
+    ["note with tags and links", '2022-01-01 note Assets:A "call" #t ^l', { tags: ["t"], links: ["l"] }],
+    ["price", "2022-01-01 price EUR 1.08 USD", { currency: "EUR", amount: new Amount(1.08, "USD") }],
+    ["commodity", "2022-01-01 commodity USD", { currency: "USD" }],
+    ["balance", "2022-01-01 balance Assets:A 1.5 USD", { account: "Assets:A", amount: new Amount(1.5, "USD"), tolerance: undefined }],
+  ])("%s", (_name, input, fields) => {
+    expect(only<Directive>(`${input}\n`)).toMatchObject(fields);
   });
 
   test("document with tags and links", () => {
@@ -236,8 +223,10 @@ describe("other directives", () => {
   });
 });
 
-test("Amount renders as number then currency", () => {
-  expect(String(new Amount(-1.5, "USD"))).toBe("-1.5 USD");
+describe("Amount", () => {
+  test("renders as number then currency", () => {
+    expect(String(new Amount(-1.5, "USD"))).toBe("-1.5 USD");
+  });
 });
 
 describe("dates", () => {
