@@ -1,0 +1,20 @@
+{
+  "name": "beancount-parser",
+  "module": "index.ts",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "antlr-ng": "^1.0.10"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "generate": "antlr-ng -Dlanguage=TypeScript --generate-visitor --generate-listener false -o src/parser src/grammar/Beancount.g4",
+    "build": "bun run generate && tsc",
+    "test": "bun test"
+  },
+  "type": "module",
+  "dependencies": {
+    "antlr4ng": "^3.0.16"
+  }
+}
