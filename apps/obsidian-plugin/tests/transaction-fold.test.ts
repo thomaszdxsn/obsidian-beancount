@@ -1,7 +1,8 @@
 import type { EditorState } from '@codemirror/state';
-import { describe, expect, it } from 'vitest';
+import { BeancountParser } from '@repo/beancount-parser';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { transactionFoldAt, transactionFoldInState } from '../transaction-fold';
-import type { FoldDoc } from '../transaction-fold';
+import type { FoldBody, FoldDoc } from '../transaction-fold';
 
 interface FakeLine {
 	number: number;
@@ -31,8 +32,8 @@ function stateFor(text: string, file: { path: string; extension: string } | null
 }
 
 /** The text a fold hides, to assert ranges without hand-counted offsets. */
-function folded(text: string, line: number, lastLine?: number): string | null {
-	const range = transactionFoldAt(textDoc(text), line, lastLine);
+function folded(text: string, line: number, body?: FoldBody): string | null {
+	const range = transactionFoldAt(textDoc(text), line, body);
 	return range ? text.slice(range.from, range.to) : null;
 }
 
@@ -98,10 +99,30 @@ describe('transactionFoldAt', () => {
 		expect(folded(doc, 2)).toBe('\n  Expenses:Travel  100 USD\n  Assets:Cash');
 	});
 
-	it('stops at `lastLine` so a fence end is never folded into the entry', () => {
+	it('stops at the end of `body` so a fence end is never folded into the entry', () => {
 		const doc = '2026-01-01 * "x"\n  Assets:Cash  1 USD\n  Income:Job\n  Expenses:Food 2 USD';
-		// Within the bound the entry is cut after line 3 and still parses.
-		expect(folded(doc, 1, 3)).toBe('\n  Assets:Cash  1 USD\n  Income:Job');
+		const body = { first: 1, lines: doc.split('\n').slice(0, 3) };
+		expect(folded(doc, 1, body)).toBe('\n  Assets:Cash  1 USD\n  Income:Job');
+	});
+
+	it('keeps a multi-line string that continues at column 0 or across a blank line inside the entry', () => {
+		const doc = [
+			'2026-01-05 * "x"', // 1
+			'  memo: "first', // 2
+			'', // 3
+			'last ; not a comment"', // 4
+			'  Assets:Cash  1 USD', // 5
+			'  Income:Job', // 6
+			'2026-01-06 * "next"', // 7
+		].join('\n');
+		expect(folded(doc, 1)).toBe('\n  memo: "first\n\nlast ; not a comment"\n  Assets:Cash  1 USD\n  Income:Job');
+		// Escaped quotes and quotes inside comments do not toggle the string.
+		const escaped = '2026-01-05 * "say \\"hi\\"" ; a " in a comment\n  Assets:Cash  1 USD\n  Income:Job';
+		expect(folded(escaped, 1)).toBe('\n  Assets:Cash  1 USD\n  Income:Job');
+	});
+
+	it('offers no fold while a string is left open to the end', () => {
+		expect(folded('2026-01-05 * "x"\n  memo: "open\n  Assets:Cash  1 USD\n', 1)).toBeNull();
 	});
 });
 
@@ -114,7 +135,7 @@ describe('transactionFoldInState', () => {
 		'2026-01-02 * "Store"', // 5
 		'  Expenses:Food  12.00 USD', // 6
 		'  Assets:Cash', // 7
-		'```', // 8
+		'   ```', // 8 — an indented close still ends the fence
 		'  indented prose after the fence', // 9
 	].join('\n');
 	const lineStart = (text: string, line: number) => textDoc(text).line(line).from;
@@ -129,6 +150,19 @@ describe('transactionFoldInState', () => {
 		expect(transactionFoldInState(state, lineStart(NOTE, 2))).toBeNull();
 		const range = transactionFoldInState(state, lineStart(NOTE, 5));
 		expect(range && NOTE.slice(range.from, range.to)).toBe('\n  Expenses:Food  12.00 USD\n  Assets:Cash');
+	});
+
+	it('folds a fence indented under a list item the way bean-check reads it', () => {
+		const note = [
+			'- groceries', // 1
+			'  ```beancount', // 2
+			'  2026-01-05 * "x"', // 3
+			'    Assets:Cash  1 USD', // 4
+			'    Income:Job', // 5
+			'  ```', // 6
+		].join('\n');
+		const range = transactionFoldInState(stateFor(note, { path: 'n.md', extension: 'md' }), lineStart(note, 3));
+		expect(range && note.slice(range.from, range.to)).toBe('\n    Assets:Cash  1 USD\n    Income:Job');
 	});
 
 	it('folds nothing in other files or an editor without a file', () => {
@@ -150,11 +184,21 @@ describe('transactionFoldAt across edits', () => {
 		expect(folded(typing, 1)).toBeNull();
 	});
 
-	it('keeps answering correctly after more distinct entries than the cache holds', () => {
-		const entry = (i: number) => `2026-03-01 * "n${i}"\n  Assets:Cash  ${i} USD\n  Income:Job`;
-		const first = folded(entry(0), 1);
-		for (let i = 1; i <= 5000; i += 1) folded(entry(i), 1);
-		expect(folded(entry(0), 1)).toBe(first);
-		expect(folded(entry(5000), 1)).toBe('\n  Assets:Cash  5000 USD\n  Income:Job');
+	it('evicts the least recently used entry once the cache is full', () => {
+		const parse = vi.spyOn(BeancountParser, 'parse');
+		const entry = (i: number) => `2026-03-01 * "lru${i}"\n  Assets:Cash  ${i} USD\n  Income:Job`;
+		for (let i = 0; i < 5000; i += 1) folded(entry(i), 1);
+		// Touch entry 0 so entry 1 becomes the oldest, then overflow by one.
+		folded(entry(0), 1);
+		folded(entry(5000), 1);
+		parse.mockClear();
+		expect(folded(entry(0), 1)).toBe('\n  Assets:Cash  0 USD\n  Income:Job');
+		expect(parse).not.toHaveBeenCalled();
+		expect(folded(entry(1), 1)).toBe('\n  Assets:Cash  1 USD\n  Income:Job');
+		expect(parse).toHaveBeenCalledTimes(1);
 	});
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
 });
