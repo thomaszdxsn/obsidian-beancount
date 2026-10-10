@@ -49,7 +49,7 @@ export function accountTokenAt(
 	offset: number
 ): { name: string; from: number; to: number } | null {
 	for (const match of text.matchAll(ACCOUNT_RE)) {
-		const from = match.index!;
+		const from = match.index ?? 0;
 		const to = from + match[0].length;
 		if (offset >= from && offset <= to) return { name: match[0], from, to };
 	}

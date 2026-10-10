@@ -111,11 +111,13 @@ function parseFlagLevel(value: string): FlagWarningLevel {
 }
 
 export class BeancountSettingTab extends PluginSettingTab {
-	constructor(
-		app: App,
-		private readonly host: Plugin & SettingsHost
-	) {
-		super(app, host);
+	private readonly host: SettingsHost;
+
+	constructor(app: App, plugin: Plugin & SettingsHost) {
+		super(app, plugin);
+		// Read settings through the host contract, not `Plugin.settings`
+		// (an Obsidian 1.13 declaration this plugin does not depend on).
+		this.host = plugin;
 	}
 
 	display(): void {
@@ -125,7 +127,7 @@ export class BeancountSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Alignment').setHeading();
 		new Setting(containerEl)
 			.setName('Align amounts on save')
-			.setDesc('Re-align the decimal points of posting amounts whenever a markdown or beancount file is saved.')
+			.setDesc('Re-align the decimal points of posting amounts whenever a Markdown or Beancount file is saved.')
 			.addToggle((toggle) =>
 				toggle.setValue(this.host.settings.alignOnSave).onChange(async (value) => {
 					this.host.settings.alignOnSave = value;

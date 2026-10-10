@@ -277,13 +277,27 @@ export function alignText(text: string): string {
  */
 const WIDE_CHAR_RE =
 	/[\u{1100}-\u{115f}\u{2e80}-\u{303e}\u{3041}-\u{33ff}\u{3400}-\u{4dbf}\u{4e00}-\u{9fff}\u{a000}-\u{a4cf}\u{ac00}-\u{d7a3}\u{f900}-\u{faff}\u{fe10}-\u{fe19}\u{fe30}-\u{fe6f}\u{ff00}-\u{ff60}\u{ffe0}-\u{ffe6}\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]/u;
-const ZERO_WIDTH_RE =
-	/[\u{0300}-\u{036f}\u{1ab0}-\u{1aff}\u{1dc0}-\u{1dff}\u{200b}-\u{200f}\u{20d0}-\u{20ff}\u{fe00}-\u{fe0f}\u{fe20}-\u{fe2f}]/u;
+// Code point ranges, not a regex character class: a class of combining
+// marks is ambiguous to read (and lint) because the marks join neighbours.
+const ZERO_WIDTH_RANGES: ReadonlyArray<readonly [number, number]> = [
+	[0x0300, 0x036f],
+	[0x1ab0, 0x1aff],
+	[0x1dc0, 0x1dff],
+	[0x200b, 0x200f],
+	[0x20d0, 0x20ff],
+	[0xfe00, 0xfe0f],
+	[0xfe20, 0xfe2f],
+];
+
+function isZeroWidth(char: string): boolean {
+	const code = char.codePointAt(0) ?? 0;
+	return ZERO_WIDTH_RANGES.some(([from, to]) => code >= from && code <= to);
+}
 
 export function displayWidth(text: string): number {
 	let width = 0;
 	for (const char of text) {
-		if (ZERO_WIDTH_RE.test(char)) continue;
+		if (isZeroWidth(char)) continue;
 		width += WIDE_CHAR_RE.test(char) ? 2 : 1;
 	}
 	return width;

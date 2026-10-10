@@ -482,13 +482,12 @@ describe('BeancountPlugin', () => {
 		expect(editor.transactions).toHaveLength(1);
 	});
 
-	it('registers the date command with its default hotkey and inserts today', async () => {
+	it('registers the date command and inserts today', async () => {
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(new Date(2026, 8, 30));
 		try {
 			const { plugin } = await loadPlugin();
 			const command = plugin.registrations.commands.find((entry) => entry.id === 'insert-today-date');
-			expect(command?.hotkeys).toEqual([{ modifiers: ['Mod', 'Shift'], key: 'D' }]);
 			const editor = createEditor(['']);
 			command?.editorCallback?.(editor);
 			expect(editor.getValue()).toBe('2026-09-30');

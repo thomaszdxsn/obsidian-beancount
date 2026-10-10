@@ -130,7 +130,7 @@ export function resolveIncludePath(
 		vaultPath = collapsed.join('/');
 	}
 
-	if (/[*?\[]/.test(vaultPath)) {
+	if (/[*?[]/.test(vaultPath)) {
 		const matches = vaultFiles.filter((file) => globMatch(vaultPath, file));
 		matches.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 		return { kind: 'glob', matches };
