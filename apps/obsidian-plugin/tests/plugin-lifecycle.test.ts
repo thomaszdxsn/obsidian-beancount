@@ -17,6 +17,7 @@ import { setLineDiagnostics } from '../diagnostics';
 import BeancountPlugin from '../main';
 import { VIEW_TYPE_OUTLINE } from '../outline-view';
 import { BeancountProblemsView, VIEW_TYPE_PROBLEMS } from '../problems-view';
+import { BeancountBalancesView, VIEW_TYPE_BALANCES } from '../report-view';
 import { WARNING_LINE_CLASS } from '../flag-warnings';
 import type { MockViewPlugin } from './mocks/codemirror';
 import { notices } from './mocks/obsidian';
@@ -241,11 +242,18 @@ describe('sidebar commands', () => {
 		await command(plugin, 'show-outline')();
 		await command(plugin, 'show-problems')();
 
+		const balances = plugin.registrations.views.find((entry) => entry.type === VIEW_TYPE_BALANCES);
+		const balancesView = balances?.creator({ app: plugin.app });
+		if (!(balancesView instanceof BeancountBalancesView)) throw new Error('missing balances view');
+		expect(balancesView.getDisplayText()).toBe('Account balances');
+		await command(plugin, 'show-balances')();
+
 		expect(viewStates).toEqual([
 			{ type: VIEW_TYPE_OUTLINE, active: true },
 			{ type: VIEW_TYPE_PROBLEMS, active: true },
+			{ type: VIEW_TYPE_BALANCES, active: true },
 		]);
-		expect(revealed).toHaveLength(2);
+		expect(revealed).toHaveLength(3);
 	});
 });
 

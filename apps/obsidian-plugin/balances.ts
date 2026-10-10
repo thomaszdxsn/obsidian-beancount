@@ -77,7 +77,6 @@ const NUMBER_ONLY = 'Cannot interpolate a posting that specifies only a number';
 const HAS_COST = 'Cannot interpolate a posting that has a cost or a price';
 const COST_INTERPOLATION = 'Cannot interpolate a cost or a price on this transaction';
 const OTHER_CURRENCIES = 'Residual has currencies other than the posting currency';
-const INVALID_NUMBER = 'Amount is not a finite number';
 
 interface Sourced {
 	file: string;
@@ -282,11 +281,7 @@ function compute(sources: readonly Sourced[]): { rows: BalanceRow[]; errors: Bal
 				seq: source.seq,
 			});
 		} else if (directive instanceof Balance) {
-			const amount = Decimal.fromNumber(directive.amount.number);
-			if (!amount) {
-				errors.push({ file: source.file, line: source.line, message: INVALID_NUMBER });
-				continue;
-			}
+			const amount = parsedDecimal(directive.amount.number);
 			noteDecimal(scales, directive.amount.currency, amount);
 			events.push({
 				kind: 'balance',
@@ -321,7 +316,6 @@ function interpolate(txn: Transaction): UnitLeg[] | string {
 	}
 	dropZeros(residual);
 	const known = unitLegs(txn.postings.filter((other) => other !== posting));
-	if (typeof known === 'string') return known;
 	if (posting.amount === undefined) {
 		for (const currency of sortedKeys(residual)) {
 			const units = residual.get(currency) as Decimal;
@@ -329,52 +323,46 @@ function interpolate(txn: Transaction): UnitLeg[] | string {
 		}
 		return known;
 	}
-	if (posting.amount.number !== null && posting.amount.currency === null) return NUMBER_ONLY;
-	if (posting.amount.number === null && posting.amount.currency !== null) {
-		const currency = posting.amount.currency;
-		for (const other of residual.keys()) if (other !== currency) return OTHER_CURRENCIES;
-		const have = residual.get(currency);
-		if (have && !have.isZero()) known.push({ account: posting.account, currency, units: have.neg() });
-		return known;
-	}
-	return NUMBER_ONLY;
+	// IncompleteAmount is exactly one of number or currency; both set is an Amount.
+	if (posting.amount.currency === null || posting.amount.number !== null) return NUMBER_ONLY;
+	const currency = posting.amount.currency;
+	for (const other of residual.keys()) if (other !== currency) return OTHER_CURRENCIES;
+	const have = residual.get(currency);
+	if (have) known.push({ account: posting.account, currency, units: have.neg() });
+	return known;
 }
 
-function unitLegs(postings: readonly Posting[]): UnitLeg[] | string {
+function unitLegs(postings: readonly Posting[]): UnitLeg[] {
 	const legs: UnitLeg[] = [];
 	for (const posting of postings) {
-		if (!(posting.amount instanceof Amount)) continue;
-		const units = Decimal.fromNumber(posting.amount.number);
-		if (!units) return INVALID_NUMBER;
+		// The omitted posting is removed before this call; every remaining amount is complete.
+		const amount = posting.amount as Amount;
+		const units = parsedDecimal(amount.number);
 		if (units.isZero()) continue;
-		legs.push({ account: posting.account, currency: posting.amount.currency, units });
+		legs.push({ account: posting.account, currency: amount.currency, units });
 	}
 	return legs;
 }
 
 function postingWeight(posting: Posting): { currency: string; units: Decimal } | string {
-	if (!(posting.amount instanceof Amount)) return COST_INTERPOLATION;
-	const units = Decimal.fromNumber(posting.amount.number);
-	if (!units) return INVALID_NUMBER;
+	// The omitted posting is skipped by the caller; every other posting has an amount.
+	const amount = posting.amount as Amount;
+	const units = parsedDecimal(amount.number);
 	if (posting.cost) {
 		const weighted = costWeight(units, posting.cost);
 		return weighted ?? COST_INTERPOLATION;
 	}
 	if (posting.priceAnnotation) return priceWeight(units, posting.priceAnnotation);
-	return { currency: posting.amount.currency, units };
+	return { currency: amount.currency, units };
 }
 
 function costWeight(units: Decimal, cost: Cost): { currency: string; units: Decimal } | null {
 	if (cost.amount instanceof IncompleteAmount || cost.total instanceof IncompleteAmount) return null;
 	if (cost.amount instanceof Amount) {
-		const per = Decimal.fromNumber(cost.amount.number);
-		if (!per) return null;
-		return { currency: cost.amount.currency, units: units.mul(per) };
+		return { currency: cost.amount.currency, units: units.mul(parsedDecimal(cost.amount.number)) };
 	}
 	if (cost.total instanceof Amount) {
-		const total = Decimal.fromNumber(cost.total.number);
-		if (!total) return null;
-		return { currency: cost.total.currency, units: signed(units, total) };
+		return { currency: cost.total.currency, units: signed(units, parsedDecimal(cost.total.number)) };
 	}
 	// `{}`, a date, or a label: the cost number is what interpolation would fill.
 	return null;
@@ -382,8 +370,7 @@ function costWeight(units: Decimal, cost: Cost): { currency: string; units: Deci
 
 function priceWeight(units: Decimal, price: PriceAnnotation): { currency: string; units: Decimal } | string {
 	if (!(price.amount instanceof Amount)) return COST_INTERPOLATION;
-	const number = Decimal.fromNumber(price.amount.number);
-	if (!number) return INVALID_NUMBER;
+	const number = parsedDecimal(price.amount.number);
 	return { currency: price.amount.currency, units: price.isTotal ? signed(units, number) : units.mul(number) };
 }
 
@@ -478,8 +465,12 @@ function noteTransaction(txn: Transaction, scales: Map<string, number>): void {
 
 function noteMaybe(scales: Map<string, number>, amount: Amount | IncompleteAmount | undefined): void {
 	if (!(amount instanceof Amount)) return;
-	const decimal = Decimal.fromNumber(amount.number);
-	if (decimal) noteDecimal(scales, amount.currency, decimal);
+	noteDecimal(scales, amount.currency, parsedDecimal(amount.number));
+}
+
+/** Parser `number()` rejects non-finite values, so a parsed amount always converts. */
+function parsedDecimal(n: number): Decimal {
+	return Decimal.fromNumber(n) as Decimal;
 }
 
 function noteDecimal(scales: Map<string, number>, currency: string, decimal: Decimal): void {

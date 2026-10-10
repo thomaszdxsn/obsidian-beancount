@@ -289,4 +289,36 @@ describe('BeancountBalancesView', () => {
 		expect(shownIn(view)).toContain('4 USD');
 		expect(shownIn(view)).not.toContain('1 USD');
 	});
+
+	it('shows an empty note for a missing markdown entry and keeps an included file error on that file', async () => {
+		const missing = viewFor(new FakeVault(), null, 'gone.md');
+		await missing.view.onOpen();
+		expect(shownIn(missing.view)).toEqual(['This note has no Beancount fences.']);
+
+		const vault = new FakeVault();
+		vault.write('note.md', '```bean\ninclude "bad.bean"\n```\n');
+		vault.write('bad.bean', '2020-01-02 open\n');
+		const broken = viewFor(vault, { path: 'note.md', extension: 'md' });
+		await broken.view.onOpen();
+		expect(shownIn(broken.view).some((text) => text.startsWith('bad.bean:1'))).toBe(true);
+		expect(shownIn(broken.view).some((text) => text.startsWith('note.md:'))).toBe(false);
+	});
+
+	it('still draws when the adapter has no base path, and skips a listed path that is not a file', async () => {
+		const vault = new FakeVault();
+		vault.write('ledger.bean', '2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n');
+		const opened = viewFor(vault, { path: 'ledger.bean', extension: 'bean' });
+		// The fake adapter always declares getBasePath; this case is a vault that does not.
+		const adapter: { getBasePath?: () => string } = vault.api.adapter;
+		delete adapter.getBasePath;
+		await opened.view.onOpen();
+		expect(shownIn(opened.view)).toContain('1 USD');
+
+		const nested = new FakeVault();
+		nested.write('books/a.bean', '2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n');
+		nested.write('main.bean', 'include "books"\n');
+		const folder = viewFor(nested, { path: 'main.bean', extension: 'bean' });
+		await folder.view.onOpen();
+		expect(shownIn(folder.view)).toEqual(['books:1  Included file not found: books']);
+	});
 });

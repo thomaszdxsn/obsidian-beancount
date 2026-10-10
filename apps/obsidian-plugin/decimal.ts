@@ -42,7 +42,7 @@ export class Decimal {
 		const frac = match[3] ?? match[4] ?? '';
 		const exp = match[5] === undefined ? 0 : Number(match[5]);
 		if (!Number.isFinite(exp)) return null;
-		const digits = (whole + frac).replace(/^0+(?=\d)/, '') || '0';
+		const digits = (whole + frac).replace(/^0+(?=\d)/, '');
 		let scale = frac.length - exp;
 		let value = sign * BigInt(digits);
 		if (scale < 0) {

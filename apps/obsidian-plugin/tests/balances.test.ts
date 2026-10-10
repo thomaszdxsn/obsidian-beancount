@@ -256,6 +256,185 @@ describe('accountBalances', () => {
 		}, 'a.bean');
 		expect(lines(cycled)).toEqual(['Assets:Cash 3 USD', 'Expenses:Food -3 USD']);
 	});
+
+	it('leaves a pad unused when no later balance consumes it', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': ['2020-01-01 * "have"', '  Assets:Cash  10 USD', '  Income:Job', '2020-01-02 pad Assets:Cash Equity:Opening'].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash 10 USD', 'Income:Job -10 USD']);
+	});
+
+	it('pads each currency once, then a new pad can fill a later balance', () => {
+		const once = report({
+			'main.bean': [
+				'2020-01-01 * "have"',
+				'  Assets:Cash  10 USD',
+				'  Assets:Cash  2 EUR',
+				'  Income:Job',
+				'2020-01-02 pad Assets:Cash Equity:Opening',
+				'2020-01-03 balance Assets:Cash 40 USD',
+				'2020-01-04 balance Assets:Cash 5 EUR',
+				'2020-01-05 balance Assets:Cash 99 USD',
+				'2020-01-06 balance Assets:Cash 9 EUR',
+			].join('\n'),
+		});
+		expect(lines(once)).toEqual(['Assets:Cash 5 EUR, 40 USD', 'Equity:Opening -3 EUR, -30 USD', 'Income:Job -2 EUR, -10 USD']);
+
+		const again = report({
+			'main.bean': [
+				'2020-01-01 * "have"',
+				'  Assets:Cash  10 USD',
+				'  Income:Job',
+				'2020-01-02 pad Assets:Cash Equity:Opening',
+				'2020-01-03 balance Assets:Cash 10 USD',
+				'2020-01-04 pad Assets:Cash Equity:Later',
+				'2020-01-05 balance Assets:Cash 25 USD',
+			].join('\n'),
+		});
+		expect(lines(again)).toEqual(['Assets:Cash 25 USD', 'Equity:Later -15 USD', 'Income:Job -10 USD']);
+	});
+
+	it('counts child postings toward a parent balance and not a same-prefix sibling', () => {
+		const result = report({
+			'main.bean': [
+				'2020-01-02 * "wallet"',
+				'  Assets:Cash:Wallet  5 USD',
+				'  Expenses:Food',
+				'2020-01-03 * "till"',
+				'  Assets:Cashier  4 USD',
+				'  Expenses:Misc',
+				'2020-01-04 pad Assets:Cash Equity:Opening',
+				'2020-01-05 balance Assets:Cash 20 USD',
+			].join('\n'),
+		});
+		expect(result.errors).toEqual([]);
+		expect(lines(result)).toEqual([
+			'Assets:Cash 15 USD',
+			'Assets:Cash:Wallet 5 USD',
+			'Assets:Cashier 4 USD',
+			'Equity:Opening -15 USD',
+			'Expenses:Food -5 USD',
+			'Expenses:Misc -4 USD',
+		]);
+	});
+
+	it('sorts a same-day balance before the transaction even when the file writes them backwards', () => {
+		const result = report({
+			'main.bean': [
+				'2020-01-10 close Assets:Cash',
+				'2020-01-10 * "txn"',
+				'  Assets:Cash  7 USD',
+				'  Expenses:Food',
+				'2020-01-10 balance Assets:Cash 0 USD',
+				'2020-01-10 open Assets:Cash',
+				'2020-01-09 pad Assets:Cash Equity:Opening',
+			].join('\n'),
+		});
+		// open < balance < txn < close, so the 7 does not count toward the balance and the pad inserts nothing.
+		expect(lines(result)).toEqual(['Assets:Cash 7 USD', 'Expenses:Food -7 USD']);
+	});
+
+	it('skips a zero posting, a zero-weight total, and a currency-only fill of a cancelled residual', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': ['2020-01-01 * "zero"', '  Assets:Cash  0 USD', '  Assets:Cash  5 USD', '  Expenses:Food'].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash 5 USD', 'Expenses:Food -5 USD']);
+
+		expect(
+			lines(
+				report({
+					'main.bean': ['2020-01-01 * "total"', '  Assets:Stocks  0 HOOL @@ 20 USD', '  Assets:Cash  -4 USD', '  Expenses:Food'].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Cash -4 USD', 'Expenses:Food 4 USD']);
+
+		expect(
+			lines(
+				report({
+					'main.bean': ['2020-01-01 * "cancel"', '  Assets:Cash  5 USD', '  Assets:Cash  -5 USD', '  Expenses:Food  USD'].join('\n'),
+				}),
+			),
+		).toEqual([]);
+	});
+
+	it('rejects a missing posting that carries a price, and a cost or price that itself is incomplete', () => {
+		const priced = report({
+			'main.bean': ['2020-01-01 * "price"', '  Assets:Stocks  HOOL @ 3 USD', '  Assets:Cash  -20 USD'].join('\n'),
+		});
+		expect(priced.rows).toEqual([]);
+		expect(priced.errors[0]?.message).toBe('Cannot interpolate a posting that has a cost or a price');
+
+		for (const body of ['  Assets:Stocks  2 HOOL {USD}', '  Assets:Stocks  2 HOOL @ USD', '  Assets:Stocks  2 HOOL @@', '  Assets:Stocks  2 HOOL {{USD}}']) {
+			const result = report({
+				'main.bean': ['2020-01-01 * "fill"', body, '  Assets:Cash'].join('\n'),
+			});
+			expect(result.rows).toEqual([]);
+			expect(result.errors).toEqual([
+				{ file: 'main.bean', line: 1, message: 'Cannot interpolate a cost or a price on this transaction' },
+			]);
+		}
+	});
+
+	it('reports a non-finite amount and an included file error at that file path and line', () => {
+		const divided = report({
+			'main.bean': ['2020-01-01 * "div"', '  Assets:Cash  1/0 USD', '  Expenses:Food'].join('\n'),
+		});
+		expect(divided.rows).toEqual([]);
+		expect(divided.errors[0]?.file).toBe('main.bean');
+		expect(divided.errors[0]?.line).toBe(2);
+		expect(divided.errors[0]?.message).toMatch(/invalid number/);
+
+		const included = report({
+			'main.bean': ['include "bad.bean"', '2020-01-01 * "ok"', '  Assets:Cash  1 USD', '  Expenses:Food'].join('\n'),
+			'bad.bean': ['2020-01-01 * "ok"', '  Assets:Cash  1 USD', '  Expenses:Food', '2020-01-02 open'].join('\n'),
+		});
+		expect(included.rows).toEqual([]);
+		expect(included.errors[0]?.file).toBe('bad.bean');
+		expect(included.errors[0]?.line).toBe(4);
+		expect(included.errors.some((issue) => issue.file === 'main.bean')).toBe(false);
+	});
+
+	it('pads display to the widest fraction of that currency and keeps a tiny amount exact', () => {
+		expect(
+			lines(
+				report({
+					'main.bean': [
+						'2020-01-01 * "wide"',
+						'  Assets:Cash  2 USD',
+						'  Expenses:A',
+						'2020-01-02 * "tenth"',
+						'  Assets:Bank  0.5 USD',
+						'  Expenses:B',
+					].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Bank 0.5 USD', 'Assets:Cash 2.0 USD', 'Expenses:A -2.0 USD', 'Expenses:B -0.5 USD']);
+
+		expect(
+			lines(
+				report({
+					'main.bean': ['2020-01-03 * "tiny"', '  Assets:Petty  0.0000001 USD', '  Expenses:C'].join('\n'),
+				}),
+			),
+		).toEqual(['Assets:Petty 0.0000001 USD', 'Expenses:C -0.0000001 USD']);
+	});
+
+	it('reports an include that resolved but was not loaded', () => {
+		const queued = accountBalances(
+			'main.bean',
+			new Map([['main.bean', 'include "child.bean"\n']]),
+			'/vault',
+			['main.bean', 'child.bean'],
+		);
+		expect(queued.rows).toEqual([]);
+		expect(queued.errors).toEqual([{ file: 'child.bean', line: 1, message: 'Included file not found: child.bean' }]);
+	});
 });
 
 describe('loadAccountBalances', () => {
@@ -280,5 +459,38 @@ describe('loadAccountBalances', () => {
 		});
 		expect(missing.rows).toEqual([]);
 		expect(missing.errors[0]?.message).toBe('Entry ledger not found: gone.bean');
+	});
+
+	it('follows a glob, does not re-read a cycle, and reports an included file the vault cannot read', async () => {
+		const files = new Map<string, string>([
+			['main.bean', 'include "books/*.bean"\n'],
+			['books/a.bean', 'include "../main.bean"\n2020-01-01 * "a"\n  Assets:Cash  1 USD\n  Expenses:Food\n'],
+			['books/b.bean', '2020-01-01 * "b"\n  Assets:Cash  2 USD\n  Expenses:Food\n'],
+		]);
+		const globbed = await loadAccountBalances('main.bean', {
+			vaultRoot: '/vault',
+			vaultFiles: [...files.keys()],
+			read: async (path) => files.get(path) ?? null,
+		});
+		expect(lines(globbed)).toEqual(['Assets:Cash 3 USD', 'Expenses:Food -3 USD']);
+
+		const unread = await loadAccountBalances('main.bean', {
+			vaultRoot: '/vault',
+			vaultFiles: ['main.bean', 'child.bean'],
+			read: async (path) => (path === 'main.bean' ? 'include "child.bean"\n' : null),
+		});
+		expect(unread.rows).toEqual([]);
+		expect(unread.errors).toEqual([{ file: 'child.bean', line: 1, message: 'Included file not found: child.bean' }]);
+
+		const skipped = await loadAccountBalances('main.bean', {
+			vaultRoot: '/vault',
+			vaultFiles: ['main.bean'],
+			read: async () => 'include "../out.bean"\ninclude "none/*.bean"\n',
+		});
+		expect(skipped.rows).toEqual([]);
+		expect(skipped.errors.map((issue) => issue.message)).toEqual([
+			'Include is outside the vault: ../out.bean',
+			'No files match include "none/*.bean"',
+		]);
 	});
 });
