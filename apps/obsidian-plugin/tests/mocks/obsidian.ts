@@ -7,7 +7,7 @@
 export interface PluginCommand {
 	id: string;
 	name?: string;
-	editorCallback?: (editor: unknown) => void;
+	editorCallback?: (editor: unknown, ctx?: { file: { extension: string } | null }) => void;
 	callback?: () => void | Promise<void>;
 }
 

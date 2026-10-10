@@ -31,6 +31,9 @@
  * flags, account, text after the amount — is preserved verbatim and only the
  * whitespace before the amount changes, so applying the edits is idempotent
  * and never disturbs text the feature does not own.
+ * A line that continues an open `"` string is not a posting, even when the
+ * text looks like one. A `"` inside a `;` comment does not open a string.
+
  */
 
 /** Minimum whitespace between the account (and its flag) and the amount. */
@@ -105,6 +108,34 @@ interface Match {
 	text: string;
 	/** Offset just past the match. */
 	end: number;
+}
+
+/**
+ * Whether `line` ends inside a `"` string. A `;` outside a string starts a
+ * comment and is not scanned, so a quote there cannot open a string that
+ * swallows the next line. Inside a string, a backslash escapes the next
+ * character on this line only: a trailing backslash does not swallow the
+ * newline. Alignment and formatting share this scan.
+ */
+export function endsInString(line: string, inStringStart: boolean): boolean {
+	let inString = inStringStart;
+	for (let i = 0; i < line.length; i += 1) {
+		const ch = line[i];
+		if (inString) {
+			if (ch === '\\' && i + 1 < line.length) {
+				i += 1;
+				continue;
+			}
+			if (ch === '"') inString = false;
+			continue;
+		}
+		if (ch === '"') {
+			inString = true;
+			continue;
+		}
+		if (ch === ';') break;
+	}
+	return inString;
 }
 
 function matchAt(re: RegExp, text: string, at: number): Match | null {
@@ -217,8 +248,12 @@ export function computeAlignment(
 ): LineEdit[] {
 	const blockOfLine = scanBlocks(lines);
 	const postings: Array<Posting & { line: number; block: number }> = [];
+	let inString = false;
 	for (let line = 0; line < lines.length; line += 1) {
+		const continuation = inString;
+		inString = endsInString(lines[line], inString);
 		if (range && (line < range.from || line > range.to)) continue;
+		if (continuation) continue;
 		const posting = parsePosting(lines[line]);
 		if (posting !== null) postings.push({ ...posting, line, block: blockOfLine[line] });
 	}

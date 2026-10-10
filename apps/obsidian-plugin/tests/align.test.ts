@@ -259,6 +259,22 @@ describe('alignText', () => {
 		expect(alignText(prose)).toBe(prose);
 		expect(alignText('')).toBe('');
 	});
+	it('does not rewrite a posting-shaped line inside a multi-line string', () => {
+		const text = ['2020-02-01 * "x', '  Assets:Cash    10.5 USD', '"', '  Expenses:Food 1 USD', '  Assets:Cash -1 USD', ''].join(
+			'\n'
+		);
+		expect(alignText(text)).toBe(
+			['2020-02-01 * "x', '  Assets:Cash    10.5 USD', '"', '  Expenses:Food 1 USD', '  Assets:Cash  -1 USD', ''].join('\n')
+		);
+	});
+
+	it('still aligns the posting after a quote in a comment', () => {
+		expect(align(['  Assets:Cash 1 USD ; "', '  Expenses:Food -12.5 USD'])).toEqual([
+			'  Assets:Cash     1 USD ; "',
+			'  Expenses:Food -12.5 USD',
+		]);
+	});
+
 });
 
 describe('computeAlignment', () => {
