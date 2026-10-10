@@ -51,8 +51,11 @@ function hiddenLines(entry: string): number | null {
 	}
 	const hidden = parseHiddenLines(entry);
 	if (hiddenLinesCache.size >= CACHE_LIMIT) {
-		const oldest = hiddenLinesCache.keys().next();
-		if (!oldest.done) hiddenLinesCache.delete(oldest.value);
+		// Map iterates in insertion order: the first key is the least recently used.
+		for (const oldest of hiddenLinesCache.keys()) {
+			hiddenLinesCache.delete(oldest);
+			break;
+		}
 	}
 	hiddenLinesCache.set(entry, hidden);
 	return hidden;
