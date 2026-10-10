@@ -12,6 +12,7 @@ import {
   Option,
   Pad,
   Plugin,
+  PriceAnnotation,
   Query,
   Transaction,
 } from "../src/model";
@@ -51,9 +52,21 @@ describe("transaction header", () => {
     expect(b!.tags).toEqual([]);
   });
 
+  test("a tag pushed twice needs two pops", () => {
+    const input = [
+      "pushtag #t",
+      "pushtag #t",
+      "poptag #t",
+      '2022-01-01 * "a"',
+      "poptag #t",
+      "",
+    ].join("\n");
+    expect(only<Transaction>(input).tags).toEqual(["t"]);
+  });
+
   test("string escapes are decoded", () => {
-    const txn = only<Transaction>('2022-01-01 * "a\\tb\\nc\\\\d\\"e"\n');
-    expect(txn.narration).toBe('a\tb\nc\\d"e');
+    const txn = only<Transaction>('2022-01-01 * "a\\tb\\nc\\\\d\\"e\\ff\\bg\\qh"\n');
+    expect(txn.narration).toBe('a\tb\nc\\d"e\ff\bgqh');
   });
 });
 
@@ -70,7 +83,7 @@ describe("posting amounts", () => {
     ["number only", "10", new IncompleteAmount(10, null)],
     ["currency only", "USD", new IncompleteAmount(null, "USD")],
   ])("%s", (_name, text, expected) => {
-    expect(postingOf(text).amount).toEqual(expected);
+    expect(postingOf(text).amount).toStrictEqual(expected);
   });
 });
 
@@ -91,7 +104,7 @@ describe("cost", () => {
       new Cost(new Amount(10, "USD"), new Date(2022, 0, 1), "lot"),
     ],
   ])("%s", (_name, text, expected) => {
-    expect(postingOf(text).cost).toEqual(expected);
+    expect(postingOf(text).cost).toStrictEqual(expected);
   });
 });
 
@@ -102,7 +115,7 @@ describe("price annotation", () => {
     ["bare @", "1 EUR @", undefined, false],
     ["currency only", "1 EUR @ USD", new IncompleteAmount(null, "USD"), false],
   ])("%s", (_name, text, amount, isTotal) => {
-    expect(postingOf(text).priceAnnotation).toEqual({ amount, isTotal });
+    expect(postingOf(text).priceAnnotation).toStrictEqual(new PriceAnnotation(amount, isTotal));
   });
 });
 
@@ -120,12 +133,7 @@ describe("metadata values", () => {
     ["number expression", "2 * 3", 6],
   ])("%s", (_name, text, expected) => {
     const open = only<Open>(`2022-01-01 open Assets:A\n  kk: ${text}\n`);
-    expect(open.metadata).toEqual({ kk: expected });
-  });
-
-  test("later duplicate key wins", () => {
-    const open = only<Open>("2022-01-01 open Assets:A\n  kk: 1\n  kk: 2\n");
-    expect(open.metadata).toEqual({ kk: 2 });
+    expect(open.metadata).toStrictEqual({ kk: expected });
   });
 });
 

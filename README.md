@@ -45,7 +45,7 @@ console.log(transaction.postings.length); // 2
 
 ### Errors
 
-`parse()` never returns a partially recovered file. Any lexer or parser error, or a value the grammar cannot reject (e.g. `2022-02-30`), throws a `BeancountSyntaxError` listing every problem in source order:
+`parse()` never returns a partially recovered file. Any lexer or parser error throws a `BeancountSyntaxError` listing every problem in source order. If the syntax is valid, the same error lists every value error the grammar cannot reject, as upstream Beancount does: invalid dates (`2022-02-30`), duplicate metadata keys or cost components, `1/0` and other non-finite numbers, popping an absent tag, and tags still pushed at end of file:
 
 ```typescript
 import { BeancountParser, BeancountSyntaxError } from 'beancount-parser';
