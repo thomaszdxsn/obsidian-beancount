@@ -5,8 +5,8 @@ import {
   type BeancountFileContext,
 } from "../src/parser/BeancountParser";
 
-// Runs the generated lexer + parser directly. BeancountParser.parse() recovers
-// from syntax errors silently, so grammar assertions must go through here.
+// Runs the generated lexer + parser directly, without the model visitor, so
+// grammar assertions can inspect the raw tree and error messages.
 export function parseRaw(input: string): {
   errors: string[];
   tree: BeancountFileContext;

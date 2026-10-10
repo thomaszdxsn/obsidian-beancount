@@ -43,6 +43,24 @@ console.log(transaction.payee); // "Grocery Store"
 console.log(transaction.postings.length); // 2
 ```
 
+### Errors
+
+`parse()` never returns a partially recovered file. Any lexer or parser error, or a value the grammar cannot reject (e.g. `2022-02-30`), throws a `BeancountSyntaxError` listing every problem in source order:
+
+```typescript
+import { BeancountParser, BeancountSyntaxError } from 'beancount-parser';
+
+try {
+  BeancountParser.parse('2022-01-01 open\n');
+} catch (e) {
+  if (e instanceof BeancountSyntaxError) {
+    console.log(e.errors); // [{ line: 1, column: 15, message: "missing ACCOUNT at '\\n'" }]
+  }
+}
+```
+
+`line` is 1-based, `column` 0-based. Each directive and posting also carries a `location` with the same convention.
+
 ## Data Model
 
 The parser generates a strongly-typed object model with classes for all Beancount directives:
@@ -56,9 +74,10 @@ The parser generates a strongly-typed object model with classes for all Beancoun
 - `Document`
 - `Event`
 - `Commodity`
-- `Pad`
 - `Custom`
-- And more...
+- `Option`, `Plugin`, `Include`
+
+Postings keep their flag, cost (`amount` per-unit, `total`, `date`, `label`, `merge`) and price annotation. Amounts with the number or currency left out for interpolation are `IncompleteAmount`. `pushtag`/`poptag` tags are added to the transactions between them; `pushmeta`/`popmeta` are accepted but not applied yet.
 
 ## Development
 

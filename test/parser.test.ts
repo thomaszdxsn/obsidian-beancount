@@ -192,7 +192,7 @@ describe("BeancountParser", () => {
     
     const result = BeancountParser.parse(input);
     
-    expect(result.directives.length).toBe(8);
+    expect(result.directives.length).toBe(7);
     expect(result.directives[0]).toBeInstanceOf(Open);
     expect(result.directives[1]).toBeInstanceOf(Open);
     expect(result.directives[2]).toBeInstanceOf(Open);

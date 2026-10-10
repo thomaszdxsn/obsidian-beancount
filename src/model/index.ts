@@ -1,6 +1,7 @@
 // Model classes for Beancount data structures
 
-export type MetadataValue = string | Date | number;
+// `null` is a key with no value (`key:`) or an explicit `NULL`.
+export type MetadataValue = string | Date | number | boolean | Amount | null;
 
 export interface Metadata {
   [key: string]: MetadataValue;
@@ -32,6 +33,8 @@ export class Transaction extends DirectiveBase {
   payee: string | null;
   narration: string | null;
   postings: Posting[];
+  tags: string[];
+  links: string[];
 
   constructor(
     date: Date,
@@ -40,7 +43,9 @@ export class Transaction extends DirectiveBase {
     narration: string | null,
     postings: Posting[] = [],
     location?: SourceLocation,
-    metadata: Metadata = {}
+    metadata: Metadata = {},
+    tags: string[] = [],
+    links: string[] = []
   ) {
     super(location, metadata);
     this.date = date;
@@ -48,6 +53,8 @@ export class Transaction extends DirectiveBase {
     this.payee = payee;
     this.narration = narration;
     this.postings = postings;
+    this.tags = tags;
+    this.links = links;
   }
 }
 
@@ -65,23 +72,48 @@ export class Amount {
   }
 }
 
-export class Cost {
-  amount?: Amount;
-  date?: Date;
-  label?: string;
+// A posting or price amount with the number or the currency left out, to be
+// filled in by interpolation. At least one of the two is present.
+export class IncompleteAmount {
+  number: number | null;
+  currency: string | null;
 
-  constructor(amount?: Amount, date?: Date, label?: string) {
-    this.amount = amount;
-    this.date = date;
-    this.label = label;
+  constructor(number: number | null, currency: string | null) {
+    this.number = number;
+    this.currency = currency;
   }
 }
 
+// `{amount}` is per-unit, `{{total}}` is total; `{per # total CUR}` sets both.
+// `merge` is the `*` component.
+export class Cost {
+  amount?: Amount | IncompleteAmount;
+  total?: Amount | IncompleteAmount;
+  date?: Date;
+  label?: string;
+  merge: boolean;
+
+  constructor(
+    amount?: Amount | IncompleteAmount,
+    date?: Date,
+    label?: string,
+    total?: Amount | IncompleteAmount,
+    merge: boolean = false
+  ) {
+    this.amount = amount;
+    this.date = date;
+    this.label = label;
+    this.total = total;
+    this.merge = merge;
+  }
+}
+
+// `@` is per-unit, `@@` is total. A bare `@` has no amount.
 export class PriceAnnotation {
-  amount: Amount;
+  amount?: Amount | IncompleteAmount;
   isTotal: boolean;
 
-  constructor(amount: Amount, isTotal: boolean = false) {
+  constructor(amount?: Amount | IncompleteAmount, isTotal: boolean = false) {
     this.amount = amount;
     this.isTotal = isTotal;
   }
@@ -89,23 +121,26 @@ export class PriceAnnotation {
 
 export class Posting extends DirectiveBase {
   account: string;
-  amount?: Amount;
+  amount?: Amount | IncompleteAmount;
   cost?: Cost;
   priceAnnotation?: PriceAnnotation;
+  flag?: string;
 
   constructor(
     account: string,
-    amount?: Amount,
+    amount?: Amount | IncompleteAmount,
     cost?: Cost,
     priceAnnotation?: PriceAnnotation,
     location?: SourceLocation,
-    metadata: Metadata = {}
+    metadata: Metadata = {},
+    flag?: string
   ) {
     super(location, metadata);
     this.account = account;
     this.amount = amount;
     this.cost = cost;
     this.priceAnnotation = priceAnnotation;
+    this.flag = flag;
   }
 }
 
@@ -132,18 +167,21 @@ export class Balance extends DirectiveBase {
   date: Date;
   account: string;
   amount: Amount;
+  tolerance?: number;
 
   constructor(
     date: Date,
     account: string,
     amount: Amount,
     location?: SourceLocation,
-    metadata: Metadata = {}
+    metadata: Metadata = {},
+    tolerance?: number
   ) {
     super(location, metadata);
     this.date = date;
     this.account = account;
     this.amount = amount;
+    this.tolerance = tolerance;
   }
 }
 
@@ -224,18 +262,24 @@ export class Note extends DirectiveBase {
   date: Date;
   account: string;
   comment: string;
+  tags: string[];
+  links: string[];
 
   constructor(
     date: Date,
     account: string,
     comment: string,
     location?: SourceLocation,
-    metadata: Metadata = {}
+    metadata: Metadata = {},
+    tags: string[] = [],
+    links: string[] = []
   ) {
     super(location, metadata);
     this.date = date;
     this.account = account;
     this.comment = comment;
+    this.tags = tags;
+    this.links = links;
   }
 }
 
@@ -243,18 +287,24 @@ export class Document extends DirectiveBase {
   date: Date;
   account: string;
   path: string;
+  tags: string[];
+  links: string[];
 
   constructor(
     date: Date,
     account: string,
     path: string,
     location?: SourceLocation,
-    metadata: Metadata = {}
+    metadata: Metadata = {},
+    tags: string[] = [],
+    links: string[] = []
   ) {
     super(location, metadata);
     this.date = date;
     this.account = account;
     this.path = path;
+    this.tags = tags;
+    this.links = links;
   }
 }
 
@@ -296,15 +346,17 @@ export class Query extends DirectiveBase {
   }
 }
 
+export type CustomValue = string | Date | number | boolean | Amount;
+
 export class Custom extends DirectiveBase {
   date: Date;
   type: string;
-  values: (string | Date | number | Amount)[];
+  values: CustomValue[];
 
   constructor(
     date: Date,
     type: string,
-    values: (string | Date | number | Amount)[] = [],
+    values: CustomValue[] = [],
     location?: SourceLocation,
     metadata: Metadata = {}
   ) {
