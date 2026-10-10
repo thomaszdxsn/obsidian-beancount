@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Transaction folding, ledger formatting, and an account balances view, built
+on the bundled `@repo/beancount-parser`.
 
 ### Added
 
