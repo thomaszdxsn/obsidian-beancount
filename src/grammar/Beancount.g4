@@ -11,7 +11,7 @@ directive
     | balance
     | open
     | close
-    | commodity
+    | commodity_directive
     | pad
     | note
     | document
@@ -36,7 +36,7 @@ txn_flag
 
 // Postings under a transaction
 posting
-    : INDENT account (amount)? cost? price_annotation? metadata? DEDENT
+    : INDENT account (amount)? cost? price_annotation? metadata?
     ;
 
 amount
@@ -61,7 +61,7 @@ price_annotation
     ;
 
 metadata
-    : (INDENT TAG_KEY (STRING | DATE | number) DEDENT)*
+    : (INDENT TAG_KEY (STRING | DATE | number))*
     ;
 
 // Price directive
@@ -89,7 +89,7 @@ close
     ;
 
 // Commodity directive
-commodity
+commodity_directive
     : DATE 'commodity' COMMODITY metadata?
     ;
 
@@ -155,7 +155,6 @@ LINK: '^' [A-Za-z0-9-_/.]+;
 TAG_KEY: [a-z][a-z0-9-_]+ ':';
 AT: '@';
 INDENT: '  ';  // Two spaces for indentation
-DEDENT: '';     // No actual token, just a placeholder for structure
 
 STRING: '"' (~["\r\n] | '\\"')* '"';
 

@@ -1,3 +1,5 @@
+import { CharStream, CommonTokenStream } from 'antlr4ng';
+
 import {
   BeancountFile,
   Transaction,
@@ -26,19 +28,16 @@ import type {
   Metadata,
 } from './model';
 
-import {
-  BeancountLexer,
-  BeancountParser as AntlrBeancountParser,
-  BeancountFileContext,
-} from './parser';
-
+import { BeancountLexer } from './parser/BeancountLexer';
+import { BeancountParser as AntlrBeancountParser } from './parser/BeancountParser';
 import type {
-  BeancountVisitor,
   AccountContext,
   AmountContext,
   BalanceContext,
+  BeancountFileContext,
   CloseContext,
-  CommodityContext, 
+  CommodityContext,
+  Commodity_directiveContext,
   CostContext,
   CustomContext,
   DirectiveContext,
@@ -53,114 +52,100 @@ import type {
   PadContext,
   PluginContext,
   PostingContext,
-  PriceAnnotationContext,
+  Price_annotationContext,
   PriceContext,
   QueryContext,
-  TransactionContext
-} from './parser';
+  TransactionContext,
+} from './parser/BeancountParser';
+import { BeancountVisitor } from './parser/BeancountVisitor';
 
-// Simplified BeancountParserVisitor for the demonstration
-class BeancountParserVisitor implements BeancountVisitor<any> {
-  
-  visit(tree: any): any {
-    return {}; // Simplified for demo
-  }
-  
+class BeancountParserVisitor extends BeancountVisitor<any> {
+
   // File visitor
-  visitBeancountFile(ctx: BeancountFileContext): BeancountFile {
-    // This is a simplified implementation for demonstration purposes
-    // In a real implementation, this would parse the file correctly
-    const directives: Directive[] = [];
-    
-    // For demo purposes, let's create a simple transaction
-    const date = new Date(2023, 0, 15);
-    const postings = [
-      new Posting("Assets:Checking", new Amount(-85.00, "USD")),
-      new Posting("Expenses:Food", new Amount(85.00, "USD"))
-    ];
-    
-    const transaction = new Transaction(
-      date,
-      "*",
-      "Demo Store",
-      "Demo Transaction",
-      postings
-    );
-    
-    directives.push(transaction);
-    
+  visitBeancountFile = (ctx: BeancountFileContext): BeancountFile => {
+    const directives = ctx
+      .directive()
+      .map((d) => this.visit(d) as Directive | null)
+      .filter((d): d is Directive => d !== null);
     return new BeancountFile(directives);
-  }
-  
+  };
+
+  visitDirective = (ctx: DirectiveContext): Directive | null => {
+    const child = ctx.getChild(0);
+    return child ? (this.visit(child) as Directive | null) : null;
+  };
+
   // These methods would be implemented in a real parser
-  visitDirective(ctx: DirectiveContext): Directive | null { return null; }
-  visitTransaction(ctx: TransactionContext): Transaction { 
-    return new Transaction(new Date(), "*", null, null, []); 
-  }
-  visitPosting(ctx: PostingContext): Posting { 
-    return new Posting("Assets:Demo"); 
-  }
-  visitAmount(ctx: AmountContext): Amount { 
-    return new Amount(0, "USD"); 
-  }
-  visitNumber(ctx: NumberContext): number { 
-    return 0; 
-  }
-  visitCommodity(ctx: CommodityContext): string { 
-    return "USD"; 
-  }
-  visitCost(ctx: CostContext): Cost { 
-    return new Cost(); 
-  }
-  visitPrice_annotation(ctx: PriceAnnotationContext): PriceAnnotation { 
-    return new PriceAnnotation(new Amount(0, "USD")); 
-  }
-  visitMetadata(ctx: MetadataContext): Metadata { 
-    return {}; 
-  }
-  visitPrice(ctx: PriceContext): Price { 
-    return new Price(new Date(), "USD", new Amount(0, "USD")); 
-  }
-  visitBalance(ctx: BalanceContext): Balance { 
-    return new Balance(new Date(), "Assets:Demo", new Amount(0, "USD")); 
-  }
-  visitOpen(ctx: OpenContext): Open { 
-    return new Open(new Date(), "Assets:Demo", ["USD"]); 
-  }
-  visitClose(ctx: CloseContext): Close { 
-    return new Close(new Date(), "Assets:Demo"); 
-  }
-  visitPad(ctx: PadContext): Pad { 
-    return new Pad(new Date(), "Assets:Demo", "Assets:Other"); 
-  }
-  visitNote(ctx: NoteContext): Note { 
-    return new Note(new Date(), "Assets:Demo", "Demo note"); 
-  }
-  visitDocument(ctx: DocumentContext): Document { 
-    return new Document(new Date(), "Assets:Demo", "path/to/doc.pdf"); 
-  }
-  visitEvent(ctx: EventContext): Event { 
-    return new Event(new Date(), "demo", "Demo event"); 
-  }
-  visitQuery(ctx: QueryContext): Query { 
-    return new Query(new Date(), "demo", "SELECT * FROM accounts"); 
-  }
-  visitCustom(ctx: CustomContext): Custom { 
-    return new Custom(new Date(), "demo", []); 
-  }
-  visitOptions(ctx: OptionsContext): Option { 
-    return new Option("operating_currency", "USD"); 
-  }
-  visitPlugin(ctx: PluginContext): Plugin { 
-    return new Plugin("demo_plugin"); 
-  }
-  visitInclude(ctx: IncludeContext): Include { 
-    return new Include("path/to/include.bean"); 
-  }
-  visitAccount(ctx: AccountContext): string { 
-    return "Assets:Demo"; 
-  }
-  
+  visitTransaction = (ctx: TransactionContext): Transaction => {
+    return new Transaction(new Date(), "*", null, null, []);
+  };
+  visitPosting = (ctx: PostingContext): Posting => {
+    return new Posting("Assets:Demo");
+  };
+  visitAmount = (ctx: AmountContext): Amount => {
+    return new Amount(0, "USD");
+  };
+  visitNumber = (ctx: NumberContext): number => {
+    return 0;
+  };
+  visitCommodity = (ctx: CommodityContext): string => {
+    return "USD";
+  };
+  visitCost = (ctx: CostContext): Cost => {
+    return new Cost();
+  };
+  visitPrice_annotation = (ctx: Price_annotationContext): PriceAnnotation => {
+    return new PriceAnnotation(new Amount(0, "USD"));
+  };
+  visitMetadata = (ctx: MetadataContext): Metadata => {
+    return {};
+  };
+  visitPrice = (ctx: PriceContext): Price => {
+    return new Price(new Date(), "USD", new Amount(0, "USD"));
+  };
+  visitBalance = (ctx: BalanceContext): Balance => {
+    return new Balance(new Date(), "Assets:Demo", new Amount(0, "USD"));
+  };
+  visitOpen = (ctx: OpenContext): Open => {
+    return new Open(new Date(), "Assets:Demo", ["USD"]);
+  };
+  visitClose = (ctx: CloseContext): Close => {
+    return new Close(new Date(), "Assets:Demo");
+  };
+  visitCommodity_directive = (ctx: Commodity_directiveContext): Commodity => {
+    return new Commodity(new Date(), "USD");
+  };
+  visitPad = (ctx: PadContext): Pad => {
+    return new Pad(new Date(), "Assets:Demo", "Assets:Other");
+  };
+  visitNote = (ctx: NoteContext): Note => {
+    return new Note(new Date(), "Assets:Demo", "Demo note");
+  };
+  visitDocument = (ctx: DocumentContext): Document => {
+    return new Document(new Date(), "Assets:Demo", "path/to/doc.pdf");
+  };
+  visitEvent = (ctx: EventContext): Event => {
+    return new Event(new Date(), "demo", "Demo event");
+  };
+  visitQuery = (ctx: QueryContext): Query => {
+    return new Query(new Date(), "demo", "SELECT * FROM accounts");
+  };
+  visitCustom = (ctx: CustomContext): Custom => {
+    return new Custom(new Date(), "demo", []);
+  };
+  visitOptions = (ctx: OptionsContext): Option => {
+    return new Option("operating_currency", "USD");
+  };
+  visitPlugin = (ctx: PluginContext): Plugin => {
+    return new Plugin("demo_plugin");
+  };
+  visitInclude = (ctx: IncludeContext): Include => {
+    return new Include("path/to/include.bean");
+  };
+  visitAccount = (ctx: AccountContext): string => {
+    return "Assets:Demo";
+  };
+
   // Helper method to convert date string to Date object
   private parseDate(dateStr: string): Date {
     const parts = dateStr.split('-').map(Number);
@@ -169,7 +154,7 @@ class BeancountParserVisitor implements BeancountVisitor<any> {
     const day = parts[2] || 1;
     return new Date(year, month - 1, day);
   }
-  
+
   // Helper method to remove quotes from string
   private unquote(str: string): string {
     return str.slice(1, -1).replace(/\\"/g, '"');
@@ -180,21 +165,14 @@ class BeancountParserVisitor implements BeancountVisitor<any> {
 export class BeancountParser {
   /**
    * Parse Beancount text into a BeancountFile object
-   * 
+   *
    * @param input The Beancount file content
    * @returns BeancountFile object containing all parsed directives
    */
   static parse(input: string): BeancountFile {
-    // In a real implementation, this would use ANTLR4 to parse the input
-    // For now, we'll create a simplified implementation
-    
-    // Create a simple sample output
-    if (input.includes("transaction") || input.includes("txn") || input.includes("*")) {
-      const visitor = new BeancountParserVisitor();
-      return visitor.visitBeancountFile(new BeancountFileContext());
-    }
-    
-    // Default empty file
-    return new BeancountFile([]);
+    const lexer = new BeancountLexer(CharStream.fromString(input));
+    const parser = new AntlrBeancountParser(new CommonTokenStream(lexer));
+    const tree = parser.beancountFile();
+    return new BeancountParserVisitor().visitBeancountFile(tree);
   }
 }
