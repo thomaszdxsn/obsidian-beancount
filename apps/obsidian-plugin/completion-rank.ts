@@ -3,10 +3,21 @@
  * first, then case-insensitive subsequence matches, each group ordered by
  * frecency (pick count × recency) and finally by code-point order.
  *
+ * When `pinyin` is on, a candidate also matches if the query prefix- or
+ * subsequence-matches its pinyin initials (`Expenses:餐饮` → `expenses:cy`).
+ * Tiers, best first: direct prefix, pinyin prefix, direct subsequence,
+ * pinyin subsequence. A direct hit is never filed in a pinyin tier.
+ * Initials are computed only after a direct prefix misses, and only for a
+ * value the table can rewrite; other values cannot gain a pinyin hit.
+ * Frecency still breaks ties inside a tier. Callers that omit `pinyin`
+ * keep the two-tier order.
+ *
  * Pick counts live in plugin `data.json` under `completionUsage`. Parsing
  * never throws: a missing, truncated, or nonsense bag is treated as empty
  * so a corrupt file cannot keep the plugin from loading.
  */
+
+import { PINYIN_TABLE_HAN, pinyinInitials } from './pinyin';
 
 /** Most strings `match` returns — the suggestion popup window. */
 export const MAX_SUGGESTIONS = 50;
@@ -49,12 +60,30 @@ function isSubsequence(hay: string, needle: string): boolean {
 	return i === needle.length;
 }
 
-/** 0 = prefix, 1 = subsequence, 2 = no match. */
-function matchQuality(value: string, needle: string): 0 | 1 | 2 {
+/**
+ * Match tier, best first. 4 is no match and is dropped by the ranker.
+ * With pinyin off, subsequence stays 1 so the two-tier order is unchanged.
+ * With it on: 0 direct prefix, 1 pinyin prefix, 2 direct subsequence,
+ * 3 pinyin subsequence.
+ *
+ * A pinyin prefix outranks a direct subsequence, so initials are needed as
+ * soon as a direct prefix misses — but only when `PINYIN_TABLE_HAN` matches.
+ * Otherwise initials equal a per-character lowercasing of `value` (the
+ * lowercased value, for ASCII) and the pinyin tiers cannot add a hit.
+ * Empty queries are direct prefixes of everything and never reach the table.
+ */
+function matchQuality(value: string, needle: string, pinyin: boolean): number {
 	const hay = value.toLowerCase();
 	if (hay.startsWith(needle)) return 0;
-	if (needle.length > 0 && isSubsequence(hay, needle)) return 1;
-	return 2;
+	if (!(pinyin && needle.length > 0 && PINYIN_TABLE_HAN.test(value))) {
+		if (needle.length > 0 && isSubsequence(hay, needle)) return pinyin ? 2 : 1;
+		return 4;
+	}
+	const initials = pinyinInitials(value);
+	if (initials.startsWith(needle)) return 1;
+	if (isSubsequence(hay, needle)) return 2;
+	if (isSubsequence(initials, needle)) return 3;
+	return 4;
 }
 
 /**
@@ -104,17 +133,22 @@ export class CompletionUsage {
 	}
 }
 
-/** Prefix hits first, then subsequence hits; frecency, then code-point order. */
+/**
+ * Prefix hits first, then subsequence hits; frecency, then code-point order.
+ * `pinyin` inserts initials tiers between those two. Existing callers omit
+ * it and rank exactly as before.
+ */
 export function rankCompletions(
 	values: readonly string[],
 	query: string,
-	usage?: CompletionUsage
+	usage?: CompletionUsage,
+	pinyin = false
 ): string[] {
 	const needle = query.toLowerCase();
-	const scored: Array<{ value: string; quality: 0 | 1; score: number }> = [];
+	const scored: Array<{ value: string; quality: number; score: number }> = [];
 	for (const value of values) {
-		const quality = matchQuality(value, needle);
-		if (quality === 2) continue;
+		const quality = matchQuality(value, needle, pinyin);
+		if (quality === 4) continue;
 		scored.push({ value, quality, score: usage?.score(value) ?? 0 });
 	}
 	scored.sort((a, b) => {

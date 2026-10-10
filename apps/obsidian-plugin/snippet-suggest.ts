@@ -8,10 +8,10 @@
  * the plugin's popovers is open (payee completion after `txn`), Tab stays
  * with that popover. The session is bound to the editor that expanded it.
  */
-import { EditorSelection, Prec } from '@codemirror/state';
+import { EditorSelection, Prec, Transaction } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
-import { keymap } from '@codemirror/view';
-import type { EditorView } from '@codemirror/view';
+import { keymap, ViewPlugin } from '@codemirror/view';
+import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { extractBeancountFences } from './fences';
@@ -23,10 +23,17 @@ interface SuggestState {
 	context: unknown;
 }
 
-/** Tab-stop session for one in-progress expansion. */
+/**
+ * Tab-stop session for one in-progress expansion.
+ *
+ * Stops are absolute document offsets, mapped through every edit the owning
+ * editor makes (`map`): typing in a stop grows it, and edits elsewhere —
+ * instant alignment rewriting a gap, another posting line — shift the stops
+ * after them. Undo and redo end the session: history restores a document
+ * the stops were not built for.
+ */
 export class SnippetSession {
-	private origin = 0;
-	private stops: TabStop[] = [];
+	private stops: Array<{ from: number; to: number }> = [];
 	private index = 0;
 	private owner: unknown = null;
 
@@ -36,8 +43,7 @@ export class SnippetSession {
 	}
 
 	start(origin: number, expansion: Expansion, owner: unknown = null): void {
-		this.origin = origin;
-		this.stops = expansion.stops.map((stop) => ({ ...stop }));
+		this.stops = expansion.stops.map((stop) => ({ from: origin + stop.from, to: origin + stop.to }));
 		this.index = 0;
 		this.owner = owner;
 	}
@@ -49,25 +55,16 @@ export class SnippetSession {
 	}
 
 	/**
-	 * Next stop after the one the cursor is finishing. Typing in the
-	 * current stop shifts later ranges by the extra (or missing) length.
-	 * A cursor that moved before the current stop ends the session. Tab in
-	 * a different editor is ignored and leaves this session intact.
+	 * Next stop after the one the cursor is finishing. A cursor that moved
+	 * before the current stop ends the session. Tab in a different editor
+	 * is ignored and leaves this session intact.
 	 */
 	advance(cursorOffset: number, owner: unknown = null): { from: number; to: number } | null {
 		if (this.index >= this.stops.length) return null;
 		if (this.owner != null && owner != null && owner !== this.owner) return null;
-		const current = this.stops[this.index];
-		const currentFrom = this.origin + current.from;
-		const currentTo = this.origin + current.to;
-		if (cursorOffset < currentFrom) {
+		if (cursorOffset < this.stops[this.index].from) {
 			this.clear();
 			return null;
-		}
-		const delta = cursorOffset - currentTo;
-		for (let i = this.index + 1; i < this.stops.length; i++) {
-			this.stops[i].from += delta;
-			this.stops[i].to += delta;
 		}
 		this.index += 1;
 		if (this.index >= this.stops.length) {
@@ -75,7 +72,27 @@ export class SnippetSession {
 			return null;
 		}
 		const next = this.stops[this.index];
-		return { from: this.origin + next.from, to: this.origin + next.to };
+		return { from: next.from, to: next.to };
+	}
+
+	/**
+	 * Follow one transaction of `editor`. `mapPos` is the transaction's
+	 * `ChangeDesc.mapPos`: a stop's start sticks before inserted text and
+	 * its end after it, so text typed at a zero-width stop lands inside.
+	 * Edits in a different editor are ignored, matching Tab.
+	 */
+	map(editor: unknown, userEvent: string | undefined, mapPos: (pos: number, assoc: number) => number): void {
+		if (!this.active) return;
+		if (this.owner != null && editor != null && editor !== this.owner) return;
+		if (userEvent === 'undo' || userEvent === 'redo') {
+			this.clear();
+			return;
+		}
+		for (let i = this.index; i < this.stops.length; i += 1) {
+			const stop = this.stops[i];
+			stop.from = mapPos(stop.from, -1);
+			stop.to = Math.max(stop.from, mapPos(stop.to, 1));
+		}
 	}
 }
 
@@ -134,6 +151,8 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 /**
  * Tab walks the active snippet's remaining stops. `Prec.high` so it is
  * asked first; returning false leaves Tab to completion popovers and indent.
+ * The same extension maps the stops through every transaction of the
+ * editor that owns the session, and ends it on undo/redo.
  */
 export function snippetTabExtension(session: SnippetSession, suggests: readonly SuggestState[]): Extension {
 	const run = (view: EditorView): boolean => {
@@ -157,7 +176,32 @@ export function snippetTabExtension(session: SnippetSession, suggests: readonly 
 		});
 		return true;
 	};
-	return Prec.high(keymap.of([{ key: 'Tab', run }]));
+	return [
+		Prec.high(keymap.of([{ key: 'Tab', run }])),
+		sessionGuard(session),
+	];
+}
+
+/**
+ * Feed the session every transaction of each editor; the session itself
+ * ignores editors it does not own. Registered with the Tab binding so the
+ * plugin does not install a second extension.
+ */
+function sessionGuard(session: SnippetSession): Extension {
+	return ViewPlugin.fromClass(
+		class {
+			update(update: ViewUpdate): void {
+				if (!session.active) return;
+				for (const tr of update.transactions) {
+					if (!tr.docChanged) continue;
+					const event = tr.annotation(Transaction.userEvent);
+					session.map(update.view, typeof event === 'string' ? event : undefined, (pos, assoc) =>
+						tr.changes.mapPos(pos, assoc)
+					);
+				}
+			}
+		}
+	);
 }
 
 /** Ledger files, or the body of a `beancount`/`bean` fence in markdown. */

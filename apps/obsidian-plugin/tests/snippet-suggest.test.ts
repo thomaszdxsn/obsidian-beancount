@@ -1,5 +1,6 @@
 import type { App, Editor, EditorSuggestContext, TFile } from 'obsidian';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Transaction } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
 import { extractPayees } from '../payee-index';
 import { PayeeSuggest } from '../payee-suggest';
@@ -206,22 +207,35 @@ describe('payee completion after txn', () => {
 type Run = (view: EditorView) => boolean;
 
 function tabRun(session: SnippetSession, suggests: Array<{ context: unknown }> = []): Run {
-	const extension = snippetTabExtension(session, suggests) as unknown as MockKeymapExtension;
-	return extension.bindings[0].run as unknown as Run;
+	const extension = snippetTabExtension(session, suggests);
+	const list = Array.isArray(extension) ? extension : [extension];
+	const keymap = list.find(
+		(item): item is MockKeymapExtension => typeof item === 'object' && item !== null && 'bindings' in item
+	);
+	if (!keymap) throw new Error('missing tab binding');
+	return keymap.bindings[0].run as unknown as Run;
 }
 
 describe('snippetTabExtension', () => {
-	it('jumps to the next stop and maps typing in the current one', () => {
+	it('jumps to the next stop after typing in the current one', () => {
 		const session = new SnippetSession();
-		session.start(0, {
-			text: '2026-10-04 * "" ""',
-			stops: [
-				{ index: 1, from: 14, to: 14 },
-				{ index: 2, from: 17, to: 17 },
-			],
-		});
-		const run = tabRun(session);
 		const view = createView('2026-10-04 * "Cafe" ""', [{ anchor: 18 }]);
+		session.start(
+			0,
+			{
+				text: '2026-10-04 * "" ""',
+				stops: [
+					{ index: 1, from: 14, to: 14 },
+					{ index: 2, from: 17, to: 17 },
+				],
+			},
+			view
+		);
+		const edit = guard(session);
+		for (const [at, ch] of [[14, 'C'], [15, 'a'], [16, 'f'], [17, 'e']] as const) {
+			edit(view, 'input.type', [{ from: at, to: at, insert: ch }]);
+		}
+		const run = tabRun(session);
 		expect(run(view as unknown as EditorView)).toBe(true);
 		expect(view.dispatched).toEqual([{ selection: { ranges: [{ anchor: 21, head: 21 }] } }]);
 	});
@@ -304,5 +318,104 @@ describe('snippetTabExtension', () => {
 		expect(run(view as unknown as EditorView)).toBe(false);
 		expect(view.dispatched).toEqual([]);
 		expect(session.active).toBe(true);
+	});
+});
+
+interface GuardPlugin {
+	cls: new (view: never) => { update(update: unknown): void };
+}
+
+interface Change {
+	from: number;
+	to: number;
+	insert: string;
+}
+
+/** `ChangeDesc.mapPos` for non-overlapping changes in pre-edit order. */
+function mapPos(changes: readonly Change[], pos: number, assoc: number): number {
+	let shift = 0;
+	for (const change of changes) {
+		if (pos < change.from || (pos === change.from && change.from === change.to && assoc < 0)) break;
+		if (pos <= change.to) return change.from + shift + (assoc < 0 && pos === change.from ? 0 : change.insert.length);
+		shift += change.insert.length - (change.to - change.from);
+	}
+	return pos + shift;
+}
+
+/** Drive the session guard the way CodeMirror reports one transaction. */
+function guard(session: SnippetSession): (view: unknown, userEvent: string | undefined, changes: Change[]) => void {
+	const extension = snippetTabExtension(session, []);
+	const list = Array.isArray(extension) ? extension : [extension];
+	const plugin = list.find((item): item is GuardPlugin => typeof item === 'object' && item !== null && 'cls' in item);
+	if (!plugin) throw new Error('missing session guard');
+	const instance = new plugin.cls({} as never);
+	return (view, userEvent, changes) =>
+		instance.update({
+			view,
+			transactions: [
+				{
+					docChanged: changes.length > 0,
+					annotation: (type: unknown) => (type === Transaction.userEvent ? userEvent : undefined),
+					changes: { mapPos: (pos: number, assoc: number) => mapPos(changes, pos, assoc) },
+				},
+			],
+		});
+}
+
+const TWO_STOPS = {
+	text: 'ab',
+	stops: [
+		{ index: 1, from: 1, to: 3 },
+		{ index: 2, from: 4, to: 6 },
+	],
+};
+
+describe('snippet session edits', () => {
+	const view = {};
+
+	it('ends the session on undo or redo', () => {
+		for (const userEvent of ['undo', 'redo']) {
+			const session = new SnippetSession();
+			session.start(0, TWO_STOPS, view);
+			guard(session)(view, userEvent, [{ from: 1, to: 3, insert: '' }]);
+			expect(session.active).toBe(false);
+		}
+	});
+
+	it('keeps a zero-width stop across several keystrokes and shifts the stops after it', () => {
+		const session = new SnippetSession();
+		session.start(0, { text: '"" ""', stops: [{ index: 1, from: 1, to: 1 }, { index: 2, from: 4, to: 4 }] }, view);
+		const edit = guard(session);
+		edit(view, 'input.type', [{ from: 1, to: 1, insert: 'a' }]);
+		edit(view, 'input.type', [{ from: 2, to: 2, insert: 'b' }]);
+		edit(view, 'input.type', [{ from: 3, to: 3, insert: 'c' }]);
+		expect(session.active).toBe(true);
+		expect(session.advance(4, view)).toEqual({ from: 7, to: 7 });
+	});
+
+	it('follows an edit before the stops, such as alignment widening a gap, and ignores one after them', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		const edit = guard(session);
+		edit(view, undefined, [{ from: 0, to: 0, insert: '    ' }]);
+		edit(view, undefined, [{ from: 20, to: 20, insert: 'tail' }]);
+		expect(session.advance(7, view)).toEqual({ from: 8, to: 10 });
+	});
+
+	it('collapses a selected placeholder that typing replaces and keeps the next stop', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		guard(session)(view, 'input.type', [{ from: 1, to: 3, insert: 'x' }]);
+		expect(session.advance(2, view)).toEqual({ from: 3, to: 5 });
+	});
+
+	it('ignores edits in a different editor', () => {
+		const session = new SnippetSession();
+		session.start(0, TWO_STOPS, view);
+		const edit = guard(session);
+		edit({}, 'undo', [{ from: 0, to: 1, insert: '' }]);
+		edit({}, undefined, [{ from: 0, to: 0, insert: 'zz' }]);
+		expect(session.active).toBe(true);
+		expect(session.advance(3, view)).toEqual({ from: 4, to: 6 });
 	});
 });

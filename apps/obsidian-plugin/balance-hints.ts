@@ -26,7 +26,7 @@ export interface BalanceHint {
 	label: string;
 }
 
-interface Qty {
+export interface Qty {
 	/** Signed integer, scaled by `10 ** scale`. Always a safe integer. */
 	units: number;
 	scale: number;
@@ -63,16 +63,16 @@ const MAX_SAFE = 9007199254740991;
 const FLAG_CHARS = '*!&#?%A-Z';
 const ACCOUNT_SRC = '[A-Z][a-z]+(?::[^\\s:]+)+';
 const NUMBER_SRC = '[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]*)?';
-const TXN_RE = new RegExp(
+export const TXN_RE = new RegExp(
 	'^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})[ \\t]*(?:txn|[' + FLAG_CHARS + '])(?![A-Za-z0-9])'
 );
 const DATED_RE = /^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})[ \t]+([a-z][a-z0-9]*)(?![A-Za-z0-9])(.*)$/;
-const ACCOUNT_EXACT = new RegExp('^' + ACCOUNT_SRC + '$');
+export const ACCOUNT_EXACT = new RegExp('^' + ACCOUNT_SRC + '$');
 const NUMBER_EXACT = new RegExp('^' + NUMBER_SRC + '$');
 const ACCOUNT_START = new RegExp('^' + ACCOUNT_SRC);
 const NUMBER_START = new RegExp('^' + NUMBER_SRC);
-const FLAG_EXACT = new RegExp('^[' + FLAG_CHARS + ']$');
-const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
+export const FLAG_EXACT = new RegExp('^[' + FLAG_CHARS + ']$');
+export const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
 
 /**
  * Dated keywords this module knows. Anything else dated is unsupported:
@@ -371,14 +371,14 @@ function readToken(text: string, i: number): { token: string; end: number } | nu
 	return { token: text.slice(i, end), end };
 }
 
-function commodityOf(token: string): { id: string } | null {
+export function commodityOf(token: string): { id: string } | null {
 	if (/^[A-Z][A-Z0-9'._-]*$/.test(token)) return { id: token };
 	if (/^"[^"\s]+"$/.test(token)) return { id: token.slice(1, -1) };
 	return null;
 }
 
 /** `null` when the token is not a plain decimal or the scaled integer overflows. */
-function toQty(token: string): Qty | null {
+export function toQty(token: string): Qty | null {
 	if (!NUMBER_EXACT.test(token)) return null;
 	let sign = 1;
 	let body = token;
@@ -403,7 +403,7 @@ function toQty(token: string): Qty | null {
 	return { units, scale: frac.length };
 }
 
-function add(a: Qty, b: Qty): Qty | null {
+export function add(a: Qty, b: Qty): Qty | null {
 	const scale = a.scale > b.scale ? a.scale : b.scale;
 	const left = rescale(a, scale);
 	const right = rescale(b, scale);
@@ -450,7 +450,7 @@ function stripCarriage(line: string): string {
 	return line.charAt(line.length - 1) === '\r' ? line.slice(0, -1) : line;
 }
 
-function stripComment(line: string): string {
+export function stripComment(line: string): string {
 	let quote = false;
 	for (let i = 0; i < line.length; i++) {
 		const ch = line.charAt(i);

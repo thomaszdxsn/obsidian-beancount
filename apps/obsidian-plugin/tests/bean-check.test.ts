@@ -210,7 +210,7 @@ describe('save-time validation end to end', () => {
 			const file = vault.write('main.bean', broken);
 			const editor = createEditor(broken.split('\n'));
 			const plugin = new BeancountPlugin(
-				{ vault: vault.api, workspace: { getLeavesOfType: () => [{ view: { file, editor } }], activeEditor: null } } as unknown as App,
+				{ vault: vault.api, workspace: { getLeavesOfType: () => [{ view: { file, editor } }], activeEditor: null, on: () => ({}) } } as unknown as App,
 				{ id: 'beancount-obsidian' } as PluginManifest
 			);
 			await plugin.onload();
@@ -263,7 +263,7 @@ describe('save-time validation end to end', () => {
 			const file = vault.write('note.md', note);
 			const editor = createEditor(note.split('\n'));
 			const plugin = new BeancountPlugin(
-				{ vault: vault.api, workspace: { getLeavesOfType: () => [{ view: { file, editor } }], activeEditor: null } } as unknown as App,
+				{ vault: vault.api, workspace: { getLeavesOfType: () => [{ view: { file, editor } }], activeEditor: null, on: () => ({}) } } as unknown as App,
 				{ id: 'beancount-obsidian' } as PluginManifest
 			);
 			await plugin.onload();

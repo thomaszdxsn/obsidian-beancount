@@ -47,10 +47,13 @@ Configured in **Settings → Beancount**. Keys match `data.json`.
 | Align amounts on save | `alignOnSave` | off | Re-align posting amounts whenever a markdown or beancount file is saved (debounced). |
 | Instant alignment | `instantAlignment` | on | Typing `.` in a posting amount aligns that transaction block and leaves the caret after the point. |
 | Separator column | `separatorColumn` | `50` | 1-based display column of the decimal point for instant alignment (wide accounts still push past it). |
+| Show separator ruler | `showRuler` | on | Dotted vertical line at the separator column in `.bean` / `.beancount` files. |
 | Bean-check executable | `beanCheckPath` | empty | Path to `bean-check`; empty runs `bean-check` from `PATH`. |
 | Entry ledger | `entryLedger` | empty | Vault path of the ledger entry file (e.g. `main.bean`). |
 | Complete payees | `completePayee` | on | Suggest historical payees in the first quoted field. |
+| Autofill payee postings | `payeeAutofill` | on | Picking a payee on an entry with no postings yet inserts the postings of that payee's latest transaction, amounts as Tab stops. |
 | Complete narrations | `completeNarration` | off | Suggest vault narrations in the second quoted field. |
+| Pinyin initials matching | `pinyinMatching` | off | Also match completions by pinyin initials (`cy` → `餐饮`, `Expenses:cy` → `Expenses:餐饮`). |
 | Fava executable | `favaPath` | empty | Path to `fava`; empty runs `fava` from `PATH`. Only a program named `fava` is accepted. |
 | Fava port | `favaPort` | `5000` | TCP port Fava binds on `127.0.0.1` (`-p`). |
 | Run Fava on activate | `runFavaOnActivate` | off | Start Fava against the entry ledger (or the active ledger file) when the plugin loads. |
@@ -79,6 +82,7 @@ A missing or rejected `bean-check` shows:
 | Align decimal points | Current transaction block, or the selection when there is one. Default hotkey `Mod+Shift+.` (Obsidian has no default for that chord). |
 | Insert today's date | `YYYY-MM-DD` at the cursor. Default hotkey `Mod+Shift+D`. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
+| Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
 | Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
 | Stop Fava | Kills the Fava process started by this plugin. |
 
@@ -92,6 +96,15 @@ A missing or rejected `bean-check` shows:
   `;#region` / `;#endregion` fold. Matching-bracket highlight is not
   available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
   has no inner bracket nodes.
+- **Ledger files**: `.bean` / `.beancount` files open in the markdown editor
+  but are painted whole with the same beancount mode, in the monospace font,
+  with markdown presentation reset (headings, tag pills, emphasis, links, list
+  hanging indent; the org `*` shows as text). Live Preview widgets that
+  replace text (embeds, checkboxes) can still render; Source mode avoids them.
+  A dotted ruler marks the separator column (`showRuler`).
+- **Include links**: Mod-click the quoted path of `include "…"` (ledger files
+  and fences) to open it; paths resolve relative to the including file, a
+  glob opens its first match, a missing target raises a Notice.
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault's ledger text:
   whole `.bean` / `.beancount` files, and only the `beancount` / `bean` fences
@@ -120,7 +133,22 @@ A missing or rejected `bean-check` shows:
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. Ranking matches account completion
   (prefix, then subsequence, then frecency). One vault scan feeds both
-  completion indexes.
+  completion indexes. Picking a payee closes an unclosed payee field. With
+  `payeeAutofill` on, picking a payee on an entry
+  that has no postings yet inserts the postings of that payee's latest
+  transaction; a two-leg entry keeps one amount and leaves the other leg
+  implicit, and each amount is a Tab stop with the first one selected.
+- **Pinyin matching**: with `pinyinMatching` on, an ASCII query also matches
+  the pinyin initials of CJK names in account, payee and narration completion
+  (`Expenses:cy` → `Expenses:餐饮`), ranked direct prefix, pinyin prefix,
+  direct subsequence, pinyin subsequence. Initials data comes from
+  vscode-beancount (MIT).
+- **Posting hints**: with inlay hints on, the one posting that omits its amount
+  shows the amount beancount will infer (only for 3+ postings or several
+  commodities), aligned on the decimal point; a transaction whose written
+  amounts do not sum to zero beyond beancount's default tolerance (half a unit
+  of the coarsest written precision) shows `≠ 0: …` on its header. Cost,
+  price and arithmetic suppress both.
 - **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
   `balance`, …) offers the vscode-beancount templates. `txn` expands to
   `YYYY-MM-DD * "" ""` with the caret in the payee quotes, so payee completion
@@ -160,7 +188,8 @@ A missing or rejected `bean-check` shows:
   (or note's fences) is validated on its own. Unloading the plugin cancels
   pending timers and drops in-flight `bean-check` results: they do not mark
   the editor or raise a Notice. The process is not killed; only the report
-  is discarded.
+  is discarded. Opening a ledger file, or a note with beancount fences,
+  validates it too, unless its target has not changed since the last report.
 - **Outline**: the "Show outline" command opens a sidebar of the active
   ledger. Org-mode `*` section titles nest the same way vscode-beancount's
   DocumentSymbolProvider does (including `_` fillers for skipped levels).

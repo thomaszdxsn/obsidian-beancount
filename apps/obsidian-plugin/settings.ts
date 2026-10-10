@@ -18,6 +18,8 @@ export interface BeancountSettings {
 	 * Matches vscode-beancount `beancount.separatorColumn`.
 	 */
 	separatorColumn: number;
+	/** Dotted vertical line at `separatorColumn` in `.bean` / `.beancount` files. */
+	showRuler: boolean;
 	/** Path to the bean-check executable; empty takes `bean-check` from PATH. */
 	beanCheckPath: string;
 	/** Vault path of the ledger entry file; empty validates each saved file alone. */
@@ -29,8 +31,18 @@ export interface BeancountSettings {
 	inlayHints: boolean;
 	/** Complete the first quoted field of a transaction (payee). */
 	completePayee: boolean;
+	/**
+	 * After picking a payee, insert the postings of that payee's most recent
+	 * transaction when the entry has none yet. Amounts become Tab stops.
+	 */
+	payeeAutofill: boolean;
 	/** Complete the narration field of a transaction (second quoted string). */
 	completeNarration: boolean;
+	/**
+	 * Match payees, narrations and accounts by pinyin initials (`餐饮` from
+	 * `cy`). Off leaves ranking as direct prefix, then subsequence.
+	 */
+	pinyinMatching: boolean;
 	/** Path to the Fava executable; empty takes `fava` from PATH. */
 	favaPath: string;
 	/** TCP port Fava binds (`-p`); default 5000. */
@@ -48,11 +60,14 @@ export const DEFAULT_SETTINGS: BeancountSettings = {
 	alignOnSave: false,
 	instantAlignment: true,
 	separatorColumn: 50,
+	showRuler: true,
 	beanCheckPath: '',
 	entryLedger: '',
 	inlayHints: true,
 	completePayee: true,
 	completeNarration: false,
+	payeeAutofill: true,
+	pinyinMatching: false,
 	favaPath: '',
 	favaPort: DEFAULT_FAVA_PORT,
 	runFavaOnActivate: false,
@@ -140,6 +155,15 @@ export class BeancountSettingTab extends PluginSettingTab {
 						await this.host.saveSettings();
 					})
 			);
+		new Setting(containerEl)
+			.setName('Show separator ruler')
+			.setDesc('Draw a dotted vertical line at the separator column in .bean and .beancount files.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.showRuler).onChange(async (value) => {
+					this.host.settings.showRuler = value;
+					await this.host.saveSettings();
+				})
+			);
 
 		new Setting(containerEl).setName('Validation').setHeading();
 		new Setting(containerEl)
@@ -195,6 +219,17 @@ export class BeancountSettingTab extends PluginSettingTab {
 				})
 			);
 		new Setting(containerEl)
+			.setName('Autofill payee postings')
+			.setDesc(
+				'Picking a payee inserts the postings of that payee\'s most recent transaction when the entry has none yet. Amounts are selected so the next numbers can be typed; Tab moves between them.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.payeeAutofill).onChange(async (value) => {
+					this.host.settings.payeeAutofill = value;
+					await this.host.saveSettings();
+				})
+			);
+		new Setting(containerEl)
 			.setName('Complete narrations')
 			.setDesc(
 				'Typing the second quoted field of a transaction line ("payee" "na…) suggests narrations found in the vault, and picking one closes the field.'
@@ -202,6 +237,17 @@ export class BeancountSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.host.settings.completeNarration).onChange(async (value) => {
 					this.host.settings.completeNarration = value;
+					await this.host.saveSettings();
+				})
+			);
+		new Setting(containerEl)
+			.setName('Pinyin initials matching')
+			.setDesc(
+				'Also match payees, narrations and accounts by pinyin initials: `餐饮` completes from `cy`, and `Expenses:餐饮` from `Expenses:cy`. Direct matches still rank first.'
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.host.settings.pinyinMatching).onChange(async (value) => {
+					this.host.settings.pinyinMatching = value;
 					await this.host.saveSettings();
 				})
 			);

@@ -54,6 +54,11 @@ export const EditorSelection = {
 	create: (ranges: MockCaret[]): { ranges: MockCaret[] } => ({ ranges }),
 };
 
+/** Annotation key the snippet session reads to notice undo and redo. */
+export const Transaction = {
+	userEvent: {},
+};
+
 export interface MockDispatchSpec {
 	changes: Array<{ from: number; to: number; insert: string }>;
 	selection: { ranges: MockCaret[] };

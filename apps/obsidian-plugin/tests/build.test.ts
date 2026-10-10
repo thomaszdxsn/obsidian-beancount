@@ -68,7 +68,7 @@ describe('esbuild production bundle', () => {
 			expect(LoadedPlugin).toBeTypeOf('function');
 			expect(LoadedPlugin.prototype).toBeInstanceOf(obsidian.Plugin);
 
-			const instance = new LoadedPlugin({ vault: new FakeVault().api } as unknown as App, {
+			const instance = new LoadedPlugin({ vault: new FakeVault().api, workspace: { on: () => ({}) } } as unknown as App, {
 				id: 'beancount-obsidian',
 			} as PluginManifest);
 			await instance.onload();
