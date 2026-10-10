@@ -124,6 +124,13 @@ describe('transactionFoldAt', () => {
 	it('offers no fold while a string is left open to the end', () => {
 		expect(folded('2026-01-05 * "x"\n  memo: "open\n  Assets:Cash  1 USD\n', 1)).toBeNull();
 	});
+
+	it('folds an entry of up to 300 lines and gives no partial fold to a longer one', () => {
+		const entry = (postings: number) =>
+			['2026-01-05 * "big"', ...Array.from({ length: postings }, (_, i) => `  Assets:A${i}  1 USD`), '  Income:Job'].join('\n');
+		expect(folded(entry(298), 1)?.split('\n')).toHaveLength(300);
+		expect(folded(entry(299), 1)).toBeNull();
+	});
 });
 
 describe('transactionFoldInState', () => {

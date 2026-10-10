@@ -36,8 +36,11 @@ const ATTACHED_LINE = /^[ \t]+\S/;
 
 /** Entries cached; oldest dropped first. Enough for a large ledger's visible span and edits. */
 const CACHE_LIMIT = 5000;
-/** An entry is never longer; an unclosed string stops scanning here instead of reading the whole file. */
-const MAX_ENTRY_LINES = 1000;
+/**
+ * Longer entries get no fold: parsing one costs ~0.1 ms per line on every
+ * edit while its header is visible, and each cached key holds the whole text.
+ */
+const MAX_ENTRY_LINES = 300;
 
 /**
  * Entry text → how many lines after the header the fold hides, or null when
@@ -121,10 +124,12 @@ export function transactionFoldAt(
 	const entry = [header];
 	let inString = stringOpenAfter(header, false);
 	let end = lineNumber;
-	while (end < lastLine && entry.length < MAX_ENTRY_LINES) {
+	while (end < lastLine) {
 		const text = textOf(end + 1);
 		// A multi-line string carries on through blank and column-0 lines.
 		if (!inString && !ATTACHED_LINE.test(text)) break;
+		// Too long to parse on every edit; a truncated parse would fold a wrong extent.
+		if (entry.length === MAX_ENTRY_LINES) return null;
 		entry.push(text);
 		inString = stringOpenAfter(text, inString);
 		end += 1;
