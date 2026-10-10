@@ -96,12 +96,6 @@ describe('mergeSettings', () => {
 });
 
 describe('issue 29 commands and Fava', () => {
-	it('registers align-decimal-points with Mod+Shift+.', async () => {
-		const plugin = await loadPlugin();
-		const command = plugin.registrations.commands.find((entry) => entry.id === 'align-decimal-points');
-		expect(command?.hotkeys).toEqual([{ modifiers: ['Mod', 'Shift'], key: '.' }]);
-	});
-
 	it('starts Fava against the entry ledger and announces the URL', async () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', 'option "title" "Main"\n');

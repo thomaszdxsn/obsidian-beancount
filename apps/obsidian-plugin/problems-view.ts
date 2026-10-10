@@ -54,13 +54,13 @@ export async function revealProblemsView(app: App): Promise<void> {
 	const { workspace } = app;
 	const existing = workspace.getLeavesOfType(VIEW_TYPE_PROBLEMS)[0];
 	if (existing) {
-		workspace.revealLeaf(existing);
+		await workspace.revealLeaf(existing);
 		return;
 	}
 	const leaf = workspace.getRightLeaf(false);
 	if (!leaf) return;
 	await leaf.setViewState({ type: VIEW_TYPE_PROBLEMS, active: true });
-	workspace.revealLeaf(leaf);
+	await workspace.revealLeaf(leaf);
 }
 
 /**

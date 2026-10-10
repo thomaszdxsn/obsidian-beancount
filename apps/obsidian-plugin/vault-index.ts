@@ -43,12 +43,9 @@ interface VaultEntry {
  * completion scans them for names, alignment rewrites their postings.
  */
 export function isTextFile(file: VaultEntry): file is TFile {
-	// Own-property check: `in` would treat `constructor`/`toString` file
-	// extensions as text via the prototype chain.
-	return (
-		typeof file.extension === 'string' &&
-		Object.prototype.hasOwnProperty.call(TEXT_EXTENSIONS, file.extension)
-	);
+	// `=== true`, not truthiness: inherited keys such as `constructor` or
+	// `toString` resolve to functions on the prototype chain.
+	return typeof file.extension === 'string' && TEXT_EXTENSIONS[file.extension] === true;
 }
 
 /**
@@ -56,10 +53,7 @@ export function isTextFile(file: VaultEntry): file is TFile {
  * only files whose saves are worth validating.
  */
 export function isLedgerFile(file: VaultEntry): file is TFile {
-	return (
-		typeof file.extension === 'string' &&
-		Object.prototype.hasOwnProperty.call(LEDGER_EXTENSIONS, file.extension)
-	);
+	return typeof file.extension === 'string' && LEDGER_EXTENSIONS[file.extension] === true;
 }
 
 /** Per-file cache `registerVaultIndex` keeps in sync with vault events. */

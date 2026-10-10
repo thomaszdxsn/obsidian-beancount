@@ -16,7 +16,7 @@ import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { extractBeancountFences } from './fences';
 import { expandSnippet, matchSnippets, SNIPPETS } from './snippets';
-import type { Expansion, Snippet, TabStop } from './snippets';
+import type { Expansion, Snippet } from './snippets';
 
 /** A completion popover whose open state decides who owns Tab. */
 interface SuggestState {

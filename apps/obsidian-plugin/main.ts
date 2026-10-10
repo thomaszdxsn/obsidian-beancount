@@ -452,17 +452,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
 			editorCallback: alignCommand,
-			// Instant alignment covers typing `.`; this chord is the command
-			// until then. Obsidian has no default Mod+Shift+. binding.
-			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: '.' }],
 		});
 		this.addCommand({
 			id: 'insert-today-date',
 			name: 'Insert today\'s date',
 			editorCallback: insertTodayDate,
-			// A default hotkey so the date is one chord away while typing; a
-			// customized binding for this command wins over the default.
-			hotkeys: [{ modifiers: ['Mod', 'Shift'], key: 'D' }],
 		});
 		// Ledger files have no markdown headings, so Obsidian's Outline pane
 		// stays empty; this view is the jumpable txn/heading tree.

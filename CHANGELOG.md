@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.0.1-alpha
+## 0.1.0
 
-Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
+First community plugin release (`beancount`).
 
 ### Added
 
@@ -18,9 +18,9 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   column 0 to expand; `txn` → `YYYY-MM-DD * "" ""` with the caret in the payee
   field. Tab walks `$n` stops; dates resolve to today.
 - Posting auto-indent on Enter inside a beancount entry.
-- **Align decimal points** command (default `Mod+Shift+.`); optional `alignOnSave`; instant
+- **Align decimal points** command; optional `alignOnSave`; instant
   alignment when typing `.` (`instantAlignment`, `separatorColumn`).
-- **Insert today's date** (`YYYY-MM-DD`, default `Mod+Shift+D`).
+- **Insert today's date** (`YYYY-MM-DD`).
 - Save-time `bean-check` diagnostics (inline + gutter) for `.bean` /
   `.beancount` files and markdown fences. Settings: `beanCheckPath`,
   `entryLedger`. Requires `pip install beancount`.

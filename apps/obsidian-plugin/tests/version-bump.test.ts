@@ -1,25 +1,30 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const packageDir = fileURLToPath(new URL('..', import.meta.url));
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 describe('version-bump.mjs (release flow invoked by `npm version`)', () => {
-	it('writes the target version into manifest.json and registers minAppVersion in versions.json', () => {
+	it('writes the target version into the root manifest.json and registers minAppVersion in versions.json', () => {
 		const workDir = mkdtempSync(join(tmpdir(), 'version-bump-'));
 		try {
-			copyFileSync(join(packageDir, 'version-bump.mjs'), join(workDir, 'version-bump.mjs'));
-			copyFileSync(join(packageDir, 'manifest.json'), join(workDir, 'manifest.json'));
-			copyFileSync(join(packageDir, 'versions.json'), join(workDir, 'versions.json'));
+			// Same layout as the repo: the script lives two levels below the
+			// root that holds manifest.json / versions.json.
+			const scriptDir = join(workDir, 'apps', 'obsidian-plugin');
+			mkdirSync(scriptDir, { recursive: true });
+			copyFileSync(join(packageDir, 'version-bump.mjs'), join(scriptDir, 'version-bump.mjs'));
+			copyFileSync(join(repoRoot, 'manifest.json'), join(workDir, 'manifest.json'));
+			copyFileSync(join(repoRoot, 'versions.json'), join(workDir, 'versions.json'));
 
 			const manifestBefore = JSON.parse(readFileSync(join(workDir, 'manifest.json'), 'utf8'));
 			const versionsBefore = JSON.parse(readFileSync(join(workDir, 'versions.json'), 'utf8')) as Record<string, string>;
 
 			execFileSync(process.execPath, ['version-bump.mjs'], {
-				cwd: workDir,
+				cwd: scriptDir,
 				env: { ...process.env, npm_package_version: '1.2.3' },
 				stdio: 'pipe',
 			});

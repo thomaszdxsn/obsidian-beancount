@@ -7,11 +7,12 @@ save.
 
 Desktop only — validation shells out to the `bean-check` executable.
 
-Plugin id: `beancount-obsidian`. Source: `apps/obsidian-plugin`.
+Plugin id: `beancount`. Source: `apps/obsidian-plugin`; `manifest.json` and
+`versions.json` live at the repository root.
 
 ## Requirements
 
-- Obsidian desktop (`minAppVersion` 0.15.0).
+- Obsidian desktop 1.7.2 or later (`minAppVersion`).
 - For save-time validation: Beancount's `bean-check`:
 
   ```sh
@@ -79,8 +80,8 @@ A missing or rejected `bean-check` shows:
 
 | Command | Notes |
 | --- | --- |
-| Align decimal points | Current transaction block, or the selection when there is one. Default hotkey `Mod+Shift+.` (Obsidian has no default for that chord). |
-| Insert today's date | `YYYY-MM-DD` at the cursor. Default hotkey `Mod+Shift+D`. |
+| Align decimal points | Current transaction block, or the selection when there is one. No default hotkey; bind one under Settings → Hotkeys. |
+| Insert today's date | `YYYY-MM-DD` at the cursor. No default hotkey; bind one under Settings → Hotkeys. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
 | Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
 | Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
@@ -171,8 +172,8 @@ A missing or rejected `bean-check` shows:
   monospace font (`--font-monospace`); fences are already code blocks.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
-  selection when there is one. It ships with the default hotkey `Mod+Shift+D`;
-  a hotkey customized for this command wins over the default.
+  selection when there is one. It has no default hotkey; bind one under
+  Settings → Hotkeys.
 - **Save-time validation**: saving a `.bean` or `.beancount` file runs
   `bean-check` (debounced) and marks every line it complains about — a wavy
   underline whose tooltip is the message, plus a dot in the gutter. The
@@ -198,10 +199,13 @@ A missing or rejected `bean-check` shows:
 
 ## Install
 
-Copy `apps/obsidian-plugin/main.js`, `manifest.json`, and `styles.css` into:
+Install **Beancount** from Settings → Community plugins, or copy
+`apps/obsidian-plugin/main.js`, the root `manifest.json`, and
+`apps/obsidian-plugin/styles.css` (all three are attached to each GitHub
+release) into:
 
 ```
-<Vault>/.obsidian/plugins/beancount-obsidian/
+<Vault>/.obsidian/plugins/beancount/
 ```
 
 Enable **Beancount** under Settings → Community plugins.
@@ -218,7 +222,19 @@ pnpm dev     # watch mode
 ```
 
 Set `ESBUILD_OUTFILE` to write the bundle into a test vault's
-`.obsidian/plugins/beancount-obsidian/main.js`; copy `manifest.json` and
-`styles.css` next to it.
+`.obsidian/plugins/beancount/main.js`; copy the root `manifest.json` and
+`apps/obsidian-plugin/styles.css` next to it.
 
-See [CHANGELOG.md](./CHANGELOG.md) for the `0.0.1-alpha` notes.
+## Release
+
+From `apps/obsidian-plugin`, `npm version <x.y.z>` bumps `package.json` and
+writes the version into the root `manifest.json` / `versions.json`. Push a tag
+equal to that version (no `v` prefix); `.github/workflows/release.yml` builds,
+tests, and drafts a GitHub release with `main.js`, `manifest.json`, and
+`styles.css`. Publish the draft to ship it.
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes.
+
+## License
+
+[MIT](./LICENSE)

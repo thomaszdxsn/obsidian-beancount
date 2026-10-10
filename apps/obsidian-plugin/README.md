@@ -2,7 +2,7 @@
 
 User-facing documentation lives in the repository
 [README](../../README.md). This package is `apps/obsidian-plugin`
-(`manifest.json` id `beancount-obsidian`, version `0.0.1-alpha`).
+(plugin id `beancount`; `manifest.json` lives at the repository root).
 
 Desktop only: save-time validation runs `bean-check`. Install Beancount
 first:
@@ -122,8 +122,8 @@ pip install beancount
   monospace font (`--font-monospace`); fences are already code blocks.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
-  selection when there is one. It ships with the default hotkey `Mod+Shift+D`;
-  a hotkey customized for this command wins over the default.
+  selection when there is one. It has no default hotkey; bind one under
+  Settings → Hotkeys.
 - **Save-time validation**: saving a `.bean` or `.beancount` file runs
   `bean-check` (debounced) and marks every line it complains about — a wavy
   underline whose tooltip is the message, plus a dot in the gutter. The
