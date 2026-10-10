@@ -2,15 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { BeancountParser, BeancountSyntaxError } from "../src";
 import {
   Amount,
+  Balance,
+  Close,
+  Commodity,
   Cost,
   Custom,
   Document,
   Event,
   IncompleteAmount,
   Include,
+  Note,
   Open,
   Option,
   Pad,
+  Price,
   Plugin,
   PriceAnnotation,
   Query,
@@ -67,6 +72,16 @@ describe("transaction header", () => {
   test("string escapes are decoded", () => {
     const txn = only<Transaction>('2022-01-01 * "a\\tb\\nc\\\\d\\"e\\ff\\bg\\qh"\n');
     expect(txn.narration).toBe('a\tb\nc\\d"e\ff\bgqh');
+  });
+});
+
+describe("postings", () => {
+  test("keep account, flag and source order", () => {
+    const txn = only<Transaction>('2022-01-01 * "x"\n  Assets:A  -1 USD\n  ! Expenses:B\n');
+    expect(txn.postings.map((p) => [p.account, p.flag])).toEqual([
+      ["Assets:A", undefined],
+      ["Expenses:B", "!"],
+    ]);
   });
 });
 
@@ -138,21 +153,31 @@ describe("metadata values", () => {
 });
 
 describe("other directives", () => {
-  test("open with booking method", () => {
-    const open = only<Open>('2022-01-01 open Assets:A USD "STRICT"\n');
-    expect([open.currencies, open.booking]).toEqual([["USD"], "STRICT"]);
-  });
-
-  test("open without currencies", () => {
-    const open = only<Open>("2022-01-01 open Assets:A\n");
-    expect([open.currencies, open.booking]).toEqual([[], undefined]);
-  });
-
-  test("pad", () => {
-    expect(only<Pad>("2022-01-01 pad Assets:A Equity:B\n")).toMatchObject({
-      account: "Assets:A",
-      sourceAccount: "Equity:B",
-    });
+  test.each([
+    [
+      "open with several currencies",
+      "2022-01-01 open Assets:A USD,EUR",
+      Open,
+      { account: "Assets:A", currencies: ["USD", "EUR"], booking: undefined },
+    ],
+    ["open with booking method", '2022-01-01 open Assets:A USD "STRICT"', Open, { currencies: ["USD"], booking: "STRICT" }],
+    ["open without currencies", "2022-01-01 open Assets:A", Open, { currencies: [], booking: undefined }],
+    ["close", "2022-01-01 close Assets:A", Close, { account: "Assets:A" }],
+    ["pad", "2022-01-01 pad Assets:A Equity:B", Pad, { account: "Assets:A", sourceAccount: "Equity:B" }],
+    ["note", '2022-01-01 note Assets:A "call"', Note, { account: "Assets:A", comment: "call", tags: [], links: [] }],
+    ["note with tags and links", '2022-01-01 note Assets:A "call" #t ^l', Note, { tags: ["t"], links: ["l"] }],
+    ["price", "2022-01-01 price EUR 1.08 USD", Price, { currency: "EUR", amount: new Amount(1.08, "USD") }],
+    ["commodity", "2022-01-01 commodity USD", Commodity, { currency: "USD" }],
+    [
+      "balance",
+      "2022-01-01 balance Assets:A 1.5 USD",
+      Balance,
+      { account: "Assets:A", amount: new Amount(1.5, "USD"), tolerance: undefined },
+    ],
+  ] as const)("%s", (_name, input, cls, fields) => {
+    const directive = only<object>(`${input}\n`);
+    expect(directive).toBeInstanceOf(cls);
+    expect(directive).toMatchObject(fields);
   });
 
   test("document with tags and links", () => {
