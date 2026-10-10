@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Format ledger** command: normalizes posting and metadata indents, collapses
+  header whitespace (leaving strings and `;` comments intact), strips trailing
+  whitespace, and aligns decimal points. A `.bean` / `.beancount` file is one
+  ledger; a markdown note formats each ```beancount / ```bean fence. A syntax
+  error names the document line and changes nothing.
+
 ## 0.1.1
 
 Clears the community directory's automated review findings.

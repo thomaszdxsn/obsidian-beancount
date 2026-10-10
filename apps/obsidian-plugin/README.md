@@ -120,6 +120,13 @@ pip install beancount
   leaves the caret just after the point — one undo restores the insert.
   Alignment pads with spaces, so `.bean` / `.beancount` editors switch to the
   monospace font (`--font-monospace`); fences are already code blocks.
+- **Format ledger**: the "Format ledger" command rewrites a `.bean` /
+  `.beancount` file, or each ```beancount / ```bean fence in a markdown note,
+  in one undo step. Postings and directive metadata use the two-space indent;
+  posting metadata is indented one level further. Header lines collapse runs
+  of spaces, strings and `;` comments keep their text, and each transaction's
+  decimal points are aligned. A syntax error raises a Notice with the document
+  line and changes nothing.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
   selection when there is one. It has no default hotkey; bind one under

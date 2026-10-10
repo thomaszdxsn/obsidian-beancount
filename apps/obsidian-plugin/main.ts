@@ -6,6 +6,7 @@ import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { alignText, blockRangeAt, computeAlignment } from './align';
+import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
 import { AccountIndex } from './account-index';
@@ -280,6 +281,45 @@ function alignInEditor(editor: Editor, scope?: LineRange): void {
 function alignCommand(editor: Editor): void {
 	alignInEditor(editor, commandScope(editor, editorLines(editor)));
 }
+/**
+ * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger; a markdown
+ * note formats each ```beancount / ```bean fence and leaves the prose. A
+ * syntax error names the document line and changes nothing. No notice when
+ * the text is already formatted — same as alignment finding nothing to do.
+ */
+function formatInEditor(editor: Editor, file: { extension: string } | null): void {
+	const result =
+		file && file.extension === 'md' ? formatFencedDocument(editor.getValue()) : formatLedger(editor.getValue());
+	if (!result.ok) {
+		new Notice(formatErrorNotice(result.error));
+		return;
+	}
+	const before = editor.getValue();
+	const edits = lineChanges(before, result.text);
+	if (edits.length === 0) return;
+	const changes = edits.map((edit) => ({
+		from: { line: edit.fromLine, ch: edit.fromCh },
+		to: { line: edit.toLine, ch: edit.toCh },
+		text: edit.text,
+	}));
+	// One transaction, and the same lone-caret mapping as decimal alignment:
+	// a caret inside a rewritten span lands at the end of the replacement,
+	// one past it shifts by the length delta, and a selection is left to the
+	// editor so it is not collapsed.
+	const carets = editor.listSelections();
+	if (carets.length !== 1 || editor.somethingSelected()) {
+		editor.transaction({ changes });
+		return;
+	}
+	const caret = editor.getCursor();
+	let ch = caret.ch;
+	for (const edit of edits) {
+		if (edit.fromLine !== caret.line) continue;
+		if (ch >= edit.toCh) ch += edit.text.length - (edit.toCh - edit.fromCh);
+		else if (ch > edit.fromCh) ch = edit.fromCh + edit.text.length;
+	}
+	editor.transaction({ changes, selection: { from: { line: caret.line, ch } } });
+}
 
 function applyEditorEdit(editor: Editor, edit: TextEdit): void {
 	editor.transaction({
@@ -452,6 +492,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
 			editorCallback: alignCommand,
+		});
+		this.addCommand({
+			id: 'format-ledger',
+			name: 'Format ledger',
+			editorCallback: (editor, ctx) => formatInEditor(editor, ctx.file),
 		});
 		this.addCommand({
 			id: 'insert-today-date',
