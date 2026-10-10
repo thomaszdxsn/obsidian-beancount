@@ -21,6 +21,19 @@ pip install beancount
   `;#region` / `;#endregion` fold. Matching-bracket highlight is not
   available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
   has no inner bracket nodes.
+- **Ledger files**: `.bean` / `.beancount` files open in the markdown editor
+  but are painted whole with the same beancount mode, in the monospace font,
+  with markdown presentation reset (headings, tag pills, emphasis, links, list
+  hanging indent; the org `*` shows as text). Live Preview widgets that
+  replace text (embeds, checkboxes) can still render; Source mode avoids
+  them. A dotted ruler marks the separator column (**Show separator ruler**).
+- **Include links**: Mod-click the quoted path of `include "…"` (ledger files
+  and fences) to open it, relative to the including file; a glob opens its
+  first match; a missing target raises a Notice.
+- **Pinyin matching** (off by default): with **Pinyin initials matching**, an
+  ASCII query also matches the pinyin initials of CJK names in account,
+  payee and narration completion (`Expenses:cy` → `Expenses:餐饮`). Initials
+  data comes from vscode-beancount (MIT).
 - **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
   editor suggests still-open account names found in the vault's ledger text:
   whole `.bean` / `.beancount` files, and only the `beancount` / `bean` fences
@@ -59,10 +72,20 @@ pip install beancount
   or a configured entry ledger disable this local calculation. The displayed
   delta is not a tolerance-aware validation verdict; `bean-check` remains
   authoritative.
+- **Posting hints** (same toggle): the one posting that omits its amount
+  shows the amount beancount will infer (3+ postings or several
+  commodities), aligned on the decimal point; a transaction whose written
+  amounts do not sum to zero beyond beancount's default tolerance (half a
+  unit of the coarsest written precision) shows `≠ 0: …` on its header. Cost,
+  price and arithmetic suppress both; the entry ledger does not.
 - **Payee completion**: typing the first quoted field of a transaction line
   (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
   of every historical transaction. One vault scan feeds both completion
-  indexes. Turn it off with **Complete payees**.
+  indexes. Turn it off with **Complete payees**. Picking a payee closes an
+  unclosed payee field. With **Autofill payee postings** (on), picking a
+  payee on an entry with no postings yet inserts the postings of that
+  payee's latest transaction; a two-leg entry keeps one amount and leaves
+  the other leg implicit, each amount a Tab stop with the first selected.
 - **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
   `balance`, …) in a `.bean` / `.beancount` file or a `beancount`/`bean` fence
   offers the vscode-beancount templates. `txn` expands to `YYYY-MM-DD * "" ""`
@@ -116,7 +139,11 @@ pip install beancount
   (or note's fences) is validated on its own. Unloading the plugin cancels
   pending timers and drops in-flight `bean-check` results: they do not mark
   the editor or raise a Notice. The process is not killed; only the report
-  is discarded.
+  is discarded. Opening a ledger file, or a note with beancount fences,
+  validates it too unless its target is unchanged since the last report (the
+  stored markers are reapplied instead). **Show problems** opens a sidebar
+  of the latest report grouped by file — include-chain files that are not
+  open and `<load>` errors included; clicking a vault row jumps to the line.
 - **QuickFix**: clicking a diagnostic gutter dot opens the fixes that line
   can take. `Flag as okay` turns a header `!` into `*` (or deletes a posting's
   leading flag). An unbalanced one-leg, one-commodity transaction can insert
@@ -151,10 +178,13 @@ as the language. Saving a note extracts those bodies for `bean-check`.
 | Align amounts on save | `alignOnSave` | `false` |
 | Instant alignment | `instantAlignment` | `true` |
 | Separator column | `separatorColumn` | `50` |
+| Show separator ruler | `showRuler` | `true` |
 | Bean-check executable | `beanCheckPath` | `""` (PATH) |
 | Entry ledger | `entryLedger` | `""` (check the saved file / fences alone) |
 | Complete payees | `completePayee` | `true` |
+| Autofill payee postings | `payeeAutofill` | `true` |
 | Complete narrations | `completeNarration` | `false` |
+| Pinyin initials matching | `pinyinMatching` | `false` |
 | Fava executable | `favaPath` | `""` (PATH) |
 | Fava port | `favaPort` | `5000` |
 | Run Fava on activate | `runFavaOnActivate` | `false` |

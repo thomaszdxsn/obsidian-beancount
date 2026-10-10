@@ -68,7 +68,7 @@ async function loadPlugin(
 	const plugin = new BeancountPlugin(
 		{
 			vault: vault.api,
-			workspace: { getLeavesOfType: () => leaves, activeEditor },
+			workspace: { getLeavesOfType: () => leaves, activeEditor, on: () => ({}) },
 		} as unknown as App,
 		manifest
 	) as BeancountPlugin & RecordingPlugin;
@@ -237,7 +237,7 @@ describe('BeancountPlugin', () => {
 	});
 
 	it('starts with defaults when data.json cannot be read', async () => {
-		const plugin = new BeancountPlugin({ vault: new FakeVault().api, workspace: { getLeavesOfType: () => [], activeEditor: null } } as unknown as App, manifest);
+		const plugin = new BeancountPlugin({ vault: new FakeVault().api, workspace: { getLeavesOfType: () => [], activeEditor: null, on: () => ({}) } } as unknown as App, manifest);
 		plugin.loadData = async () => {
 			throw new Error('corrupt');
 		};
@@ -1051,13 +1051,16 @@ describe('BeancountPlugin', () => {
 			'Align amounts on save',
 			'Instant alignment',
 			'Separator column',
+			'Show separator ruler',
 			'Validation',
 			'Bean-check executable',
 			'Entry ledger',
 			'Balance inlay hints',
 			'Completion',
 			'Complete payees',
+			'Autofill payee postings',
 			'Complete narrations',
+			'Pinyin initials matching',
 			'Fava',
 			'Fava executable',
 			'Fava port',

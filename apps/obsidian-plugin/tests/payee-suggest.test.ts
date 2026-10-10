@@ -149,7 +149,7 @@ describe('PayeeSuggest suggestions', () => {
 		expect(rendered).toBe('Whole Foods');
 	});
 
-	it('replaces the trigger range with the selected payee and closes', () => {
+	it('picking closes an unclosed field', () => {
 		const { suggest } = setup();
 		const editor = createEditor(['2026-09-30 * "Whole']);
 		suggest.context = {
@@ -162,11 +162,27 @@ describe('PayeeSuggest suggestions', () => {
 		const close = vi.spyOn(suggest, 'close');
 		suggest.selectSuggestion('Whole Foods', {} as MouseEvent);
 		expect(editor.replacements).toEqual([
-			{ replacement: 'Whole Foods', from: { line: 0, ch: 14 }, to: { line: 0, ch: 19 } },
+			{ replacement: 'Whole Foods"', from: { line: 0, ch: 14 }, to: { line: 0, ch: 19 } },
 		]);
 		// The chooser leaves the popover open; without close() a second pick
 		// would reuse the stale range over the replacement.
 		expect(close).toHaveBeenCalledOnce();
+	});
+
+	it('picking before a typed closing quote leaves it alone', () => {
+		const { suggest } = setup();
+		const editor = createEditor(['2026-09-30 * "Whole"']);
+		suggest.context = {
+			start: { line: 0, ch: 14 },
+			end: { line: 0, ch: 19 },
+			query: 'Whole',
+			editor: editor as unknown as Editor,
+			file: {} as TFile,
+		} as EditorSuggestContext;
+		suggest.selectSuggestion('Whole Foods', {} as MouseEvent);
+		expect(editor.replacements).toEqual([
+			{ replacement: 'Whole Foods', from: { line: 0, ch: 14 }, to: { line: 0, ch: 19 } },
+		]);
 	});
 
 	it('does nothing when no context is active', () => {

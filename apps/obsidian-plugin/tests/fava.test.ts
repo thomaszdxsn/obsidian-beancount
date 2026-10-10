@@ -57,6 +57,7 @@ async function loadPlugin(
 				getLeavesOfType: () => [],
 				activeEditor: null,
 				onLayoutReady: (cb: () => void) => cb(),
+				on: () => ({}),
 				getActiveFile: () =>
 					activePath ? vault.api.getFiles().find((file) => file.path === activePath) ?? null : null,
 			},

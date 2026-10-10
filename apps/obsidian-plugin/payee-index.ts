@@ -24,7 +24,9 @@
  * quotes; it never crosses a line break or a quote. An empty field (`""`) is
  * not a payee.
  */
-const PAYEE_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])[ \t]*"((?:[^"\\\n]|\\.)+)"/gm;
+const PAYEE_LINE_RE =
+	/^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])[ \t]*"((?:[^"\\\n]|\\.)+)"/;
+const PAYEE_RE = new RegExp(PAYEE_LINE_RE.source, 'gm');
 
 /**
  * The same shape while typing: the first quoted field still open at the
@@ -32,6 +34,15 @@ const PAYEE_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]*(?:txn|[*!&#?%PSTCURM])
  * quote — so the second field (the narration) never triggers.
  */
 export const PAYEE_PREFIX_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])[ \t]*"((?:[^"\\\n]|\\.)*)$/;
+
+/**
+ * The payee of one transaction line: the same literal `extractPayees` indexes
+ * and payee completion inserts. Null when the line is not a transaction or
+ * the first quoted field is missing or empty.
+ */
+export function transactionPayee(line: string): string | null {
+	return PAYEE_LINE_RE.exec(line)?.[1] ?? null;
+}
 
 export function extractPayees(content: string): ReadonlySet<string> {
 	const payees = new Set<string>();

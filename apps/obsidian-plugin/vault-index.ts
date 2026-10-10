@@ -12,7 +12,9 @@
  * longer than `MAX_VALUE_LENGTH` is junk (a whole line captured as a "name",
  * not a real one) and is not cached, and `match` returns at most
  * `MAX_SUGGESTIONS` — the popup window Obsidian renders (its `limit` is 50).
- * Matches are prefix-first, then subsequence, then frecency.
+ * Matches are prefix-first, then subsequence, then frecency. A `pinyin`
+ * getter, read on each query, inserts initials tiers between those two
+ * when it returns true.
  * Per-file count and read-size budgets are deliberately not imposed: the
  * union is bounded by the user's own vault, which the host already read.
  */
@@ -80,7 +82,9 @@ export class VaultIndex implements VaultCache {
 	 */
 	constructor(
 		private readonly extract: (content: string, path: string) => ReadonlySet<string>,
-		private readonly usage?: CompletionUsage
+		private readonly usage?: CompletionUsage,
+		/** Read on each `match`; omitted or false keeps direct-only ranking. */
+		private readonly pinyin?: () => boolean
 	) {}
 
 	setFileContent(path: string, content: string): void {
@@ -134,7 +138,7 @@ export class VaultIndex implements VaultCache {
 
 	/** Prefix, then subsequence; frecency-ranked; bounded to the popup window. */
 	match(query: string): string[] {
-		return rankCompletions(this.values(), query, this.usage);
+		return rankCompletions(this.values(), query, this.usage, this.pinyin?.() ?? false);
 	}
 
 	remember(value: string): void {

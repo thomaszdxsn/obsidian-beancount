@@ -41,6 +41,18 @@ Initial alpha of the Obsidian Beancount plugin (`beancount-obsidian`).
   is unmarked, so mixed incomplete/cleared ledgers get distinct underline
   styles. Settings tab groups Alignment / Validation / Completion / Fava /
   Flag warnings. **Start Fava** / **Stop Fava** (`favaPath`, `favaPort`, `runFavaOnActivate`).
+- Whole-file beancount presentation for `.bean` / `.beancount` files
+  (beancount-mode colors, monospace, markdown styling reset) and a separator
+  ruler (`showRuler`).
+- Inferred-amount hint on the posting that omits its amount and `≠ 0`
+  warning on transactions that do not balance within beancount's default
+  tolerance (pure JS; cost/price/arithmetic skipped).
+- Pinyin initials matching for completion (`pinyinMatching`, off by default).
+- Payee pick autofills the postings of that payee's latest transaction
+  (`payeeAutofill`).
+- Validation when a ledger file or fenced note is opened, and a **Show
+  problems** sidebar listing the latest `bean-check` report across files.
+- Mod-click on `include "…"` paths opens the included file.
 
 ### Fixed
 

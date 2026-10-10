@@ -51,12 +51,6 @@
 	color: var(--text-muted);
 }
 
-/* Ledger files: alignment pads with spaces, which only lines up in a fixed-pitch font. */
-.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-editor .cm-scroller,
-.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-editor .cm-line {
-	font-family: var(--font-monospace);
-}
-
 .beancount-outline-empty {
 	color: var(--text-muted);
 	padding: 8px;
@@ -88,4 +82,182 @@
 	white-space: pre;
 	pointer-events: none;
 	user-select: none;
+}
+
+.cm-beancount-inferred-hint {
+	color: var(--text-muted);
+	font-style: italic;
+	white-space: pre;
+	pointer-events: none;
+	user-select: none;
+}
+
+.cm-beancount-inferred-hint.cm-beancount-hint-gap {
+	padding-left: 1.5em;
+}
+
+.cm-beancount-unbalanced-hint {
+	padding-left: 1.5em;
+	color: var(--text-warning);
+	font-style: italic;
+	white-space: pre;
+	pointer-events: none;
+	user-select: none;
+}
+
+.beancount-include-link {
+	cursor: pointer;
+	color: var(--link-color);
+}
+
+.beancount-include-link:hover {
+	text-decoration: underline;
+}
+
+/*
+ * `.bean` / `.beancount` open in the markdown editor. `beancount-ledger-file`
+ * is set on `.cm-editor` for those files only. Reset the markdown presentation
+ * that would otherwise restyle ledger text, and draw the separator ruler.
+ *
+ * Live Preview hides `.cm-formatting` and also *replaces* some ranges with
+ * widgets (list bullets, task checkboxes, embeds, some internal links). Showing
+ * `.cm-formatting` and hiding `.list-bullet` recovers markers that were only
+ * hidden. A widget that removed the characters cannot be undone from CSS —
+ * Source mode is the reliable view for those.
+ */
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file {
+	--font-text: var(--font-monospace);
+}
+
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-scroller,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-content,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line {
+	font-family: var(--font-monospace);
+}
+
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header-1,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header-2,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header-3,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header-4,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header-5,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-header-6,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header-1,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header-2,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header-3,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header-4,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header-5,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-header-6,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header-1,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header-2,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header-3,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header-4,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header-5,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-header-6 {
+	font-size: inherit;
+	font-weight: inherit;
+	line-height: inherit;
+	font-family: inherit;
+	color: inherit;
+}
+
+/* Obsidian writes the list hanging indent as an inline style on the line. */
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .HyperMD-list-line,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-line.HyperMD-list-line {
+	text-indent: 0 !important;
+	padding-inline-start: 0 !important;
+}
+
+/* Live Preview keeps the literal `*` inside `.list-bullet` but paints it
+ * transparent and draws a dot in `::after`; show the org `*` as text. */
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .list-bullet {
+	display: inline;
+	position: static;
+	color: inherit;
+}
+
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .list-bullet::after {
+	content: none;
+	display: none;
+}
+
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-hashtag,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-hashtag-begin,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-hashtag-end,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-formatting-hashtag,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .tag,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file a.tag {
+	background: none;
+	background-color: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 0;
+	color: inherit;
+	font-size: inherit;
+	font-weight: inherit;
+	text-decoration: none;
+	box-shadow: none;
+}
+
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-em,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-strong,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-strikethrough {
+	font-style: normal;
+	font-weight: inherit;
+	text-decoration: none;
+}
+
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-link,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-url,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-hmd-internal-link,
+.markdown-source-view.mod-cm6 .cm-editor.beancount-ledger-file .cm-underline {
+	color: inherit;
+	text-decoration: none;
+}
+
+/* Live Preview hides formatting markers. Specificity must beat that rule. */
+.markdown-source-view.mod-cm6.is-live-preview .cm-editor.beancount-ledger-file .cm-formatting {
+	display: inline;
+}
+
+.beancount-ledger-ruler {
+	position: absolute;
+	top: 0;
+	height: 100%;
+	border-left: 1px dotted var(--text-faint, rgba(128, 128, 128, 0.8));
+	pointer-events: none;
+	z-index: 1;
+}
+
+.beancount-problems-header {
+	padding: 8px;
+	font-weight: var(--font-semibold);
+}
+
+.beancount-problems-file {
+	padding: 4px 8px 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.beancount-problems-row {
+	cursor: pointer;
+	padding: 2px 8px;
+	border-radius: var(--radius-s);
+	white-space: pre-wrap;
+}
+
+.beancount-problems-row:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.beancount-problems-unmapped {
+	cursor: default;
+	color: var(--text-muted);
+}
+
+.beancount-problems-unmapped:hover {
+	background-color: transparent;
 }

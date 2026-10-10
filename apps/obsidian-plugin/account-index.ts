@@ -149,8 +149,12 @@ export class AccountIndex implements VaultCache {
 	private readonly directivesByPath = new Map<string, ReadonlyMap<string, AccountRecord>>();
 	private merged: ReadonlyMap<string, AccountRecord> | null = null;
 
-	constructor(private readonly usage?: CompletionUsage) {
-		this.names = new VaultIndex(extractAccounts, usage);
+	constructor(
+		private readonly usage?: CompletionUsage,
+		/** Read on each `match`; omitted or false keeps direct-only ranking. */
+		private readonly pinyin?: () => boolean
+	) {
+		this.names = new VaultIndex(extractAccounts, usage, pinyin);
 	}
 
 	/** Markdown notes contribute only their beancount fences; ledger files all of it. */
@@ -203,7 +207,7 @@ export class AccountIndex implements VaultCache {
 			if (isAccountClosed(lifecycle.get(value))) continue;
 			open.push(value);
 		}
-		return rankCompletions(open, query, this.usage);
+		return rankCompletions(open, query, this.usage, this.pinyin?.() ?? false);
 	}
 
 	private lifecycle(): ReadonlyMap<string, AccountRecord> {

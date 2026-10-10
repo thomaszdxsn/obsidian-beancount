@@ -1,19 +1,24 @@
 /**
- * End-of-line widgets for the single-commodity balance-assertion delta.
+ * End-of-line widgets for local ledger hints: the single-commodity
+ * balance-assertion delta, the amount beancount would infer for the one
+ * posting that omits it, and a warning when every posting has an amount but
+ * the transaction does not sum to zero.
  *
  * There is no booking engine here. `balanceHints` reads only the text in
- * this editor, so a configured entry ledger disables the fallback — postings
- * outside the file are unknown, and a local delta would pretend otherwise.
- * Markdown notes contribute only `beancount`/`bean` fence bodies, written
- * back onto the host lines (everything else blank) so every fence in the
- * note is one ledger and the hint stays on the line the user sees. Prose
- * never reaches the parser.
+ * this editor, so a configured entry ledger disables that fallback —
+ * postings outside the file are unknown, and a local delta would pretend
+ * otherwise. Inferred amounts and unbalanced warnings are one transaction
+ * each, so they stay on when an entry ledger is configured. Markdown notes
+ * contribute only `beancount`/`bean` fence bodies, written back onto the
+ * host lines (everything else blank) so every fence in the note is one
+ * ledger and the hint stays on the line the user sees. Prose never reaches
+ * the parser.
  *
  * The decorations are their own view plugin, not the diagnostics field.
  * They rebuild synchronously when the document or the file in this editor
  * changes. Selection changes and diagnostic effects do not. A widget compares
- * equal by its label and can rewrite its own element, so an edit that leaves
- * a hint unchanged does not replace the DOM.
+ * equal by its label and class and can rewrite its own element, so an edit
+ * that leaves a hint unchanged does not replace the DOM.
  */
 import { StateEffect } from '@codemirror/state';
 import type { EditorState, Extension, Range } from '@codemirror/state';
@@ -22,14 +27,19 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { balanceHints } from './balance-hints';
 import { extractBeancountFences } from './fences';
+import { postingHints } from './posting-hints';
 import { isLedgerFile } from './vault-index';
 
-/** The CSS contract between the widget and `styles.css`. */
+/** The CSS contract between the widgets and `styles.css`. */
 export const BALANCE_HINT_CLASS = 'cm-beancount-balance-hint';
+export const INFERRED_HINT_CLASS = 'cm-beancount-inferred-hint';
+export const UNBALANCED_HINT_CLASS = 'cm-beancount-unbalanced-hint';
+/** Extra gap when an inferred amount has no decimal column to pad toward. */
+export const HINT_GAP_CLASS = 'cm-beancount-hint-gap';
 
 /** Live settings the widgets read when they rebuild. */
 export interface BalanceInlayHost {
-	settings: { inlayHints: boolean; entryLedger: string };
+	settings: { inlayHints: boolean; entryLedger: string; separatorColumn?: number };
 }
 
 /** Asks every tracked view to rebuild without touching the document. */
@@ -92,8 +102,39 @@ class BalanceHintWidget extends WidgetType {
 	}
 }
 
+/** Inline, after the line text, so the caret at EOL stays in the document. */
+class PostingHintWidget extends WidgetType {
+	constructor(
+		readonly label: string,
+		readonly className: string
+	) {
+		super();
+	}
+
+	eq(other: PostingHintWidget): boolean {
+		return other.label === this.label && other.className === this.className;
+	}
+
+	toDOM(): HTMLElement {
+		const span = document.createElement('span');
+		span.className = this.className;
+		span.textContent = this.label;
+		return span;
+	}
+
+	updateDOM(dom: HTMLElement): boolean {
+		if (dom.textContent !== this.label) dom.textContent = this.label;
+		if (dom.className !== this.className) dom.className = this.className;
+		return true;
+	}
+
+	ignoreEvent(): boolean {
+		return false;
+	}
+}
+
 function balanceDecorations(view: EditorView, host: BalanceInlayHost): DecorationSet {
-	if (!host.settings.inlayHints || host.settings.entryLedger.trim() !== '') return Decoration.none;
+	if (!host.settings.inlayHints) return Decoration.none;
 	const file = view.state.field(editorInfoField, false)?.file;
 	if (!file) return Decoration.none;
 	const text = view.state.doc.toString();
@@ -101,17 +142,34 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost): Decoratio
 	if (file.extension === 'md') lines = fenceMaskedLines(text);
 	else if (isLedgerFile(file)) lines = text.split(/\r?\n/);
 	if (!lines) return Decoration.none;
-	const hints = balanceHints(lines);
-	if (hints.length === 0) return Decoration.none;
 	const doc = view.state.doc;
 	const ranges: Array<Range<Decoration>> = [];
-	for (let i = 0; i < hints.length; i += 1) {
-		const hint = hints[i];
+	if (host.settings.entryLedger.trim() === '') {
+		const hints = balanceHints(lines);
+		for (let i = 0; i < hints.length; i += 1) {
+			const hint = hints[i];
+			if (hint.line < 0 || hint.line >= doc.lines) continue;
+			const line = doc.line(hint.line + 1);
+			ranges.push(Decoration.widget({ widget: new BalanceHintWidget(hint.label), side: 1 }).range(line.to));
+		}
+	}
+	const column = host.settings.separatorColumn;
+	const postings = postingHints(lines, column === undefined ? undefined : { separatorColumn: column });
+	for (let i = 0; i < postings.length; i += 1) {
+		const hint = postings[i];
 		if (hint.line < 0 || hint.line >= doc.lines) continue;
 		const line = doc.line(hint.line + 1);
-		ranges.push(Decoration.widget({ widget: new BalanceHintWidget(hint.label), side: 1 }).range(line.to));
+		const className =
+			hint.kind === 'unbalanced'
+				? UNBALANCED_HINT_CLASS
+				: hint.aligned
+					? INFERRED_HINT_CLASS
+					: INFERRED_HINT_CLASS + ' ' + HINT_GAP_CLASS;
+		ranges.push(Decoration.widget({ widget: new PostingHintWidget(hint.label, className), side: 1 }).range(line.to));
 	}
-	return ranges.length === 0 ? Decoration.none : Decoration.set(ranges, true);
+	if (ranges.length === 0) return Decoration.none;
+	ranges.sort((a, b) => a.from - b.from);
+	return Decoration.set(ranges, true);
 }
 
 function inlayPlugin(host: BalanceInlayHost, views: Set<EditorView>) {
