@@ -261,6 +261,13 @@ describe("location", () => {
     expect(txn.postings).toHaveLength(1);
     expect(txn.location!.end).toEqual({ line: 3, column: 17 });
   });
+
+  test("a multi-line string ending the file at EOF ends where the string closes", () => {
+    const [open] = BeancountParser.parse('2022-01-01 open Assets:A\n  memo: "a\n    bc"').directives;
+    expect(open!.location).toEqual({ start: { line: 1, column: 0 }, end: { line: 3, column: 7 } });
+    const [note] = BeancountParser.parse('2022-01-01 note Assets:A "x\ny"').directives;
+    expect(note!.location!.end).toEqual({ line: 2, column: 2 });
+  });
 });
 
 describe("BeancountSyntaxError", () => {
