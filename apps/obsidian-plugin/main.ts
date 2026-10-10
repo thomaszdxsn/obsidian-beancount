@@ -49,6 +49,7 @@ import { PayeeTemplateIndex } from './payee-template';
 import { SnippetSession, SnippetSuggest, snippetTabExtension } from './snippet-suggest';
 import { extractCommodities, extractLinks, extractNarrations, extractTags } from './token-index';
 import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from './token-suggest';
+import { transactionFoldExtension } from './transaction-fold';
 import { postingIndentExtension } from './posting-indent';
 import { fenceLanguageExtension } from './fence-language';
 import { includeLinksExtension } from './include-links';
@@ -488,6 +489,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// wins because the fence highlighter is a CM5 overlay, not a nested
 		// CM6 language.
 		this.registerEditorExtension(fenceLanguageExtension());
+		// Each transaction folds to its header line, in ledger files and fences.
+		this.registerEditorExtension(transactionFoldExtension());
 		// Balance assertion deltas at the end of balance lines. Independent of
 		// the diagnostic markers; a setting change reapplies them without an edit.
 		this.registerEditorExtension(this.balanceInlays.extension);

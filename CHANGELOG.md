@@ -7,24 +7,23 @@
 - **Format ledger** command: normalizes posting and metadata indents, collapses
   header whitespace (leaving strings and `;` comments intact), strips trailing
   whitespace, and aligns decimal points. A `.bean` / `.beancount` file is one
-  ledger; a markdown note formats each ```beancount / ```bean fence. A syntax
+  ledger; any other note formats each ```beancount / ```bean fence. A syntax
   error names the document line and changes nothing.
+- Transactions fold to their header line in ledger files and fences
+  (including fences indented under list items). Each entry is parsed on its
+  own, so an entry with a syntax error loses only its own fold; an entry
+  over 300 lines gets no fold.
+
+### Changed
+
+- The bundle targets ES2022 with esbuild 0.25, so the bundled Beancount
+  parser runs about 6x faster than with ES2018 output.
 
 ### Fixed
 
-- Format ledger no longer treats a `"` inside a `;` comment as an open string,
-  so the next metadata line keeps its indent. A multi-line string at the end
-  of the file keeps its continuation lines.
 - Decimal alignment skips a line that continues an open string, so a
-  posting-shaped line inside a string is left alone — on Format ledger, Align
-  decimal points, and save-time alignment.
-- A caret in an unchanged token between two format edits stays on that token.
-  Format ledger rewrites each whitespace run on its own.
-- Format ledger rewrites a whole buffer only for `.bean` / `.beancount` files.
-  An untitled buffer, or any other file, formats ```beancount / ```bean fences
-  and leaves the rest.
-- Format ledger no longer appends a blank line when an unclosed ```beancount
-  fence sits at the end of a note that already ends with a newline.
+  posting-shaped line inside a string is left alone — on Align decimal
+  points and save-time alignment too.
 
 ## 0.1.1
 

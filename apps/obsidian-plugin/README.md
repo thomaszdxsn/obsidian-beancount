@@ -27,6 +27,10 @@ pip install beancount
   hanging indent; the org `*` shows as text). Live Preview widgets that
   replace text (embeds, checkboxes) can still render; Source mode avoids
   them. A dotted ruler marks the separator column (**Show separator ruler**).
+- **Transaction folding**: in ledger files and fences, each transaction folds
+  to its header line, hiding metadata and postings through the last posting.
+  Every entry is parsed on its own, so a syntax error while typing drops only
+  that entry's fold.
 - **Include links**: Mod-click the quoted path of `include "…"` (ledger files
   and fences) to open it, relative to the including file; a glob opens its
   first match; a missing target raises a Notice.
