@@ -7,6 +7,7 @@ import {
   Commodity,
   Cost,
   Custom,
+  type Directive,
   Document,
   Event,
   IncompleteAmount,
@@ -150,6 +151,25 @@ describe("metadata values", () => {
     const open = only<Open>(`2022-01-01 open Assets:A\n  kk: ${text}\n`);
     expect(open.metadata).toStrictEqual({ kk: expected });
   });
+
+  test.each([
+    ["transaction", '2022-01-01 * "x"'],
+    ["open", "2022-01-01 open Assets:A"],
+    ["close", "2022-01-01 close Assets:A"],
+    ["commodity", "2022-01-01 commodity USD"],
+    ["price", "2022-01-01 price EUR 1 USD"],
+    ["balance", "2022-01-01 balance Assets:A 1 USD"],
+    ["pad", "2022-01-01 pad Assets:A Equity:B"],
+    ["note", '2022-01-01 note Assets:A "n"'],
+    ["document", '2022-01-01 document Assets:A "a.pdf"'],
+    ["event", '2022-01-01 event "t" "d"'],
+    ["query", '2022-01-01 query "q" "SELECT 1"'],
+    ["custom", '2022-01-01 custom "b" 1'],
+  ])("%s keeps its own metadata and spans the metadata line", (_name, header) => {
+    const directive = only<Directive>(`${header}\n  kk: 1\n`);
+    expect(directive.metadata).toEqual({ kk: 1 });
+    expect(directive.location).toEqual({ start: { line: 1, column: 0 }, end: { line: 2, column: 7 } });
+  });
 });
 
 describe("other directives", () => {
@@ -214,6 +234,10 @@ describe("other directives", () => {
     const input = 'pushmeta kk: "v"\n2022-01-01 open Assets:A\npopmeta kk:\n';
     expect(only<Open>(input).metadata).toEqual({});
   });
+});
+
+test("Amount renders as number then currency", () => {
+  expect(String(new Amount(-1.5, "USD"))).toBe("-1.5 USD");
 });
 
 describe("dates", () => {
