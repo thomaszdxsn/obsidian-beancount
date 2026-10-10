@@ -173,6 +173,19 @@ describe('resolveIncludePath', () => {
 		expect(glob.kind === 'glob' ? glob.matches : []).not.toContain('ledger/2024/sub/c.bean');
 	});
 
+	it('lets ** match zero or more directories and skip hidden names', () => {
+		expect(resolve('2024/**/*.bean')).toEqual({
+			kind: 'glob',
+			matches: ['ledger/2024/a.bean', 'ledger/2024/b.bean', 'ledger/2024/sub/c.bean'],
+		});
+		expect(resolve('**/*.bean', 'ledger/main.bean')).toEqual({
+			kind: 'glob',
+			matches: ['ledger/2024/a.bean', 'ledger/2024/b.bean', 'ledger/2024/sub/c.bean', 'ledger/a.bean'],
+		});
+		const hidden = resolve('**/*.bean', 'ledger/main.bean');
+		expect(hidden.kind === 'glob' ? hidden.matches : []).not.toContain('ledger/2024/.hidden.bean');
+	});
+
 	it('reports a glob with no vault match separately from a missing literal', () => {
 		expect(resolve('2024/nope-*.bean')).toEqual({ kind: 'glob', matches: [] });
 		expect(resolve('missing.bean')).toEqual({ kind: 'missing', vaultPath: 'ledger/missing.bean' });

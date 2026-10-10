@@ -61,10 +61,16 @@ export class Transaction extends DirectiveBase {
 export class Amount {
   number: number;
   currency: string;
+  /**
+   * Source spelling when `number` is a plain literal: sign kept, thousands
+   * separators removed. Absent when the number came from an arithmetic expression.
+   */
+  numberText?: string;
 
-  constructor(number: number, currency: string) {
+  constructor(number: number, currency: string, numberText?: string) {
     this.number = number;
     this.currency = currency;
+    if (numberText !== undefined) this.numberText = numberText;
   }
 
   toString(): string {
@@ -77,10 +83,13 @@ export class Amount {
 export class IncompleteAmount {
   number: number | null;
   currency: string | null;
+  /** Same spelling as `Amount.numberText`, when the number is a plain literal. */
+  numberText?: string;
 
-  constructor(number: number | null, currency: string | null) {
+  constructor(number: number | null, currency: string | null, numberText?: string) {
     this.number = number;
     this.currency = currency;
+    if (numberText !== undefined) this.numberText = numberText;
   }
 }
 
@@ -168,6 +177,8 @@ export class Balance extends DirectiveBase {
   account: string;
   amount: Amount;
   tolerance?: number;
+  /** Source spelling of an explicit tolerance, when that number is a plain literal. */
+  toleranceText?: string;
 
   constructor(
     date: Date,
@@ -175,13 +186,15 @@ export class Balance extends DirectiveBase {
     amount: Amount,
     location?: SourceLocation,
     metadata: Metadata = {},
-    tolerance?: number
+    tolerance?: number,
+    toleranceText?: string
   ) {
     super(location, metadata);
     this.date = date;
     this.account = account;
     this.amount = amount;
     this.tolerance = tolerance;
+    if (toleranceText !== undefined) this.toleranceText = toleranceText;
   }
 }
 

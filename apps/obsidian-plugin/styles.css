@@ -272,3 +272,38 @@
 .beancount-problems-unmapped:hover {
 	background-color: transparent;
 }
+
+.beancount-balances-empty {
+	padding: 8px;
+	color: var(--text-muted);
+}
+
+.beancount-balances-error {
+	padding: 4px 8px;
+	color: var(--text-error);
+	white-space: pre-wrap;
+}
+
+.beancount-balances-row {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 2px 8px;
+}
+
+.beancount-balances-head {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.beancount-balances-account {
+	overflow-wrap: anywhere;
+}
+
+.beancount-balances-amount {
+	font-family: var(--font-monospace);
+	text-align: right;
+	white-space: pre;
+	flex: none;
+}

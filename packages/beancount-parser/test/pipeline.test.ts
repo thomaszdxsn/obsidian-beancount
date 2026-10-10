@@ -221,13 +221,13 @@ describe("field mapping", () => {
     expect(broker!.flag).toBe("!");
     expect(broker!.metadata).toEqual({ ok: true });
     expect(broker!.cost).toMatchObject({
-      amount: new Amount(1, "USD"),
-      total: new Amount(5, "USD"),
+      amount: new Amount(1, "USD", "1"),
+      total: new Amount(5, "USD", "5"),
       date: new Date(2022, 0, 1),
       label: "lot",
       merge: true,
     });
-    expect(broker!.priceAnnotation).toMatchObject({ amount: new Amount(100, "USD"), isTotal: true });
+    expect(broker!.priceAnnotation).toMatchObject({ amount: new Amount(100, "USD", "100"), isTotal: true });
     expect(cash!.amount).toStrictEqual(new Amount(-10, "USD"));
     expect(partial!.amount).toStrictEqual(new IncompleteAmount(null, "USD"));
     expect(partial!.priceAnnotation).toMatchObject({ amount: undefined, isTotal: false });
@@ -247,9 +247,10 @@ describe("field mapping", () => {
   test("balance keeps tolerance and metadata value types", () => {
     const input = "2022-01-03 balance Assets:Cash 1,000.5 ~ 0.01 USD\n  empty:\n  amt: 3 EUR\n  on: 2022-01-01\n";
     const balance = BeancountParser.parse(input).directives[0] as Balance;
-    expect(balance.amount).toEqual(new Amount(1000.5, "USD"));
+    expect(balance.amount).toEqual(new Amount(1000.5, "USD", "1000.5"));
     expect(balance.tolerance).toBe(0.01);
-    expect(balance.metadata).toEqual({ empty: null, amt: new Amount(3, "EUR"), on: new Date(2022, 0, 1) });
+    expect(balance.toleranceText).toBe("0.01");
+    expect(balance.metadata).toEqual({ empty: null, amt: new Amount(3, "EUR", "3"), on: new Date(2022, 0, 1) });
   });
 });
 

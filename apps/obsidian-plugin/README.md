@@ -170,6 +170,16 @@ pip install beancount
   DocumentSymbolProvider does (including `_` fillers for skipped levels).
   Dated transactions, `open`, `close` and `balance` directives hang under
   consecutive date groups; clicking a row jumps the editor to that line.
+- **Account balances**: **Show account balances** opens a sidebar table of
+  each account's units, one line per currency. Zero balances are hidden.
+  The entry ledger wins when set; otherwise the active ledger, or the
+  active note's fences. `include` is followed, including `**` globs. An
+  omitted amount is filled from the other postings' weights (a `{per # total}`
+  cost is units × per + sign(units) × total) and quantized like beancount.
+  `pad` / `balance` insert the start-of-day difference when it exceeds the
+  balance tolerance; a child `balance` consumes the parent's pad. Sums use
+  the literal number spelling when the parser kept it, so trailing zeros and
+  amounts past 2^53 stay exact.
 
 ## Markdown fences
 

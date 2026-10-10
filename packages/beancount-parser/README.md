@@ -72,7 +72,7 @@ The parser generates a strongly-typed object model with classes for all Beancoun
 - `Custom`
 - `Option`, `Plugin`, `Include`
 
-Postings keep their flag, cost (`amount` per-unit, `total`, `date`, `label`, `merge`) and price annotation. Amounts with the number or currency left out for interpolation are `IncompleteAmount`. `pushtag`/`poptag` tags are added to the transactions between them; `pushmeta`/`popmeta` are accepted but not applied yet.
+Postings keep their flag, cost (`amount` per-unit, `total`, `date`, `label`, `merge`) and price annotation. Amounts with the number or currency left out for interpolation are `IncompleteAmount`. `Amount` and `IncompleteAmount` set `numberText` to the number's source spelling (sign kept, `,` thousands separators removed) when that number is a plain literal, and leave it unset when the number is an arithmetic expression. A `balance` tolerance that is a plain literal also keeps `toleranceText`. `pushtag`/`poptag` tags are added to the transactions between them; `pushmeta`/`popmeta` are accepted but not applied yet.
 
 ## Development
 

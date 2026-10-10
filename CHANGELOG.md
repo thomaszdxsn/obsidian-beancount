@@ -13,11 +13,19 @@
   (including fences indented under list items). Each entry is parsed on its
   own, so an entry with a syntax error loses only its own fold; an entry
   over 300 lines gets no fold.
+- **Show account balances**: a sidebar table of per-account unit balances
+  (one line per currency), following the entry ledger's `include` chain or
+  the active ledger / note fences. Missing amounts are interpolated from
+  posting weights and quantized like beancount; `pad` / `balance` insert the
+  start-of-day difference when it exceeds tolerance. A parse or interpolation
+  error replaces the numbers.
 
 ### Changed
 
 - The bundle targets ES2022 with esbuild 0.25, so the bundled Beancount
   parser runs about 6x faster than with ES2018 output.
+- `include "**/…"` globs match zero or more directories, as beancount's
+  recursive glob does (Mod-click and the balance view).
 
 ### Fixed
 
