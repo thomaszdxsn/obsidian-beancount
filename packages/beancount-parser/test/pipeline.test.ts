@@ -102,10 +102,12 @@ describe("parse errors", () => {
     throw new Error(`parse(${JSON.stringify(input)}) did not throw`);
   };
 
+  const at = (errors: { line: number; column: number }[]) => errors.map((e) => [e.line, e.column]);
+
   test("missing account throws instead of recovering a phantom Open", () => {
-    expect(errorsOf("2022-01-01 open\n")).toEqual([
-      { line: 1, column: 15, message: "missing ACCOUNT at '\\n'" },
-    ]);
+    const errors = errorsOf("2022-01-01 open\n");
+    expect(at(errors)).toEqual([[1, 15]]);
+    expect(errors[0]!.message).toContain("ACCOUNT");
   });
 
   test("unknown keyword line throws instead of becoming a Transaction", () => {
@@ -114,20 +116,79 @@ describe("parse errors", () => {
     expect(errors.every((e) => e.line === 2)).toBe(true);
   });
 
+  // The parser never sees a character the lexer drops, so only the lexer
+  // listener can catch this.
+  test("lexer-only error throws", () => {
+    const errors = errorsOf("2022-01-01 open Assets:A `\n");
+    expect(at(errors)).toEqual([[1, 25]]);
+    expect(errors[0]!.message).toContain("`");
+  });
+
   test("collects every error in source order", () => {
     const errors = errorsOf('option "a"\n2022-01-01 open Assets:A\n2022-01-01 close\n');
     expect(errors.map((e) => e.line)).toEqual([1, 3]);
   });
 
+  test("lexer errors read ahead by the token stream are sorted into place", () => {
+    expect(at(errorsOf("2022-01-01 close\n`\n"))).toEqual([[1, 16], [2, 0]]);
+  });
+
   test("calendar-invalid date is reported at the date token", () => {
-    expect(errorsOf("2022-01-01 open Assets:A\n2022-02-30 close Assets:A\n")).toEqual([
-      { line: 2, column: 0, message: "invalid date '2022-02-30'" },
+    expect(errorsOf('2022-01-02 * "x"\n  Assets:A  1 AAPL {1 USD, 2022-02-30}\n')).toEqual([
+      { line: 2, column: 27, message: "invalid date '2022-02-30'" },
     ]);
   });
 
+  test("every value error is reported", () => {
+    expect(at(errorsOf("2022-02-30 open Assets:A\n2022-13-01 close Assets:A\n"))).toEqual([[1, 0], [2, 0]]);
+  });
+
+  test("value errors are not reported alongside syntax errors", () => {
+    expect(at(errorsOf("2022-02-30 open Assets:A\n2022-01-01 close\n"))).toEqual([[2, 16]]);
+  });
+
   test("per # total inside a total cost is rejected", () => {
-    const errors = errorsOf('2022-01-02 * "x"\n  Assets:A  1 AAPL {{1 # 2 USD}}\n');
-    expect(errors.map((e) => e.line)).toEqual([2]);
+    expect(errorsOf('2022-01-02 * "x"\n  Assets:A  1 AAPL {{1 # 2 USD}}\n')).toEqual([
+      { line: 2, column: 21, message: "per-unit cost not allowed in total cost {{...}}" },
+    ]);
+  });
+
+  test.each([
+    ["absent poptag", "poptag #x\n", [{ line: 1, column: 7, message: "attempting to pop absent tag 'x'" }]],
+    ["unpopped pushtag", "pushtag #x\n", [{ line: 1, column: 8, message: "unbalanced pushed tag 'x'" }]],
+    [
+      "duplicate metadata key",
+      "2022-01-01 open Assets:A\n  kk: 1\n  kk: 2\n",
+      [{ line: 3, column: 2, message: "duplicate metadata key 'kk'" }],
+    ],
+    [
+      "duplicate posting metadata key",
+      '2022-01-01 * "x"\n  Assets:A  1 USD\n    kk: 1\n    kk: 2\n',
+      [{ line: 4, column: 4, message: "duplicate metadata key 'kk'" }],
+    ],
+    [
+      "division by zero",
+      "2022-01-01 balance Assets:A 1/0 USD\n",
+      [{ line: 1, column: 28, message: "invalid number '1/0'" }],
+    ],
+    [
+      "0/0",
+      '2022-01-01 * "x"\n  Assets:A  0/0 USD\n',
+      [{ line: 2, column: 12, message: "invalid number '0/0'" }],
+    ],
+  ])("%s", (_name, input, expected) => {
+    expect(errorsOf(input)).toEqual(expected);
+  });
+
+  test.each([
+    ["amount", "{1 USD, 2 USD}", 27],
+    ["date", "{2022-01-01, 2022-01-02}", 32],
+    ["label", '{"a", "b"}', 25],
+    ["merge", "{*, *}", 23],
+  ])("duplicate cost %s is rejected", (_name, cost, column) => {
+    const errors = errorsOf(`2022-01-02 * "x"\n  Assets:A  1 AAPL ${cost}\n`);
+    expect(at(errors)).toEqual([[2, column]]);
+    expect(errors[0]!.message).toStartWith("duplicate cost component");
   });
 });
 
@@ -167,8 +228,8 @@ describe("field mapping", () => {
       merge: true,
     });
     expect(broker!.priceAnnotation).toMatchObject({ amount: new Amount(100, "USD"), isTotal: true });
-    expect(cash!.amount).toEqual(new Amount(-10, "USD"));
-    expect(partial!.amount).toEqual(new IncompleteAmount(null, "USD"));
+    expect(cash!.amount).toStrictEqual(new Amount(-10, "USD"));
+    expect(partial!.amount).toStrictEqual(new IncompleteAmount(null, "USD"));
     expect(partial!.priceAnnotation).toMatchObject({ amount: undefined, isTotal: false });
     expect(bare!.amount).toBeUndefined();
   });

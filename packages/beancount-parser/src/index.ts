@@ -98,11 +98,14 @@ class CollectingErrorListener extends BaseErrorListener {
   }
 }
 
+const UNESCAPES: Record<string, string> = { n: '\n', t: '\t', r: '\r', f: '\f', b: '\b' };
+
 // Maps a syntactically valid parse tree to model objects. Errors in values the
 // grammar cannot reject (e.g. 2022-02-30) are pushed to `errors`.
 class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
-  // Tags opened by `pushtag`, applied to every following transaction.
-  private readonly pushedTags = new Set<string>();
+  // Tags opened by `pushtag`, applied to every following transaction. A list,
+  // not a set: pushing a tag twice needs two pops, as upstream.
+  private readonly pushedTags: { tag: string; at: Token }[] = [];
 
   constructor(private readonly errors: SyntaxErrorInfo[]) {
     super();
@@ -114,6 +117,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       const directive = this.visit(d);
       if (directive) directives.push(directive);
     }
+    for (const { tag, at } of this.pushedTags) this.error(at, `unbalanced pushed tag '${tag}'`);
     return new BeancountFile(directives);
   }
 
@@ -129,7 +133,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     const payee = strings?._payee ? this.unquote(strings._payee.text!) : null;
     const narration = strings?._narration ? this.unquote(strings._narration.text!) : null;
 
-    const tags = new Set(this.pushedTags);
+    const tags = new Set(this.pushedTags.map((p) => p.tag));
     const links = new Set<string>();
     for (const tl of [ctx.tags_links(), ...ctx.tags_links_line()]) {
       this.collectTagsLinks(tl, tags, links);
@@ -307,12 +311,15 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   };
 
   visitPushtag = (ctx: PushtagContext): null => {
-    this.pushedTags.add(ctx.TAG().getText().slice(1));
+    this.pushedTags.push({ tag: ctx.TAG().getText().slice(1), at: ctx.TAG().symbol });
     return null;
   };
 
   visitPoptag = (ctx: PoptagContext): null => {
-    this.pushedTags.delete(ctx.TAG().getText().slice(1));
+    const tag = ctx.TAG().getText().slice(1);
+    const index = this.pushedTags.findLastIndex((p) => p.tag === tag);
+    if (index === -1) this.error(ctx.TAG().symbol, `attempting to pop absent tag '${tag}'`);
+    else this.pushedTags.splice(index, 1);
     return null;
   };
 
@@ -339,11 +346,18 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     return new IncompleteAmount(num, currency);
   }
 
-  // Arithmetic expression, evaluated as written.
+  // Arithmetic expression, evaluated as written. 1/0, 0/0 and overflow are
+  // errors, as upstream's Decimal evaluation raises on them.
   private number(ctx: NumberContext): number {
+    const value = this.evaluate(ctx);
+    if (!Number.isFinite(value)) this.error(ctx.start!, `invalid number '${ctx.getText()}'`);
+    return value;
+  }
+
+  private evaluate(ctx: NumberContext): number {
     const literal = ctx.NUMBER();
     if (literal) return Number(literal.getText().replace(/,/g, ''));
-    const operands = ctx.number_().map((n) => this.number(n));
+    const operands = ctx.number_().map((n) => this.evaluate(n));
     if (ctx.LPAREN()) return operands[0]!;
     if (operands.length === 1) return ctx.MINUS() ? -operands[0]! : operands[0]!;
     const [a, b] = operands as [number, number];
@@ -360,19 +374,20 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       const date = comp.DATE();
       const label = comp.STRING();
       const compound = comp.compound_amount();
+      const taken =
+        date ? cost.date !== undefined
+        : label ? cost.label !== undefined
+        : compound ? cost.amount !== undefined || cost.total !== undefined
+        : cost.merge;
+      // Upstream rejects a repeated component instead of letting the last win.
+      if (taken) this.error(comp.start!, `duplicate cost component '${comp.getText()}'`);
       if (date) cost.date = this.date(date);
       else if (label) cost.label = this.unquote(label.getText());
       else if (comp.ASTERISK()) cost.merge = true;
       else if (compound) {
         const currency = compound.commodity()?.getText() ?? null;
         if (compound.HASH()) {
-          if (isTotal) {
-            this.errors.push({
-              line: compound.start!.line,
-              column: compound.start!.column,
-              message: 'per-unit cost not allowed in total cost {{...}}',
-            });
-          }
+          if (isTotal) this.error(compound.start!, 'per-unit cost not allowed in total cost {{...}}');
           const per = compound._perUnit ? this.number(compound._perUnit) : null;
           const total = compound._total ? this.number(compound._total) : null;
           cost.amount = per !== null ? new Amount(per, currency!) : undefined;
@@ -394,7 +409,9 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     for (const line of lines) {
       const kv = line.key_value();
       const value = kv.key_value_value();
-      meta[kv.KEY().getText().slice(0, -1)] = value ? this.metadataValue(value) : null;
+      const key = kv.KEY().getText().slice(0, -1);
+      if (Object.hasOwn(meta, key)) this.error(kv.KEY().symbol, `duplicate metadata key '${key}'`);
+      meta[key] = value ? this.metadataValue(value) : null;
     }
     return meta;
   }
@@ -448,19 +465,14 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     const [year, month, day] = text.split(/[-/]/).map(Number) as [number, number, number];
     const date = new Date(year, month - 1, day);
     if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-      this.errors.push({
-        line: node.symbol.line,
-        column: node.symbol.column,
-        message: `invalid date '${text}'`,
-      });
+      this.error(node.symbol, `invalid date '${text}'`);
     }
     return date;
   }
 
+  // Escapes as upstream's cunescape; any other escaped char stands for itself.
   private unquote(str: string): string {
-    return str.slice(1, -1).replace(/\\(.)/gs, (_m, c: string) =>
-      c === 'n' ? '\n' : c === 't' ? '\t' : c === 'r' ? '\r' : c,
-    );
+    return str.slice(1, -1).replace(/\\(.)/gs, (_m, c: string) => UNESCAPES[c] ?? c);
   }
 
   // Span of the rule's own text: ends before the newline that terminates it.
@@ -476,6 +488,10 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       },
     };
   }
+
+  private error(at: { line: number; column: number }, message: string): void {
+    this.errors.push({ line: at.line, column: at.column, message });
+  }
 }
 
 export class BeancountParser {
@@ -484,7 +500,9 @@ export class BeancountParser {
    *
    * @param input The Beancount file content
    * @returns BeancountFile object containing all parsed directives
-   * @throws BeancountSyntaxError with every lexer, parser and value error, in source order
+   * @throws BeancountSyntaxError listing every lexer and parser error in source
+   *   order; when there are none, every value error (bad date, duplicate key,
+   *   unbalanced pushtag, ...) instead
    */
   static parse(input: string): BeancountFile {
     const errors: SyntaxErrorInfo[] = [];
@@ -497,12 +515,19 @@ export class BeancountParser {
     parser.removeErrorListeners();
     parser.addErrorListener(listener);
 
-    const tree = parser.beancountFile();
-    // A tree built through error recovery holds phantom directives; never map it.
-    if (errors.length === 0) {
-      const file = new BeancountParserVisitor(errors).buildFile(tree);
-      if (errors.length === 0) return file;
+    try {
+      const tree = parser.beancountFile();
+      // A tree built through error recovery holds phantom directives; never map it.
+      if (errors.length === 0) {
+        const file = new BeancountParserVisitor(errors).buildFile(tree);
+        if (errors.length === 0) return file;
+      }
+    } catch (e) {
+      // Both the ANTLR parser and the visitor recurse per nesting level.
+      if (!(e instanceof RangeError)) throw e;
+      throw new BeancountSyntaxError([{ line: 1, column: 0, message: 'input nested too deeply' }]);
     }
+    // The token stream reads ahead, so lexer errors can arrive out of order.
     errors.sort((a, b) => a.line - b.line || a.column - b.column);
     throw new BeancountSyntaxError(errors);
   }
