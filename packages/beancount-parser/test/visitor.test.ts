@@ -82,15 +82,16 @@ describe("postings", () => {
 
 describe("posting amounts", () => {
   test.each([
-    ["integer", "10 USD", new Amount(10, "USD")],
-    ["thousands separator", "1,234.50 USD", new Amount(1234.5, "USD")],
-    ["trailing dot", "5. USD", new Amount(5, "USD")],
-    ["unary plus", "+3 USD", new Amount(3, "USD")],
+    ["integer", "10 USD", new Amount(10, "USD", "10")],
+    ["thousands separator", "1,234.50 USD", new Amount(1234.5, "USD", "1234.50")],
+    ["trailing dot", "5. USD", new Amount(5, "USD", "5.")],
+    ["unary plus", "+3 USD", new Amount(3, "USD", "+3")],
+    ["signed literal", "-1.00 USD", new Amount(-1, "USD", "-1.00")],
     ["division", "10 / 4 USD", new Amount(2.5, "USD")],
     ["precedence: * before +", "1 + 2 * 3 USD", new Amount(7, "USD")],
     ["precedence: left-assoc minus", "10 - 3 - 2 USD", new Amount(5, "USD")],
     ["parentheses", "-(1 + 2) USD", new Amount(-3, "USD")],
-    ["number only", "10", new IncompleteAmount(10, null)],
+    ["number only", "10", new IncompleteAmount(10, null, "10")],
     ["currency only", "USD", new IncompleteAmount(null, "USD")],
   ])("%s", (_name, text, expected) => {
     expect(postingOf(text).amount).toStrictEqual(expected);
@@ -100,18 +101,19 @@ describe("posting amounts", () => {
 describe("cost", () => {
   test.each([
     ["empty per-unit", "1 AAPL {}", new Cost()],
-    ["per-unit", "1 AAPL {10 USD}", new Cost(new Amount(10, "USD"))],
-    ["total", "1 AAPL {{10 USD}}", new Cost(undefined, undefined, undefined, new Amount(10, "USD"))],
+    ["per-unit", "1 AAPL {10 USD}", new Cost(new Amount(10, "USD", "10"))],
+    ["total", "1 AAPL {{10 USD}}", new Cost(undefined, undefined, undefined, new Amount(10, "USD", "10"))],
     ["currency only", "1 AAPL {USD}", new Cost(new IncompleteAmount(null, "USD"))],
-    ["number only", "1 AAPL {10}", new Cost(new IncompleteAmount(10, null))],
-    ["total via #", "1 AAPL {# 5 USD}", new Cost(undefined, undefined, undefined, new Amount(5, "USD"))],
-    ["per via #", "1 AAPL {2 # USD}", new Cost(new Amount(2, "USD"))],
+    ["number only", "1 AAPL {10}", new Cost(new IncompleteAmount(10, null, "10"))],
+    ["total via #", "1 AAPL {# 5 USD}", new Cost(undefined, undefined, undefined, new Amount(5, "USD", "5"))],
+    ["per via #", "1 AAPL {2 # USD}", new Cost(new Amount(2, "USD", "2"))],
+    ["both via #", "1 AAPL {2 # 5 USD}", new Cost(new Amount(2, "USD", "2"), undefined, undefined, new Amount(5, "USD", "5"))],
     ["# without numbers", "1 AAPL {# USD}", new Cost(new IncompleteAmount(null, "USD"))],
     ["merge only", "1 AAPL {*}", new Cost(undefined, undefined, undefined, undefined, true)],
     [
       "date and label",
       '1 AAPL {10 USD, 2022-01-01, "lot"}',
-      new Cost(new Amount(10, "USD"), new Date(2022, 0, 1), "lot"),
+      new Cost(new Amount(10, "USD", "10"), new Date(2022, 0, 1), "lot"),
     ],
   ])("%s", (_name, text, expected) => {
     expect(postingOf(text).cost).toStrictEqual(expected);
@@ -120,8 +122,8 @@ describe("cost", () => {
 
 describe("price annotation", () => {
   test.each([
-    ["per-unit", "1 EUR @ 1.1 USD", new Amount(1.1, "USD"), false],
-    ["total", "1 EUR @@ 1.1 USD", new Amount(1.1, "USD"), true],
+    ["per-unit", "1 EUR @ 1.1 USD", new Amount(1.1, "USD", "1.1"), false],
+    ["total", "1 EUR @@ 1.1 USD", new Amount(1.1, "USD", "1.1"), true],
     ["bare @", "1 EUR @", undefined, false],
     ["currency only", "1 EUR @ USD", new IncompleteAmount(null, "USD"), false],
   ])("%s", (_name, text, amount, isTotal) => {
@@ -139,7 +141,7 @@ describe("metadata values", () => {
     ["TRUE", "TRUE", true],
     ["FALSE", "FALSE", false],
     ["NULL", "NULL", null],
-    ["amount", "3 EUR", new Amount(3, "EUR")],
+    ["amount", "3 EUR", new Amount(3, "EUR", "3")],
     ["number expression", "2 * 3", 6],
   ])("%s", (_name, text, expected) => {
     const open = only<Open>(`2022-01-01 open Assets:A\n  kk: ${text}\n`);
@@ -180,9 +182,9 @@ describe("other directives", () => {
     ["pad", "2022-01-01 pad Assets:A Equity:B", { account: "Assets:A", sourceAccount: "Equity:B" }],
     ["note", '2022-01-01 note Assets:A "call"', { account: "Assets:A", comment: "call", tags: [], links: [] }],
     ["note with tags and links", '2022-01-01 note Assets:A "call" #t ^l', { tags: ["t"], links: ["l"] }],
-    ["price", "2022-01-01 price EUR 1.08 USD", { currency: "EUR", amount: new Amount(1.08, "USD") }],
+    ["price", "2022-01-01 price EUR 1.08 USD", { currency: "EUR", amount: new Amount(1.08, "USD", "1.08") }],
     ["commodity", "2022-01-01 commodity USD", { currency: "USD" }],
-    ["balance", "2022-01-01 balance Assets:A 1.5 USD", { account: "Assets:A", amount: new Amount(1.5, "USD"), tolerance: undefined }],
+    ["balance", "2022-01-01 balance Assets:A 1.5 USD", { account: "Assets:A", amount: new Amount(1.5, "USD", "1.5"), tolerance: undefined }],
   ])("%s", (_name, input, fields) => {
     expect(only<Directive>(`${input}\n`)).toMatchObject(fields);
   });
@@ -204,7 +206,7 @@ describe("other directives", () => {
   test("custom values keep their types in order", () => {
     const custom = only<Custom>('2022-01-01 custom "b" "s" 2022-01-02 TRUE 10 USD 7 Assets:A\n');
     expect(custom.type).toBe("b");
-    expect(custom.values).toEqual(["s", new Date(2022, 0, 2), true, new Amount(10, "USD"), 7, "Assets:A"]);
+    expect(custom.values).toEqual(["s", new Date(2022, 0, 2), true, new Amount(10, "USD", "10"), 7, "Assets:A"]);
   });
 
   test("option, plugin with and without config, include", () => {

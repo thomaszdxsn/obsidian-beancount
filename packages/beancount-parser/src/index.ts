@@ -100,6 +100,12 @@ class CollectingErrorListener extends BaseErrorListener {
 
 const UNESCAPES: Record<string, string> = { n: '\n', t: '\t', r: '\r', f: '\f', b: '\b' };
 
+/** A number and, when it is a plain literal, its source spelling. */
+interface ParsedNumber {
+  value: number;
+  text?: string;
+}
+
 // Maps a syntactically valid parse tree to model objects. Errors in values the
 // grammar cannot reject (e.g. 2022-02-30) are pushed to `errors`.
 class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
@@ -179,13 +185,15 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   };
 
   visitBalance = (ctx: BalanceContext): Balance => {
+    const tolerance = ctx._tolerance ? this.parsedNumber(ctx._tolerance) : undefined;
     return new Balance(
       this.date(ctx.DATE()),
       ctx.account().getText(),
-      new Amount(this.number(ctx._balanceNumber!), ctx.commodity().getText()),
+      this.amountFrom(this.parsedNumber(ctx._balanceNumber!), ctx.commodity().getText()),
       this.location(ctx),
       this.metadata(ctx.metadata().key_value_line()),
-      ctx._tolerance ? this.number(ctx._tolerance) : undefined,
+      tolerance?.value,
+      tolerance?.text,
     );
   };
 
@@ -332,26 +340,52 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   // -------------------------------------------------------------------------
 
   private amount(ctx: AmountContext): Amount {
-    return new Amount(this.number(ctx.number()), ctx.commodity().getText());
+    return this.amountFrom(this.parsedNumber(ctx.number()), ctx.commodity().getText());
   }
 
   private incompleteAmount(ctx: Incomplete_amountContext): Amount | IncompleteAmount {
     const num = ctx.number();
-    return this.amountOrIncomplete(num ? this.number(num) : null, ctx.commodity()?.getText() ?? null)!;
+    return this.amountOrIncomplete(num ? this.parsedNumber(num) : null, ctx.commodity()?.getText() ?? null)!;
   }
 
-  private amountOrIncomplete(num: number | null, currency: string | null): Amount | IncompleteAmount | undefined {
-    if (num !== null && currency !== null) return new Amount(num, currency);
+  private amountFrom(parsed: ParsedNumber, currency: string): Amount {
+    return new Amount(parsed.value, currency, parsed.text);
+  }
+
+  private amountOrIncomplete(
+    num: ParsedNumber | null,
+    currency: string | null,
+  ): Amount | IncompleteAmount | undefined {
+    if (num !== null && currency !== null) return this.amountFrom(num, currency);
     if (num === null && currency === null) return undefined;
-    return new IncompleteAmount(num, currency);
+    return new IncompleteAmount(num?.value ?? null, currency, num?.text);
   }
 
   // Arithmetic expression, evaluated as written. 1/0, 0/0 and overflow are
   // errors, as upstream's Decimal evaluation raises on them.
   private number(ctx: NumberContext): number {
+    return this.parsedNumber(ctx).value;
+  }
+
+  private parsedNumber(ctx: NumberContext): ParsedNumber {
     const value = this.evaluate(ctx);
     if (!Number.isFinite(value)) this.error(ctx.start!, `invalid number '${ctx.getText()}'`);
-    return value;
+    const text = this.literalText(ctx);
+    return text === undefined ? { value } : { value, text };
+  }
+
+  /**
+   * Sign plus the comma-stripped digits when the tree is only unary signs on a
+   * NUMBER. Parentheses and binary operators are expressions, so they keep no spelling.
+   */
+  private literalText(ctx: NumberContext): string | undefined {
+    const literal = ctx.NUMBER();
+    if (literal) return literal.getText().replace(/,/g, '');
+    if (ctx.LPAREN() || ctx.number_().length !== 1) return undefined;
+    if (!ctx.MINUS() && !ctx.PLUS()) return undefined;
+    const inner = this.literalText(ctx.number_(0)!);
+    if (inner === undefined) return undefined;
+    return (ctx.MINUS() ? '-' : '+') + inner;
   }
 
   private evaluate(ctx: NumberContext): number {
@@ -366,7 +400,6 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     if (ctx.PLUS()) return a + b;
     return a - b;
   }
-
   private cost(ctx: CostContext): Cost {
     const isTotal = ctx.LCURLCURL() !== null;
     const cost = new Cost();
@@ -388,14 +421,14 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
         const currency = compound.commodity()?.getText() ?? null;
         if (compound.HASH()) {
           if (isTotal) this.error(compound.start!, 'per-unit cost not allowed in total cost {{...}}');
-          const per = compound._perUnit ? this.number(compound._perUnit) : null;
-          const total = compound._total ? this.number(compound._total) : null;
-          cost.amount = per !== null ? new Amount(per, currency!) : undefined;
-          cost.total = total !== null ? new Amount(total, currency!) : undefined;
+          const per = compound._perUnit ? this.parsedNumber(compound._perUnit) : null;
+          const total = compound._total ? this.parsedNumber(compound._total) : null;
+          cost.amount = per !== null ? this.amountFrom(per, currency!) : undefined;
+          cost.total = total !== null ? this.amountFrom(total, currency!) : undefined;
           if (per === null && total === null) cost.amount = new IncompleteAmount(null, currency);
         } else {
           const num = compound.number_(0);
-          const value = this.amountOrIncomplete(num ? this.number(num) : null, currency);
+          const value = this.amountOrIncomplete(num ? this.parsedNumber(num) : null, currency);
           if (isTotal) cost.total = value;
           else cost.amount = value;
         }
