@@ -5,6 +5,11 @@
  */
 import { createHash } from 'node:crypto';
 
+// Parsed dates are local-midnight `Date`s, so hashed outputs depend on the
+// zone; the expected hashes were recorded in this one. Set before any date
+// is built (this module is imported first).
+process.env.TZ = 'Asia/Shanghai';
+
 // ---------- deterministic ledger generator ----------
 let seed = 0x9e3779b9;
 function rand(): number {

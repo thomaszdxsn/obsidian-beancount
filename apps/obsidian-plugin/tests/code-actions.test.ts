@@ -121,6 +121,51 @@ describe('extractPairings / inferBalancingAccount', () => {
 			])
 		).toBe('Assets:Bank');
 	});
+
+	it('excludes a three-leg transaction, including one whose third leg has no amount', () => {
+		expect(
+			extractPairings(
+				['2026-09-01 * "Split"', '  Expenses:Food  6.00 USD', '  Expenses:Tip  4.00 USD', '  Assets:Cash  -10.00 USD'].join(
+					'\n'
+				)
+			)
+		).toEqual([]);
+		// Stopping at the second amount leg would pair Food with Cash and hide the third account.
+		expect(
+			extractPairings(
+				['2026-09-01 * "Split"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD', '  Expenses:Tip'].join('\n')
+			)
+		).toEqual([]);
+	});
+
+	it('pairs flagged legs of one commodity', () => {
+		expect(
+			extractPairings(
+				['2026-09-01 ! "Cafe"', '  ! Expenses:Food  10.00 USD', '  Assets:Cash * -10.00 USD'].join('\n')
+			)
+		).toEqual([{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
+	});
+
+	it('pairs a transaction whose postings follow metadata lines', () => {
+		expect(
+			extractPairings(
+				[
+					'2026-09-01 * "Cafe"',
+					'  invoice: "abc"',
+					'  Expenses:Food  10.00 USD',
+					'  Assets:Cash  -10.00 USD',
+				].join('\n')
+			)
+		).toEqual([{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
+	});
+
+	it('normalizes a slash date on a pairing', () => {
+		expect(
+			extractPairings(
+				['2026/09/01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
+			)
+		).toEqual([{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
+	});
 });
 
 describe('padEdit', () => {
@@ -237,6 +282,18 @@ describe('quickFixesForLine', () => {
 			},
 		]);
 	});
+
+	it('does not invent an open date when the marker is outside the file', () => {
+		expect(
+			quickFixesForLine(
+				context({
+					lines: ['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD'],
+					line: -1,
+					message: "Invalid reference to unknown account 'Expenses:Food'",
+				})
+			)
+		).toEqual([]);
+	});
 });
 
 describe('PairingIndex', () => {
@@ -280,6 +337,28 @@ describe('OpenFileIndex', () => {
 		index.setFileContent('dir/opens.bean', '2020-01-01 open Assets:Cash\n');
 		expect(index.renameFile('dir', 'books')).toBe(true);
 		expect(index.bestFile()).toBe('books/opens.bean');
+	});
+
+	it('ignores open in a comment, a narration, and an account name, on the first and last lines', () => {
+		const index = new OpenFileIndex();
+		index.setFileContent(
+			'notes.bean',
+			['; do not open Assets:Nope', '2026-01-01 * "please open Assets:Narr"', '  Expenses:Opening  1.00 USD'].join('\n')
+		);
+		expect(index.bestFile()).toBeNull();
+		expect([...index.openedIn('notes.bean')]).toEqual([]);
+
+		index.setFileContent(
+			'accounts.bean',
+			[
+				'2020-01-01 open Assets:First',
+				'; open Assets:Nope',
+				'2026-01-01 * "please open Assets:Narr"',
+				'  Expenses:Opening  1.00 USD',
+				'2020-12-31 open Expenses:Last',
+			].join('\n')
+		);
+		expect([...index.openedIn('accounts.bean')]).toEqual(['Assets:First', 'Expenses:Last']);
 	});
 });
 

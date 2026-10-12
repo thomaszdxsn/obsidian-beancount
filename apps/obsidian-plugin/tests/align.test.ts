@@ -275,6 +275,36 @@ describe('alignText', () => {
 		]);
 	});
 
+	it('treats ideographic space and nbsp as the gap, not as indent', () => {
+		// A single non-ASCII space is already the right width, but it is not
+		// U+0020, so the gap is still rewritten. A length-only comparison would
+		// leave it in place.
+		expect(align(['  Assets:Cash\u00a012.5 USD'])).toEqual(['  Assets:Cash 12.5 USD']);
+		expect(align(['  Assets:Cash\u300012.50 USD', '  Expenses:A:B:C -1234.5 CNY'])).toEqual([
+			'  Assets:Cash       12.50 USD',
+			'  Expenses:A:B:C -1234.5 CNY',
+		]);
+		// The same space in front of the account is not an indent: the line is
+		// not a posting, and it must not set the column.
+		expect(align(['\u3000Assets:Cash 12.50 USD', '  Expenses:Food 1 USD'])).toEqual([
+			'\u3000Assets:Cash 12.50 USD',
+			'  Expenses:Food 1 USD',
+		]);
+	});
+
+	it('keeps a flag separated by nbsp with the account', () => {
+		expect(align(['  Assets:Cash\u00a0*\u00a012.50 USD', '  Expenses:A:B:C -1234.5 CNY'])).toEqual([
+			'  Assets:Cash\u00a0*     12.50 USD',
+			'  Expenses:A:B:C -1234.5 CNY',
+		]);
+		// A leading flag needs a space or tab after it. nbsp does not count,
+		// so the line is not a posting and must not widen the other column.
+		expect(align(['  *\u00a0Assets:Cash 12 USD', '  Expenses:A:B:C -1234.5 CNY'])).toEqual([
+			'  *\u00a0Assets:Cash 12 USD',
+			'  Expenses:A:B:C -1234.5 CNY',
+		]);
+	});
+
 });
 
 describe('computeAlignment', () => {
@@ -303,6 +333,37 @@ describe('computeAlignment', () => {
 	it('keeps a column already past the target', () => {
 		expect(computeAlignment(['  Expenses:Food:Rest 1234.5 CNY'], undefined, 10)).toEqual([]);
 	});
+
+	it('ignores a posting-shaped continuation of a string opened above the range', () => {
+		const lines = [
+			'2026-01-01 * "open',
+			'  Assets:Cash    10.5 USD',
+			'"',
+			'  Expenses:Food 1 USD',
+			'  Assets:Bank -100.00 USD',
+		];
+		// Line 1 is still inside the payee string. Only the postings after the close move.
+		expect(computeAlignment(lines, { from: 1, to: 4 })).toEqual([{ line: 3, from: 15, to: 16, text: '  ' }]);
+		expect(computeAlignment(lines, { from: 1, to: 1 })).toEqual([]);
+	});
+
+	it('does not share a column across a block boundary inside the range', () => {
+		const lines = [
+			'2026-01-01 * "A"',
+			'  Expenses:Food 1.00 USD',
+			'  Assets:Cash -1000.00 USD',
+			'  Assets:Bank 2.00 USD',
+			'',
+			'2026-01-02 * "B"',
+			'  Assets:Cash 2.00 USD',
+		];
+		// The range starts mid-block. The blank still splits it from the next
+		// transaction, so only Assets:Bank pads up to -1000.
+		expect(computeAlignment(lines, { from: 2, to: 6 })).toEqual([
+			{ line: 3, from: 13, to: 14, text: '     ' },
+		]);
+	});
+
 });
 
 describe('isAmountDotInsert', () => {
@@ -358,6 +419,44 @@ describe('blockRangeAt', () => {
 			to: 1,
 		});
 	});
+
+	it('does not pull a loose run into the header that follows it', () => {
+		const lines = ['  Assets:Cash 1.00 USD', '2026-01-01 * "A"', '  Expenses:Food 2.00 USD'];
+		expect(blockRangeAt(lines, 0)).toEqual({ from: 0, to: 0 });
+		expect(blockRangeAt(lines, 1)).toEqual({ from: 1, to: 2 });
+		expect(blockRangeAt(lines, 2)).toEqual({ from: 1, to: 2 });
+	});
+
+	it('closes the block at a column-0 comment so later indents do not join it', () => {
+		const lines = [
+			'2026-01-01 * "A"',
+			'  Assets:Cash 1 USD',
+			'; comment',
+			'  Expenses:Food 2.00 USD',
+			'  Assets:Bank -100.00 USD',
+		];
+		expect(blockRangeAt(lines, 1)).toEqual({ from: 0, to: 1 });
+		expect(blockRangeAt(lines, 2)).toEqual({ from: 2, to: 2 });
+		expect(blockRangeAt(lines, 4)).toEqual({ from: 3, to: 4 });
+	});
+
+	it('closes a block on ideographic space, and treats a nbsp line as column-0 content', () => {
+		const ideo = ['2026-01-01 * "A"', '  Expenses:Food 1.00 USD', '\u3000', '  Assets:Cash -1.00 USD'];
+		expect(blockRangeAt(ideo, 1)).toEqual({ from: 0, to: 1 });
+		expect(blockRangeAt(ideo, 2)).toEqual({ from: 2, to: 2 });
+		expect(blockRangeAt(ideo, 3)).toEqual({ from: 3, to: 3 });
+		// nbsp is not an indent, so the line opens its own block and the posting under it joins that.
+		const nbsp = ['  Expenses:Food 12.5 CNY', '\u00a0not a posting', '  Assets:Cash -12.5 CNY'];
+		expect(blockRangeAt(nbsp, 0)).toEqual({ from: 0, to: 0 });
+		expect(blockRangeAt(nbsp, 2)).toEqual({ from: 1, to: 2 });
+	});
+
+	it('is a lone line when the index is outside the document', () => {
+		expect(blockRangeAt(lines, -1)).toEqual({ from: -1, to: -1 });
+		expect(blockRangeAt(lines, lines.length)).toEqual({ from: lines.length, to: lines.length });
+		expect(blockRangeAt([], 0)).toEqual({ from: 0, to: 0 });
+	});
+
 });
 
 describe('displayWidth', () => {
@@ -376,4 +475,18 @@ describe('displayWidth', () => {
 		expect(displayWidth('e\u0301')).toBe(1);
 		expect(displayWidth('a\u200bb')).toBe(2);
 	});
+
+	it('keeps the fast path from widening the cutoff, a narrow mark, or a non-wide surrogate', () => {
+		// U+02FF is the last unit on the ASCII path; U+0300 is the first combining mark.
+		expect(displayWidth('\u02FF')).toBe(1);
+		expect(displayWidth('\u0300')).toBe(0);
+		// Above the fast path, neither wide nor zero-width.
+		expect(displayWidth('\u20AC')).toBe(1);
+		// Fullwidth, a wide range the CJK samples do not hit.
+		expect(displayWidth('\uFF21')).toBe(2);
+		// Supplementary and outside the emoji wide ranges: one cell, not two UTF-16 units.
+		expect(displayWidth('\u{1F100}')).toBe(1);
+		expect(displayWidth('a\u{1F600}b')).toBe(4);
+	});
+
 });

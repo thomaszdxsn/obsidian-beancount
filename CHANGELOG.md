@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Large ledgers are much faster; behaviour is unchanged (#62). On a
+  16.6k-line ledger: parsing 277 → 6 ms, **Format ledger** 312 → 13 ms
+  (fenced notes 297 → 16 ms), the balances view's first parse 105 → 6 ms.
+  Editing: re-indexing after each save (and per file at startup) 882 → 12 ms,
+  a keystroke's inlay hints / flag warnings / include links 12 → 3 ms in a
+  ledger and 20 → 3 ms in a fenced note, scrolling 10 → 0.3 ms, the `.` and
+  Enter keys about 1 ms.
+- `@repo/beancount-parser` lexes and parses with a hand-written lexer and
+  recursive-descent parser that mirror `Beancount.g4`; any lexer or syntax
+  error re-parses through the ANTLR parser, so error messages are unchanged.
+  Differential tests compare both paths.
+
 ## 0.2.0
 
 Transaction folding, ledger formatting, and an account balances view, built

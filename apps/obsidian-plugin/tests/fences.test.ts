@@ -2,8 +2,28 @@
  * Markdown ```beancount / ```bean fences are the notes' ledger: extract the
  * bodies, then map bean-check's temp-file lines back onto the host document.
  */
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { buildFenceLedger, extractBeancountFences, isSafeIncludePath, ledgerSource } from '../fences';
+import type * as CMState from '@codemirror/state';
+import { buildFenceLedger, docFences, extractBeancountFences, isSafeIncludePath, ledgerSource } from '../fences';
+
+const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
+
+/** CodeMirror `Text` plus a countable `toString`, so a cache hit cannot rescan. */
+function cmDoc(lines: readonly string[]) {
+	const text = Text.of(lines);
+	let scans = 0;
+	return {
+		get scans() {
+			return scans;
+		},
+		toString() {
+			scans += 1;
+			return text.toString();
+		},
+		iterLines: () => text.iterLines(),
+	};
+}
 
 describe('ledgerSource', () => {
 	it('keeps a ledger file whole, prose and comments included', () => {
@@ -96,6 +116,13 @@ describe('extractBeancountFences', () => {
 			{ startLine: 1, lines: ['2026-10-01 open Assets:Cash'] },
 		]);
 	});
+
+	it('accepts a three-space opener and rejects a four-space one', () => {
+		expect(extractBeancountFences('   ```bean\n   2026-01-01 open Assets:Cash\n   ```')).toEqual([
+			{ startLine: 1, lines: ['2026-01-01 open Assets:Cash'] },
+		]);
+		expect(extractBeancountFences('    ```bean\n    2026-01-01 open Assets:Cash\n    ```')).toEqual([]);
+	});
 });
 
 describe('buildFenceLedger', () => {
@@ -138,6 +165,18 @@ describe('buildFenceLedger', () => {
 		expect(ledger.text.startsWith('include ')).toBe(false);
 		expect(ledger.hostLine(1)).toBe(4);
 	});
+
+	it('emits no trailing newline when there is no ledger text', () => {
+		const empty = buildFenceLedger([]);
+		expect(empty.text).toBe('');
+		expect(empty.hostLine(1)).toBeUndefined();
+
+		// A blank body line joins to '' — still not a non-empty file — but it is a host line.
+		const blank = buildFenceLedger([{ startLine: 4, lines: [''] }]);
+		expect(blank.text).toBe('');
+		expect(blank.hostLine(1)).toBe(5);
+		expect(blank.hostLine(2)).toBeUndefined();
+	});
 });
 
 describe('isSafeIncludePath', () => {
@@ -147,5 +186,41 @@ describe('isSafeIncludePath', () => {
 		expect(isSafeIncludePath('main.bean\ninclude "/etc/passwd"')).toBe(false);
 		expect(isSafeIncludePath('main.bean\0x')).toBe(false);
 		expect(isSafeIncludePath('')).toBe(false);
+	});
+});
+
+describe('docFences', () => {
+	it('strips trailing CR from non-last CodeMirror lines so fences match toString()', () => {
+		const doc = cmDoc(['```bean\r', '2026-10-01 * "A"\r', '```\r', 'after']);
+		const once = docFences(doc);
+		expect(once.fences).toEqual(extractBeancountFences(doc.toString()));
+		expect(once.masked).toEqual(['', '2026-10-01 * "A"', '', '']);
+		// Read from iterLines, not a joined copy, and reuse that result.
+		expect(doc.scans).toBe(1);
+		expect(docFences(doc)).toBe(once);
+		expect(doc.scans).toBe(1);
+	});
+
+	it('keeps an unclosed fence body at host indexes and does not share it with another document', () => {
+		const open = cmDoc(['# note', '```bean', '2026-01-01 open Assets:Cash', 'still body']);
+		const other = cmDoc(['prose only']);
+		const fences = docFences(open);
+		const none = docFences(other);
+		expect(fences.fences).toEqual([
+			{ startLine: 2, lines: ['2026-01-01 open Assets:Cash', 'still body'] },
+		]);
+		expect(fences.masked).toEqual(['', '', '2026-01-01 open Assets:Cash', 'still body']);
+		expect(none.fences).toEqual([]);
+		expect(none.masked).toBeNull();
+		expect(docFences(open)).toBe(fences);
+		expect(docFences(open).fences).not.toBe(none.fences);
+	});
+
+	it('strips the opener indent in the masked body, not only in extractBeancountFences', () => {
+		const doc = cmDoc(['  ```beancount', '  2026-10-01 open Assets:Cash', '  ```']);
+		expect(docFences(doc)).toEqual({
+			fences: [{ startLine: 1, lines: ['2026-10-01 open Assets:Cash'] }],
+			masked: ['', '2026-10-01 open Assets:Cash', ''],
+		});
 	});
 });

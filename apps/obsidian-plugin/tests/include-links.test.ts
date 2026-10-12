@@ -276,6 +276,20 @@ describe('resolveIncludePath', () => {
 			matches: [name],
 		});
 	});
+
+	it('lets a trailing ** match files under a prefix but not the prefix itself or a hidden name', () => {
+		const files = [
+			'ledger/2024',
+			'ledger/2024/a.bean',
+			'ledger/2024/.hidden.bean',
+			'ledger/2024/.hidden/a.bean',
+			'ledger/2024/sub/c.bean',
+			'ledger/2025/a.bean',
+		];
+		const matches = ['ledger/2024/a.bean', 'ledger/2024/sub/c.bean'];
+		expect(resolve('2024/**', 'ledger/main.bean', '/vault', files)).toEqual({ kind: 'glob', matches });
+		expect(resolve('2024/**/**', 'ledger/main.bean', '/vault', files)).toEqual({ kind: 'glob', matches });
+	});
 });
 
 describe('openIncludedFile', () => {
@@ -654,6 +668,19 @@ describe('includeLinkMouseDown', () => {
 		expect(result.handled).toBe(false);
 		expect(result.opened).toEqual([]);
 	});
+
+	it('opens an include inside an indented fence and ignores the same words outside it', () => {
+		const text = ['include "a.bean"', '  ```bean', '  include "a.bean"', '  ```'].join('\n');
+		const doc = docOf(text);
+		const file = { path: 'notes/budget.md', extension: 'md' };
+		const outside = click(text, file, doc.line(1).from + 8, { meta: true, ctrl: true });
+		expect(outside.handled).toBe(false);
+		expect(outside.opened).toEqual([]);
+
+		const inside = click(text, file, doc.line(3).from + doc.line(3).text.indexOf('"'), { meta: true, ctrl: true });
+		expect(inside.handled).toBe(true);
+		expect(inside.opened).toEqual(['tab:notes/a.bean']);
+	});
 });
 
 describe('includeLinksExtension', () => {
@@ -882,5 +909,43 @@ describe('includeLinksExtension', () => {
 		};
 		plugin.update({ docChanged: false, viewportChanged: true, state: view.state, view });
 		expect(plugin.decorations).toBe(before);
+	});
+
+	it('marks an indented fence include at host offsets and ignores include outside the fence', () => {
+		const text = [
+			'include "prose.bean"',
+			'  ```beancount',
+			'  include "a.bean"',
+			'  Assets:Cash  1 USD ; include "no.bean"',
+			'  ```',
+			'include "after.bean"',
+		].join('\n');
+		const doc = docOf(text);
+		const view = {
+			state: { doc, field: () => ({ file: { path: 'notes/budget.md', extension: 'md' } }) },
+		};
+		const extension = includeLinksExtension({} as App) as unknown as MockViewPlugin<{
+			decorations: Array<{ from: number; to: number }>;
+		}>;
+		const plugin = new extension.cls(view as never);
+		const line = doc.line(3);
+		const quote = line.text.indexOf('"');
+		expect(plugin.decorations).toEqual([
+			expect.objectContaining({ from: line.from + quote, to: line.from + quote + '"a.bean"'.length }),
+		]);
+	});
+
+	it('does not treat a four-space indented fence as a ledger and does not read the whole note', () => {
+		const doc = docOf('    ```beancount\n    include "a.bean"\n    ```');
+		doc.toString = () => {
+			throw new Error('full document');
+		};
+		const view = {
+			state: { doc, field: () => ({ file: { path: 'notes/budget.md', extension: 'md' } }) },
+		};
+		const extension = includeLinksExtension({} as App) as unknown as MockViewPlugin<{
+			decorations: unknown[];
+		}>;
+		expect(new extension.cls(view as never).decorations).toEqual([]);
 	});
 });

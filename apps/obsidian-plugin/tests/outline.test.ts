@@ -113,6 +113,19 @@ describe('parseBeancountOutline', () => {
 		);
 	});
 
+	it('unescapes a narration even when the payee has no backslash', () => {
+		expect(parseBeancountOutline('2026-01-01 * "Cafe" "Say \\"Hi\\""')[0].children[0].title).toBe(
+			'Cafe — Say "Hi"'
+		);
+		// `\\.` drops the backslash only. `\n` is not a newline, and `\\` is one backslash.
+		expect(parseBeancountOutline('2026-01-01 * "a\\\\b" "c\\nd"')[0].children[0].title).toBe('a\\b — cnd');
+	});
+
+	it('still reads an entry whose year starts with 0 or 9', () => {
+		expect(parseBeancountOutline('0999-01-01 * "A"')[0].children[0].title).toBe('A');
+		expect(parseBeancountOutline('9999-12-31 open Assets:Cash')[0].children[0].title).toBe('open Assets:Cash');
+	});
+
 	it('keeps slash dates as written rather than normalizing them', () => {
 		expect(parseBeancountOutline('2026/01/02 * "A"')[0].title).toBe('2026/01/02');
 	});

@@ -401,4 +401,79 @@ describe('balance inlay editor lifecycle', () => {
 		pane.setViewport([span(11), span(12), span(13)]);
 		expect(pane.labels()).toEqual([]);
 	});
+
+	it('keeps file-wide balance hints across a scroll, and a settings refresh on the same document does not resurrect them', () => {
+		const lines = [
+			'2026-01-01 * "Near"',
+			'  Assets:Cash  10.00 USD',
+			'2026-01-02 balance Assets:Cash 12.50 USD',
+			'2026-02-01 * "Far"',
+			'  Assets:A  8.00 USD',
+			'  Assets:B  -1.00 USD',
+		];
+		const host = { settings: { inlayHints: true, entryLedger: '' } };
+		const controller = new BalanceInlayController(host);
+		const pane = editor(controller, lines.join('\n'), 'bean', [
+			{ from: 0, to: lines[0].length },
+		]);
+		const doc = pane.view.state.doc;
+		const span = (line: number) => ({ from: doc.line(line).from, to: doc.line(line).to });
+		pane.setViewport([span(2)]);
+		expect(pane.labels()).toEqual([
+			{ at: doc.line(1).to, text: '≠ 0: 10.00 USD' },
+			{ at: doc.line(3).to, text: 'Δ +2.50 USD' },
+		]);
+
+		pane.setViewport([span(5)]);
+		expect(pane.view.state.doc).toBe(doc);
+		expect(pane.labels()).toEqual([
+			{ at: doc.line(3).to, text: 'Δ +2.50 USD' },
+			{ at: doc.line(4).to, text: '≠ 0: 7.00 USD' },
+		]);
+
+		host.settings.entryLedger = 'main.bean';
+		controller.refresh();
+		expect(pane.view.state.doc).toBe(doc);
+		expect(pane.labels()).toEqual([{ at: doc.line(4).to, text: '≠ 0: 7.00 USD' }]);
+
+		pane.setViewport([span(2)]);
+		expect(pane.labels()).toEqual([{ at: doc.line(1).to, text: '≠ 0: 10.00 USD' }]);
+
+		host.settings.entryLedger = '';
+		controller.refresh();
+		expect(pane.labels()).toEqual([
+			{ at: doc.line(1).to, text: '≠ 0: 10.00 USD' },
+			{ at: doc.line(3).to, text: 'Δ +2.50 USD' },
+		]);
+
+		const edited = lines.map((line, index) => (index === 1 ? '  Assets:Cash  11.00 USD' : line)).join('\n');
+		pane.change(edited);
+		expect(pane.view.state.doc).not.toBe(doc);
+		const next = pane.view.state.doc;
+		expect(pane.labels()).toEqual([
+			{ at: next.line(1).to, text: '≠ 0: 11.00 USD' },
+			{ at: next.line(3).to, text: 'Δ +1.50 USD' },
+		]);
+	});
+
+	it('places fence-masked hints on host lines after stripping the opener indent', () => {
+		const lines = [
+			'# Note',
+			'  ```bean',
+			'  2026-01-01 * "Deposit"',
+			'    Assets:Cash 10.00 USD',
+			'  2026-01-02 balance Assets:Cash 12.50 USD',
+			'  ```',
+			'2026-01-03 * "Prose"',
+			'  Assets:Cash 99.00 USD',
+			'2026-01-04 balance Assets:Cash 1 USD',
+		];
+		const controller = new BalanceInlayController({ settings: { inlayHints: true, entryLedger: '' } });
+		const pane = editor(controller, lines.join('\n'), 'md');
+		const doc = pane.view.state.doc;
+		expect(pane.labels()).toEqual([
+			{ at: doc.line(3).to, text: '≠ 0: 10.00 USD' },
+			{ at: doc.line(5).to, text: 'Δ +2.50 USD' },
+		]);
+	});
 });

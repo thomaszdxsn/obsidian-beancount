@@ -73,6 +73,46 @@ describe('extractCommodities', () => {
 	it('returns an empty set for empty content', () => {
 		expect([...extractCommodities('')]).toEqual([]);
 	});
+
+	it('ignores a commodity word in a comment line and still reads the directive after it', () => {
+		const content = ['; commodity FAKE', '2026-09-30 commodity AAPL'].join('\n');
+		expect([...extractCommodities(content)]).toEqual(['AAPL']);
+	});
+
+	it('extracts commodity directives on consecutive lines', () => {
+		const content = ['2026-09-30 commodity AAPL', '2026-10-01 commodity MSFT'].join('\n');
+		expect([...extractCommodities(content)]).toEqual(['AAPL', 'MSFT']);
+	});
+
+	it('treats U+2028 as a line break between commodity directives', () => {
+		expect([...extractCommodities('2026-09-30 commodity AAPL\u20282026-10-01 commodity MSFT')]).toEqual([
+			'AAPL',
+			'MSFT',
+		]);
+	});
+
+	it('extracts directives and amounts from CRLF text', () => {
+		const content = '2026-09-30 commodity AAPL\r\n2026-10-01 price USD 1.10 CAD\r\n';
+		expect([...extractCommodities(content)]).toEqual(['AAPL', 'USD', 'CAD']);
+	});
+
+	it('extracts both currencies of a price directive dated with slashes', () => {
+		expect([...extractCommodities('2026/09/30 price USD 1.10 CAD')]).toEqual(['USD', 'CAD']);
+	});
+
+	it('ignores an amount inside a quoted string or after a semicolon on the same line', () => {
+		// The semicolon inside the quotes is not a comment; the one after the amount is.
+		expect([...extractCommodities('  invoice: "Order; 2 EUR"  10.00 USD ; 3 GBP')]).toEqual(['USD']);
+	});
+
+	it('does not treat a dated line as an amount line just because it contains price or balance', () => {
+		const content = ['2026-09-30 priceless 10 USD', '2026-09-30 balanceX 10 EUR', '  Assets:Cash  3 GBP'].join('\n');
+		expect([...extractCommodities(content)]).toEqual(['GBP']);
+	});
+
+	it('extracts a commodity from a tab-indented posting', () => {
+		expect([...extractCommodities('\tAssets:Cash  2 EUR')]).toEqual(['EUR']);
+	});
 });
 
 describe('extractTags', () => {

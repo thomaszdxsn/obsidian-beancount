@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { balanceHints } from '../balance-hints';
+import { balanceHints, stripComment } from '../balance-hints';
 
 const hints = (...lines: string[]) => balanceHints(lines);
 
@@ -198,5 +198,86 @@ describe('balance assertion hints', () => {
 			'  plugin: "plugin"',
 			'2026/01/02 balance Assets:现金 12 USD\r',
 		)).toEqual([{ line: 6, label: 'Δ +2 USD' }]);
+	});
+
+	it('accumulates the asserted account and its children, not an unrelated tree', () => {
+		expect(hints(
+			'2026-01-01 * "Children"',
+			'  Assets:Cash  10 USD',
+			'  Assets:Cash:Wallet  3 USD',
+			'  Expenses:Food  1 USD',
+			'2026-01-02 balance Assets:Cash 0 USD',
+		)).toEqual([{ line: 4, label: 'Δ -13 USD' }]);
+	});
+
+	it('ignores a pad on an unasserted ancestor but a pad in the asserted subtree taints', () => {
+		expect(hints(
+			'2026-01-01 * "Mixed"',
+			'  Assets:Cash:Wallet  4 USD',
+			'  Assets:Bank  9 USD',
+			'2026-01-01 pad Assets:Cash Equity:Opening',
+			'2026-01-02 balance Assets:Cash:Wallet 10 USD',
+			'2026-01-03 pad Assets:Cash:Wallet:Pocket Equity:Opening',
+			'2026-01-04 balance Assets:Cash:Wallet 10 USD',
+		)).toEqual([{ line: 4, label: 'Δ +6 USD' }]);
+	});
+
+	it('counts a repeated posting line only where a transaction is open', () => {
+		const posting = '  Assets:Cash  5 USD';
+		expect(hints(
+			posting,
+			'2026-01-01 * "In"',
+			posting,
+			'2026-01-02 open Assets:Bank',
+			posting,
+			'2026-01-03 balance Assets:Cash 0 USD',
+		)).toEqual([{ line: 5, label: 'Δ -5 USD' }]);
+	});
+
+	it('refuses the whole buffer for an unknown dated directive after a known assertion', () => {
+		expect(hints(
+			'2026-01-01 * "Ok"',
+			'  Assets:Cash  10 USD',
+			'2026-01-02 balance Assets:Cash 10 USD',
+			'2026-01-03 frobnicate Assets:Cash',
+		)).toEqual([]);
+	});
+
+	it('refuses an indented include or plugin, which is not a posting', () => {
+		expect(hints(
+			'2026-01-01 * "Ok"',
+			'  Assets:Cash  10 USD',
+			'  plugin "beancount.plugins.auto"',
+			'2026-01-02 balance Assets:Cash 10 USD',
+		)).toEqual([]);
+		expect(hints(
+			'2026-01-01 * "Ok"',
+			'  include "other.bean"',
+			'2026-01-02 balance Assets:Cash 10 USD',
+		)).toEqual([]);
+	});
+
+	it('strips a trailing CR before classifying a posting or assertion', () => {
+		expect(hints(
+			'2026-01-01 * "Deposit"\r',
+			'  Assets:Cash  10 USD\r',
+			'2026-01-02 balance Assets:Cash 12 USD\r',
+		)).toEqual([{ line: 2, label: 'Δ +2 USD' }]);
+	});
+
+	it('accepts a quoted commodity and drops a lowercase one without refusing the file', () => {
+		expect(hints(
+			'2026-01-01 * "D"',
+			'  Assets:Cash  10 USD',
+			'  Assets:Bank  1 USD',
+			'2026-01-02 balance Assets:Cash 12 "USD"',
+			'2026-01-02 balance Assets:Bank 1 usd',
+		)).toEqual([{ line: 3, label: 'Δ +2 "USD"' }]);
+	});
+
+	it('does not let an escaped quote end a string before a semicolon', () => {
+		expect(stripComment('  Assets:Cash  10 USD "a \\" ; b" ; 99 EUR')).toBe(
+			'  Assets:Cash  10 USD "a \\" ; b" ',
+		);
 	});
 });
