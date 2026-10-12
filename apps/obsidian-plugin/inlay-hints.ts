@@ -34,11 +34,12 @@
  * element, so an edit that leaves a hint unchanged does not replace the DOM.
  */
 import { StateEffect } from '@codemirror/state';
-import type { EditorState, Extension, Range } from '@codemirror/state';
+import type { EditorState, Extension, Range, Text } from '@codemirror/state';
 import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { balanceHints } from './balance-hints';
+import type { BalanceHint } from './balance-hints';
 import { extractBeancountFences } from './fences';
 import { postingHints } from './posting-hints';
 import type { PostingHint } from './posting-hints';
@@ -266,7 +267,30 @@ function appendPostingHints(
 	}
 }
 
-function balanceDecorations(view: EditorView, host: BalanceInlayHost): DecorationSet {
+/**
+ * Whole-document work of the last build, reused while the editor shows the
+ * same `Text` (documents are immutable, so the same object is the same
+ * content): a scroll or a settings refresh then only redoes the visible
+ * posting hints.
+ */
+interface DocMemo {
+	doc: Text;
+	markdown: boolean;
+	/** Fence-masked lines of a markdown note; null for a ledger file or a note without fences. */
+	masked: string[] | null;
+	/** Balance hints of the whole document, once computed. */
+	balance: readonly BalanceHint[] | null;
+}
+
+function docMemo(memo: { current: DocMemo | null }, doc: Text, markdown: boolean): DocMemo {
+	const last = memo.current;
+	if (last !== null && last.doc === doc && last.markdown === markdown) return last;
+	const next: DocMemo = { doc, markdown, masked: markdown ? fenceMaskedLines(doc.toString()) : null, balance: null };
+	memo.current = next;
+	return next;
+}
+
+function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: { current: DocMemo | null }): DecorationSet {
 	if (!host.settings.inlayHints) return Decoration.none;
 	const file = view.state.field(editorInfoField, false)?.file;
 	if (!file) return Decoration.none;
@@ -279,15 +303,19 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost): Decoratio
 	if (file.extension === 'md') {
 		// Fence state above the viewport is part of the mask, so this still
 		// reads the note. Posting hints below are limited to visible transactions.
-		const masked = fenceMaskedLines(doc.toString());
+		const entry = docMemo(memo, doc, true);
+		const masked = entry.masked;
 		if (!masked) return Decoration.none;
 		const lineText = (index: number) => (index >= 0 && index < masked.length ? masked[index] : '');
-		if (localLedger) appendBalanceHints(ranges, doc, balanceHints(masked));
+		if (localLedger) appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(masked)));
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	} else if (isLedgerFile(file)) {
 		const lineText = (index: number) => doc.line(index + 1).text;
-		if (localLedger) appendBalanceHints(ranges, doc, balanceHints(collectLines(doc.lines, lineText)));
+		const entry = docMemo(memo, doc, false);
+		if (localLedger) {
+			appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(collectLines(doc.lines, lineText))));
+		}
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	} else {
@@ -302,11 +330,12 @@ function inlayPlugin(host: BalanceInlayHost, views: Set<EditorView>) {
 	return class BalanceInlayPlugin {
 		decorations: DecorationSet;
 		private fileKey: string;
+		private readonly memo: { current: DocMemo | null } = { current: null };
 
 		constructor(private readonly view: EditorView) {
 			views.add(view);
 			this.fileKey = editorFileKey(view.state);
-			this.decorations = balanceDecorations(view, host);
+			this.decorations = balanceDecorations(view, host, this.memo);
 		}
 
 		update(update: ViewUpdate): void {
@@ -317,7 +346,7 @@ function inlayPlugin(host: BalanceInlayHost, views: Set<EditorView>) {
 				tr.effects.some((effect) => effect.is(refreshBalanceHints))
 			);
 			if (!update.docChanged && !fileChanged && !forced && !update.viewportChanged) return;
-			this.decorations = balanceDecorations(update.view, host);
+			this.decorations = balanceDecorations(update.view, host, this.memo);
 		}
 
 		destroy(): void {
