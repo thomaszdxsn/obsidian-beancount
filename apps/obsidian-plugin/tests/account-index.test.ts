@@ -112,6 +112,31 @@ describe('extractAccounts', () => {
 	it('returns an empty set for empty content', () => {
 		expect([...extractAccounts('')]).toEqual([]);
 	});
+
+	it('returns names in order of first appearance when the same run repeats', () => {
+		// A later copy of an earlier run must not reshuffle the set, and a
+		// previous call must not leave the account regex mid-scan.
+		const content = ['Assets:Zulu', 'Assets:Alpha', 'Assets:Zulu', 'Assets:Middle'].join('\n');
+		expect([...extractAccounts(content)]).toEqual(['Assets:Zulu', 'Assets:Alpha', 'Assets:Middle']);
+		expect([...extractAccounts(content)]).toEqual(['Assets:Zulu', 'Assets:Alpha', 'Assets:Middle']);
+	});
+
+	it('extracts every account in one comma-separated run and drops a trailing dash', () => {
+		expect([...extractAccounts('Assets:A,Assets:B-')]).toEqual(['Assets:A', 'Assets:B']);
+	});
+
+	it('does not extract an account preceded by a slash or a segment character in the same run', () => {
+		// The lookbehind has to see `/` and the glued letter, not only the whitespace before the run.
+		expect([...extractAccounts('xAssets:Cash,Assets:A/Assets:B')]).toEqual(['Assets:A']);
+		expect([...extractAccounts('see/Assets:Bank')]).toEqual([]);
+	});
+
+	it('keeps CJK and middle-dot names that share a run', () => {
+		expect([...extractAccounts('Expenses:カード・ローン,Assets:银行·招商-')]).toEqual([
+			'Expenses:カード・ローン',
+			'Assets:银行·招商',
+		]);
+	});
 });
 
 function records(content: string): Record<string, AccountRecord> {

@@ -54,7 +54,18 @@ function editor(
 	};
 	const extensionSpec = controller.extension as unknown as MockViewPlugin<FlagPlugin>;
 	plugin = new extensionSpec.cls(view as never);
+	const ranges = (): Array<{ from: number; to: number; className: string }> => {
+		const out: Array<{ from: number; to: number; className: string }> = [];
+		const iter = plugin.decorations.iter();
+		while (iter.value) {
+			const spec = (iter.value as { spec?: { class?: string } }).spec;
+			out.push({ from: iter.from, to: iter.to, className: spec?.class ?? '' });
+			iter.next();
+		}
+		return out;
+	};
 	return {
+		view,
 		plugin,
 		setText(next: string, nextExt: string | null = extension) {
 			file = nextExt === null ? null : { path: `ledger.${nextExt}`, extension: nextExt };
@@ -67,17 +78,8 @@ function editor(
 				transactions: [{ effects: [] }],
 			} as never);
 		},
-		classes(): string[] {
-			const out: string[] = [];
-			const set = plugin.decorations;
-			const iter = set.iter();
-			while (iter.value) {
-				const spec = (iter.value as { spec?: { class?: string } }).spec;
-				if (spec?.class) out.push(spec.class);
-				iter.next();
-			}
-			return out;
-		},
+		classes: (): string[] => ranges().map((range) => range.className),
+		ranges,
 	};
 }
 
@@ -151,6 +153,59 @@ describe('FlagWarningController', () => {
 		expect(pane.classes()).toEqual([WARNING_LINE_CLASS, WARNING_UNDERLINE_CLASS]);
 
 		controller.destroy();
+		controller.refresh();
+	});
+
+	it('flags a markdown note only inside fences, at the host line, and still flags a ledger', () => {
+		const host: FlagWarningHost = { settings: { flagWarnings: { ...DEFAULT_FLAG_WARNINGS, '*': 'error' } } };
+		const controller = new FlagWarningController(host);
+		const text = [
+			'2026-10-01 ! "Prose"',
+			'* heading',
+			'```beancount',
+			'! not a date',
+			'2026-10-01 ! "Fence"',
+			'2026-10-01 * "Cleared"',
+			'```',
+			'9 ! digit but not a date',
+		].join('\n');
+		const pane = editor(controller, text, 'md');
+		const doc = pane.view.state.doc;
+		const marked = (line: number, className: string, underline: string) => {
+			const row = doc.line(line);
+			return [
+				{ from: row.from, to: row.from, className },
+				{ from: row.from, to: row.to, className: underline },
+			];
+		};
+		expect(pane.ranges()).toEqual([
+			...marked(5, WARNING_LINE_CLASS, WARNING_UNDERLINE_CLASS),
+			...marked(6, ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS),
+		]);
+
+		pane.setText('2026-10-01 ! "No fence"\n* Food', 'md');
+		expect(pane.ranges()).toEqual([]);
+
+		const ledger = editor(controller, '2026-10-01 ! "Ledger"\n* Food\n! 2026-10-01 "Backwards"', 'bean');
+		const ledgerDoc = ledger.view.state.doc;
+		expect(ledger.ranges()).toEqual([
+			{ from: ledgerDoc.line(1).from, to: ledgerDoc.line(1).from, className: WARNING_LINE_CLASS },
+			{ from: ledgerDoc.line(1).from, to: ledgerDoc.line(1).to, className: WARNING_UNDERLINE_CLASS },
+		]);
+
+		const unattached = editor(controller, '2026-10-01 ! "Alone"', null);
+		expect(unattached.classes()).toEqual([WARNING_LINE_CLASS, WARNING_UNDERLINE_CLASS]);
+	});
+
+	it('does not dispatch a refresh into an editor that has been destroyed', () => {
+		const controller = new FlagWarningController({ settings: { flagWarnings: { ...DEFAULT_FLAG_WARNINGS } } });
+		const pane = editor(controller, '2026-10-01 ! "A"');
+		const spec = controller.extension as unknown as MockViewPlugin<FlagPlugin>;
+		expect(spec.spec.decorations(pane.plugin)).toBe(pane.plugin.decorations);
+		pane.plugin.destroy();
+		pane.view.dispatch = () => {
+			throw new Error('dispatch into destroyed editor');
+		};
 		controller.refresh();
 	});
 });

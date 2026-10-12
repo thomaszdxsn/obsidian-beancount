@@ -110,54 +110,131 @@ interface Inventory {
 	commodity: string;
 }
 
-export function balanceHints(lines: readonly string[]): BalanceHint[] {
-	if (sourceDependent(lines) || unknownDirective(lines)) return [];
-	const parsed = collect(lines);
-	if (parsed === null) return [];
+/**
+ * What one line contributes, decided from its text alone; `balanceHints`
+ * adds the context (open transaction, line number). Lines repeat across
+ * edits of the same document, so this is cached by text.
+ */
+type LineInfo =
+	/** Makes the whole result empty: include/plugin, an unknown or unparsable dated directive, a bad pad. */
+	| { kind: 'refuse' }
+	/** Blank or comment: leaves an open transaction open. */
+	| { kind: 'ignore' }
+	/** Org heading or another column-0 line that is no transaction: closes it. */
+	| { kind: 'close' }
+	| { kind: 'txn'; date: string }
+	| { kind: 'balance'; date: string; account: string; qty: Qty; display: string; commodity: string }
+	| { kind: 'pad'; date: string; accounts: readonly string[] }
+	/** Indented: counts only inside a transaction. */
+	| { kind: 'indented'; posting: PostingParse };
+
+const REFUSE: LineInfo = { kind: 'refuse' };
+const IGNORE: LineInfo = { kind: 'ignore' };
+const CLOSE: LineInfo = { kind: 'close' };
+
+/**
+ * Line classifications and account ancestor lists kept between one
+ * caller's `balanceHints` calls (an editor's inlay hints keep one), so a
+ * keystroke reclassifies just the edited line. Entries for lines the
+ * current document no longer has are dropped once they outnumber its
+ * lines: memory follows the document, not every line ever seen.
+ */
+export class BalanceLineCache {
+	lines = new Map<string, LineInfo>();
+	ancestors = new Map<string, readonly string[]>();
+}
+
+/** Distinct account names an ancestor map may hold before it starts over. */
+const ANCESTOR_LIMIT = 4096;
+
+function lineInfo(raw: string, cache: Map<string, LineInfo>): LineInfo {
+	let info = cache.get(raw);
+	if (info === undefined) {
+		info = classifyLine(stripCarriage(raw));
+		cache.set(raw, info);
+	}
+	return info;
+}
+
+function classifyLine(line: string): LineInfo {
+	if (/^[ \t]*$/.test(line) || isComment(line)) return IGNORE;
+	if (isOrgHeading(line)) return CLOSE;
+	// A metadata key (`include:`) is not the directive. Indented forms
+	// still count: the syntax mode accepts leading whitespace.
+	if (/^[ \t]*(include|plugin)(?![A-Za-z0-9_])(?:[ \t]|"|$)/.test(line)) return REFUSE;
+	if (line.charAt(0) === ' ' || line.charAt(0) === '\t') return { kind: 'indented', posting: parsePosting(line) };
+	const txn = TXN_RE.exec(line);
+	if (txn !== null) return { kind: 'txn', date: txn[1] + '-' + txn[2] + '-' + txn[3] };
+	const dated = DATED_RE.exec(line);
+	if (dated === null) return CLOSE;
+	const keyword = dated[4];
+	if (KNOWN_DATED[keyword] !== true) return REFUSE;
+	const date = dated[1] + '-' + dated[2] + '-' + dated[3];
+	const rest = stripComment(dated[5]).trim();
+	if (keyword === 'balance') {
+		const balance = parseBalance(rest);
+		return balance === null ? CLOSE : { kind: 'balance', date, ...balance };
+	}
+	if (keyword === 'pad') {
+		const accounts = parsePad(rest);
+		return accounts === null ? REFUSE : { kind: 'pad', date, accounts };
+	}
+	// A dated keyword we recognized but do not classify must not be
+	// treated as a zero posting. `open`/`price`/`custom` and the rest
+	// of NO_UNIT are the only dated directives that add nothing.
+	return NO_UNIT[keyword] === true ? CLOSE : REFUSE;
+}
+
+/** Plain comparison: every date here is `YYYY-MM-DD`, fixed width. */
+function byDate(a: { date: string }, b: { date: string }): number {
+	return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+}
+
+export function balanceHints(lines: readonly string[], cache = new BalanceLineCache()): BalanceHint[] {
+	const parsed = collect(lines, cache);
+	if (parsed === null || parsed.balances.length === 0) return [];
+	if (cache.ancestors.size > ANCESTOR_LIMIT) cache.ancestors = new Map();
+	const known = cache.ancestors;
+	const ancestors = (account: string): readonly string[] => {
+		let list = known.get(account);
+		if (list === undefined) {
+			const out: string[] = [];
+			for (let name = account; name.includes(':'); name = name.slice(0, name.lastIndexOf(':'))) out.push(name);
+			list = out;
+			known.set(account, list);
+		}
+		return list;
+	};
+	// A hint reads only its asserted account's inventory, and an account's
+	// inventory depends on nothing else: other accounts are not tracked.
+	const asserted = new Set<string>();
+	for (const balance of parsed.balances) asserted.add(balance.account);
+	const tracked = (posting: { account: string }) => ancestors(posting.account).some((account) => asserted.has(account));
 	// One chronological sweep instead of rescanning all postings per assertion.
 	// Posting amounts enter after that day's balances; pad taints enter before.
-	const postings: Array<AmountPosting | TaintPosting> = [...parsed.postings, ...parsed.taints];
-	postings.sort((a, b) => a.date.localeCompare(b.date));
-	parsed.pads.sort((a, b) => a.date.localeCompare(b.date));
-	parsed.balances.sort((a, b) => a.date.localeCompare(b.date));
+	const postings: Array<AmountPosting | TaintPosting> = [];
+	for (const posting of parsed.postings) if (tracked(posting)) postings.push(posting);
+	for (const taint of parsed.taints) if (tracked(taint)) postings.push(taint);
+	postings.sort(byDate);
+	parsed.pads.sort(byDate);
+	parsed.balances.sort(byDate);
 	const inventory = new Map<string, Inventory | null>();
 	const hints: BalanceHint[] = [];
 	let postingIndex = 0;
 	let padIndex = 0;
 	for (const balance of parsed.balances) {
 		while (postingIndex < postings.length && postings[postingIndex].date < balance.date) {
-			accumulate(inventory, postings[postingIndex++]);
+			accumulate(inventory, asserted, ancestors, postings[postingIndex++]);
 		}
 		while (padIndex < parsed.pads.length && parsed.pads[padIndex].date <= balance.date) {
 			const pad = parsed.pads[padIndex++];
-			for (const account of pad.accounts) accumulate(inventory, { account, date: pad.date });
+			for (const account of pad.accounts) accumulate(inventory, asserted, ancestors, { account, date: pad.date });
 		}
 		const hint = hintFor(balance, inventory.get(balance.account));
 		if (hint !== null) hints.push(hint);
 	}
 	hints.sort((a, b) => a.line - b.line);
 	return hints;
-}
-
-function sourceDependent(lines: readonly string[]): boolean {
-	for (let i = 0; i < lines.length; i++) {
-		const line = stripCarriage(lines[i]);
-		if (isComment(line) || isOrgHeading(line)) continue;
-		// A metadata key (`include:`) is not the directive. Indented forms
-		// still count: the syntax mode accepts leading whitespace.
-		if (/^[ \t]*(include|plugin)(?![A-Za-z0-9_])(?:[ \t]|"|$)/.test(line)) return true;
-	}
-	return false;
-}
-
-function unknownDirective(lines: readonly string[]): boolean {
-	for (let i = 0; i < lines.length; i++) {
-		const line = stripCarriage(lines[i]);
-		if (isComment(line) || isOrgHeading(line) || TXN_RE.test(line)) continue;
-		const dated = DATED_RE.exec(line);
-		if (dated !== null && KNOWN_DATED[dated[4]] !== true) return true;
-	}
-	return false;
 }
 
 interface Ledger {
@@ -167,75 +244,83 @@ interface Ledger {
 	balances: Balance[];
 }
 
-/** `null` when a `pad` names accounts we cannot see — its effect is not zero. */
-function collect(lines: readonly string[]): Ledger | null {
+/**
+ * `null` when any line refuses the buffer: `include`/`plugin` make it
+ * depend on another ledger, an unknown dated directive would be claimed to
+ * add nothing, and a `pad` naming accounts we cannot see is not zero.
+ */
+function collect(lines: readonly string[], cache: BalanceLineCache): Ledger | null {
 	const postings: AmountPosting[] = [];
 	const taints: TaintPosting[] = [];
 	const pads: Pad[] = [];
 	const balances: Balance[] = [];
 	let inTxn = false;
 	let txnDate = '';
+	// Drop lines this document no longer has once they outnumber its own,
+	// before the scan: a refused buffer returns early but is bounded too.
+	if (cache.lines.size > 2 * lines.length + 64) {
+		const kept = new Map<string, LineInfo>();
+		for (const raw of lines) {
+			const info = cache.lines.get(raw);
+			if (info !== undefined) kept.set(raw, info);
+		}
+		cache.lines = kept;
+	}
+	const known = cache.lines;
 
 	for (let i = 0; i < lines.length; i++) {
-		const line = stripCarriage(lines[i]);
-		if (/^[ \t]*$/.test(line) || isComment(line)) continue;
-		if (isOrgHeading(line)) {
-			inTxn = false;
-			continue;
-		}
-		if (line.charAt(0) !== ' ' && line.charAt(0) !== '\t') {
-			inTxn = false;
-			const txn = TXN_RE.exec(line);
-			if (txn !== null) {
+		const info = lineInfo(lines[i], known);
+		switch (info.kind) {
+			case 'refuse':
+				return null;
+			case 'ignore':
+				break;
+			case 'close':
+				inTxn = false;
+				break;
+			case 'txn':
 				inTxn = true;
-				txnDate = txn[1] + '-' + txn[2] + '-' + txn[3];
-				continue;
-			}
-			const dated = DATED_RE.exec(line);
-			if (dated === null) continue;
-			const date = dated[1] + '-' + dated[2] + '-' + dated[3];
-			const keyword = dated[4];
-			const rest = stripComment(dated[5]).trim();
-			if (keyword === 'balance') {
-				const balance = parseBalance(rest);
-				if (balance !== null) {
-					balances.push({
-						line: i,
-						date,
-						account: balance.account,
-						qty: balance.qty,
-						display: balance.display,
-						commodity: balance.commodity,
-					});
+				txnDate = info.date;
+				break;
+			case 'balance':
+				inTxn = false;
+				balances.push({
+					line: i,
+					date: info.date,
+					account: info.account,
+					qty: info.qty,
+					display: info.display,
+					commodity: info.commodity,
+				});
+				break;
+			case 'pad':
+				inTxn = false;
+				pads.push({ date: info.date, accounts: info.accounts });
+				break;
+			case 'indented': {
+				if (!inTxn) break;
+				const posting = info.posting;
+				if (posting.kind === 'amount') {
+					postings.push({ date: txnDate, account: posting.account, qty: posting.qty, commodity: posting.commodity });
+				} else if (posting.kind === 'taint') {
+					taints.push({ date: txnDate, account: posting.account });
 				}
-				continue;
-			}
-			if (keyword === 'pad') {
-				const accounts = parsePad(rest);
-				if (accounts === null) return null;
-				pads.push({ date, accounts });
-				continue;
-			}
-			// A dated keyword we recognized but do not classify must not be
-			// treated as a zero posting. `open`/`price`/`custom` and the rest
-			// of NO_UNIT are the only dated directives that add nothing.
-			if (NO_UNIT[keyword] !== true) return null;
-			continue;
-		} else if (inTxn) {
-			const posting = parsePosting(line);
-			if (posting.kind === 'amount') {
-				postings.push({ date: txnDate, account: posting.account, qty: posting.qty, commodity: posting.commodity });
-			} else if (posting.kind === 'taint') {
-				taints.push({ date: txnDate, account: posting.account });
+				break;
 			}
 		}
 	}
 	return { postings, taints, pads, balances };
 }
 
-/** Update the account and all ancestors once; null means inventory is unknown. */
-function accumulate(inventory: Map<string, Inventory | null>, posting: AmountPosting | TaintPosting): void {
-	for (let account = posting.account; account.includes(':'); account = account.slice(0, account.lastIndexOf(':'))) {
+/** Update the account and each ancestor in `tracked` once; null means inventory is unknown. */
+function accumulate(
+	inventory: Map<string, Inventory | null>,
+	tracked: ReadonlySet<string>,
+	ancestors: (account: string) => readonly string[],
+	posting: AmountPosting | TaintPosting
+): void {
+	for (const account of ancestors(posting.account)) {
+		if (!tracked.has(account)) continue;
 		const current = inventory.get(account);
 		if (current === null) continue;
 		if (!('qty' in posting) || (current !== undefined && current.commodity !== posting.commodity)) {

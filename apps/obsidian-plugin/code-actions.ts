@@ -287,15 +287,24 @@ export function extractPairings(content: string): readonly Pairing[] {
 	const pairings: Pairing[] = [];
 	let line = 0;
 	while (line < lines.length) {
-		const header = TXN_HEADER_RE.exec(lines[line]);
+		// A header opens with its date: skip the regex for every other line.
+		const head = lines[line].charCodeAt(0);
+		const header = head >= 0x30 && head <= 0x39 ? TXN_HEADER_RE.exec(lines[line]) : null;
 		if (header === null) {
 			line += 1;
 			continue;
 		}
 		const range = blockRangeAt(lines, line);
-		const postings = amountPostings(lines, range.from, range.to);
-		const accounts = postingAccounts(lines, range.from, range.to);
-		if (accounts.length === 2 && postings.length === 2) {
+		// One parse per line; a third posting already rules the block out.
+		let accounts = 0;
+		const postings: Array<{ account: string; commodity?: string }> = [];
+		for (let i = range.from; i <= range.to && accounts <= 2; i += 1) {
+			const parsed = parsePostingLine(lines[i]);
+			if (parsed === null) continue;
+			accounts += 1;
+			if (parsed.number !== undefined) postings.push(parsed);
+		}
+		if (accounts === 2 && postings.length === 2) {
 			const [first, second] = postings;
 			if (
 				first.account !== second.account &&
@@ -404,11 +413,16 @@ export class OpenFileIndex implements VaultCache {
 	}
 }
 
+/** Accounts of the `open` directives in `content`; only lines holding `open` are tried. */
 function openedAccountsIn(content: string): Set<string> {
 	const accounts = new Set<string>();
-	for (const line of content.split('\n')) {
-		const match = OPEN_LINE_RE.exec(line);
+	for (let at = content.indexOf('open'); at !== -1; ) {
+		const start = content.lastIndexOf('\n', at) + 1;
+		let end = content.indexOf('\n', at);
+		if (end === -1) end = content.length;
+		const match = OPEN_LINE_RE.exec(content.slice(start, end));
 		if (match !== null) accounts.add(match[2]);
+		at = end === content.length ? -1 : content.indexOf('open', end + 1);
 	}
 	return accounts;
 }

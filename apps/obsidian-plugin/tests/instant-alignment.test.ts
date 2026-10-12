@@ -150,6 +150,62 @@ describe('instantAlignmentPlan', () => {
 		// → gap of 2 spaces.
 		expect(next).toBe('  Expenses:餐饮  12. USD');
 	});
+
+	it('lands each caret after its own decimal when an earlier block grew', () => {
+		const text = [
+			'2026-10-01 * "A"',
+			'  Expenses:Food:Restaurant 12 USD',
+			'; note',
+			'2026-10-02 * "B"',
+			'  Assets:Cash 3 USD',
+		].join('\n');
+		const restaurant = text.indexOf('12') + 2;
+		const note = text.indexOf('; note') + '; note'.length;
+		const cash = text.indexOf('3 USD') + 1;
+		const plan = instantAlignmentPlan(
+			text,
+			[
+				{ anchor: cash, head: cash },
+				{ anchor: note, head: note },
+				{ anchor: restaurant, head: restaurant },
+			],
+			COLUMN
+		)!;
+		const next = apply(text, plan);
+		// The long account is already past the separator column, so only the
+		// dot grows that line. The cash posting pads to the column on its own;
+		// it must not inherit the restaurant block's width.
+		expect(next.split('\n')).toEqual([
+			'2026-10-01 * "A"',
+			'  Expenses:Food:Restaurant 12. USD',
+			'; note.',
+			'2026-10-02 * "B"',
+			'  Assets:Cash     3. USD',
+		]);
+		expect(plan.carets).toEqual([
+			next.indexOf('12.') + 3,
+			next.indexOf('; note.') + '; note.'.length,
+			next.indexOf('3.') + 2,
+		]);
+	});
+
+	it('inserts a column-0 caret on that line, not on the line above it', () => {
+		const text = ['2026-10-01 * "A"', '  Assets:Cash 12 USD', '  Expenses:Food 34 USD'].join('\n');
+		const amount = text.indexOf('12') + 2;
+		const lineStart = text.indexOf('  Expenses');
+		const plan = instantAlignmentPlan(
+			text,
+			[
+				{ anchor: amount, head: amount },
+				{ anchor: lineStart, head: lineStart },
+			],
+			COLUMN
+		)!;
+		const next = apply(text, plan);
+		expect(next).toBe('2026-10-01 * "A"\n  Assets:Cash    12. USD\n.  Expenses:Food 34 USD');
+		expect(plan.carets).toEqual([next.indexOf('12.') + 3, next.indexOf('\n.') + 2]);
+	});
+
 });
 
 

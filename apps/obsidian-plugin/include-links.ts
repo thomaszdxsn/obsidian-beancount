@@ -24,7 +24,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { Notice, Platform, editorInfoField } from 'obsidian';
 import type { App, PaneType } from 'obsidian';
-import { extractBeancountFences } from './fences';
+import { docFences, extractBeancountFences } from './fences';
 import { isLedgerFile } from './vault-index';
 
 /** The CSS contract with `styles.css`: link color, underline on hover. */
@@ -335,7 +335,7 @@ function visibleLineSpans(view: EditorView): Array<{ fromLine: number; toLine: n
  * Marks for this view. A ledger file walks only the viewport and never
  * allocates `doc.toString()` — that string was unused, and a full scan on
  * every keystroke in every editor is the cost this avoids. A markdown note
- * is read only when it contains a fence.
+ * walks only its fence bodies, found once per document (`docFences`).
  */
 function includeMarks(view: EditorView): Array<{ from: number; to: number }> {
 	const file = editorFile(view.state);
@@ -343,7 +343,20 @@ function includeMarks(view: EditorView): Array<{ from: number; to: number }> {
 	const doc = view.state.doc;
 	if (isLedgerFile(file)) return collectIncludeMarks(doc, visibleLineSpans(view));
 	if (file.extension !== 'md' || !docHasFence(doc)) return [];
-	return includeLinkMarks(doc, doc.toString(), file);
+	// Only a line holding `include` can be one; the rest skip `doc.line`.
+	// A fence body line is the host line less some leading spaces.
+	const candidates: Array<{ fromLine: number; toLine: number }> = [];
+	for (const fence of docFences(doc).fences) {
+		for (let i = 0; i < fence.lines.length; i += 1) {
+			if (fence.lines[i].includes('include')) candidates.push({ fromLine: fence.startLine + i, toLine: fence.startLine + i });
+		}
+	}
+	return collectIncludeMarks(doc, candidates);
+}
+
+/** Body lines of a note's ledger fences: disjoint, in document order. */
+function fenceSpans(doc: LinkDoc): Array<{ fromLine: number; toLine: number }> {
+	return docFences(doc).fences.map((fence) => ({ fromLine: fence.startLine, toLine: fence.startLine + fence.lines.length - 1 }));
 }
 
 function includeDecorations(view: EditorView): DecorationSet {
@@ -364,8 +377,7 @@ function includeDecorations(view: EditorView): DecorationSet {
 function lineInLedger(doc: LinkDoc, lineIndex: number, file: { path: string; extension: string }): boolean {
 	if (isLedgerFile(file)) return true;
 	if (file.extension !== 'md' || !docHasFence(doc)) return false;
-	const eligible = ledgerLines(doc.toString(), file);
-	return eligible !== 'none' && eligible !== null && eligible.has(lineIndex);
+	return fenceSpans(doc).some((span) => lineIndex >= span.fromLine && lineIndex <= span.toLine);
 }
 
 /**

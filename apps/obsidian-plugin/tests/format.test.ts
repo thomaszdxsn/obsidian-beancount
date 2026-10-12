@@ -331,6 +331,64 @@ describe('formatLedger', () => {
 		expect(formatted('2026-10-01 * "a \\"  b"\n')).toBe('2026-10-01 * "a \\"  b"\n');
 	});
 
+	it('keeps a multi-line string open across an already-collapsed continuation', () => {
+		// The opening line and the empty middle line have nothing to collapse.
+		// Dropping the open-string state there would squeeze the last line.
+		expect(
+			formatted(
+				['2026-10-01 * "payee', '', '    kept    spaces"', '  Assets:A 1 USD', '  Assets:B -1 USD', ''].join('\n')
+			)
+		).toBe(
+			['2026-10-01 * "payee', '', '    kept    spaces"', '  Assets:A  1 USD', '  Assets:B -1 USD', ''].join('\n')
+		);
+		expect(
+			formatted(
+				[
+					'2026-10-01 * "payee',
+					'say \\" still',
+					'    kept    spaces"',
+					'  Assets:A 1 USD',
+					'  Assets:B -1 USD',
+					'',
+				].join('\n')
+			)
+		).toBe(
+			[
+				'2026-10-01 * "payee',
+				'say \\" still',
+				'    kept    spaces"',
+				'  Assets:A  1 USD',
+				'  Assets:B -1 USD',
+				'',
+			].join('\n')
+		);
+	});
+
+	it('finds each posting when metadata and comments sit between their location lines', () => {
+		const input = [
+			'2026-10-01 * "x"',
+			'  Assets:Broker    2 AAPL {"lot',
+			'    note inside"}',
+			'    ; after cost',
+			'    statement: "kept  spaces"',
+			'  Assets:Cash   -2 AAPL',
+			'  Expenses:Fees 1 USD',
+			'',
+		].join('\n');
+		expect(formatted(input)).toBe(
+			[
+				'2026-10-01 * "x"',
+				'  Assets:Broker 2 AAPL {"lot',
+				'    note inside"}',
+				'  ; after cost',
+				'    statement: "kept  spaces"',
+				'  Assets:Cash  -2 AAPL',
+				'  Expenses:Fees 1 USD',
+				'',
+			].join('\n')
+		);
+	});
+
 });
 
 describe('formatFencedDocument', () => {
@@ -488,6 +546,17 @@ describe('formatFencedDocument', () => {
 			error: { line: 3, column: 15, message: "missing ACCOUNT at '\\n'" },
 		});
 	});
+
+	it('keeps a carriage return that a fence body line carried into a CRLF body', () => {
+		// Each body line ends in CR, so joining on LF makes a CRLF body. Formatting
+		// must put that CR back; dropping it would leave a plain LF body.
+		const note = '```beancount\n2022-01-01   open   Assets:A\r\r\n2022-01-02   close   Assets:B\r\r\n```\n';
+		expect(formatFencedDocument(note)).toEqual({
+			ok: true,
+			text: '```beancount\n2022-01-01 open Assets:A\r\n2022-01-02 close Assets:B\r\n```\n',
+		});
+	});
+
 });
 
 describe('lineChanges', () => {
@@ -519,6 +588,17 @@ describe('lineChanges', () => {
 		]);
 		expect(lineChanges('a\nb', 'a')).toEqual([{ fromLine: 0, fromCh: 0, toLine: 1, toCh: 1, text: 'a' }]);
 	});
+
+	it('takes the rest of the line at the first non-whitespace mismatch', () => {
+		expect(lineChanges('foo   bar baz', 'foo  XXX baz')).toEqual([
+			{ fromLine: 0, fromCh: 5, toLine: 0, toCh: 6, text: '' },
+			{ fromLine: 0, fromCh: 6, toLine: 0, toCh: 13, text: 'XXX baz' },
+		]);
+		expect(lineChanges('keep tail', 'keep OTHER')).toEqual([
+			{ fromLine: 0, fromCh: 5, toLine: 0, toCh: 9, text: 'OTHER' },
+		]);
+	});
+
 });
 
 /** Parsed directives, without source locations, as JSON-stable data. */

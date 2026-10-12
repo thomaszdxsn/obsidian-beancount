@@ -34,12 +34,13 @@
  * element, so an edit that leaves a hint unchanged does not replace the DOM.
  */
 import { StateEffect } from '@codemirror/state';
-import type { EditorState, Extension, Range } from '@codemirror/state';
+import type { EditorState, Extension, Range, Text } from '@codemirror/state';
 import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
-import { balanceHints } from './balance-hints';
-import { extractBeancountFences } from './fences';
+import { BalanceLineCache, balanceHints } from './balance-hints';
+import type { BalanceHint } from './balance-hints';
+import { docFences } from './fences';
 import { postingHints } from './posting-hints';
 import type { PostingHint } from './posting-hints';
 import { isLedgerFile } from './vault-index';
@@ -68,24 +69,6 @@ function editorFileKey(state: EditorState): string {
 	const file = state.field(editorInfoField, false)?.file;
 	if (!file) return '';
 	return file.path + '\0' + file.extension;
-}
-
-/**
- * Host lines with fence bodies in place and every other line blank. Blank
- * lines do not split the ledger `balanceHints` walks, which is how one note's
- * fences stay one inventory while hint lines remain the note's lines.
- * `null` when the note has no ledger fence — prose is not a ledger.
- */
-function fenceMaskedLines(text: string): string[] | null {
-	const fences = extractBeancountFences(text);
-	if (fences.length === 0) return null;
-	const masked = text.split(/\r?\n/).map(() => '');
-	for (const fence of fences) {
-		for (let i = 0; i < fence.lines.length; i += 1) {
-			masked[fence.startLine + i] = fence.lines[i];
-		}
-	}
-	return masked;
 }
 
 /** Inline, after the line text, so the caret at EOL stays in the document. */
@@ -266,7 +249,36 @@ function appendPostingHints(
 	}
 }
 
-function balanceDecorations(view: EditorView, host: BalanceInlayHost): DecorationSet {
+/**
+ * Whole-document work of the last build, reused while the editor shows the
+ * same `Text` (documents are immutable, so the same object is the same
+ * content): a scroll or a settings refresh then only redoes the visible
+ * posting hints.
+ */
+interface DocMemo {
+	doc: Text;
+	markdown: boolean;
+	/** Fence-masked lines of a markdown note (see `docFences`); null for a ledger file or a note without fences. */
+	masked: readonly string[] | null;
+	/** Balance hints of the whole document, once computed. */
+	balance: readonly BalanceHint[] | null;
+}
+
+/** One editor's memo: the last document's work and its balance line cache. */
+interface EditorMemo {
+	current: DocMemo | null;
+	lines: BalanceLineCache;
+}
+
+function docMemo(memo: EditorMemo, doc: Text, markdown: boolean): DocMemo {
+	const last = memo.current;
+	if (last !== null && last.doc === doc && last.markdown === markdown) return last;
+	const next: DocMemo = { doc, markdown, masked: markdown ? docFences(doc).masked : null, balance: null };
+	memo.current = next;
+	return next;
+}
+
+function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: EditorMemo): DecorationSet {
 	if (!host.settings.inlayHints) return Decoration.none;
 	const file = view.state.field(editorInfoField, false)?.file;
 	if (!file) return Decoration.none;
@@ -279,15 +291,25 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost): Decoratio
 	if (file.extension === 'md') {
 		// Fence state above the viewport is part of the mask, so this still
 		// reads the note. Posting hints below are limited to visible transactions.
-		const masked = fenceMaskedLines(doc.toString());
+		const entry = docMemo(memo, doc, true);
+		const masked = entry.masked;
 		if (!masked) return Decoration.none;
 		const lineText = (index: number) => (index >= 0 && index < masked.length ? masked[index] : '');
-		if (localLedger) appendBalanceHints(ranges, doc, balanceHints(masked));
+		if (localLedger) appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(masked, memo.lines)));
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	} else if (isLedgerFile(file)) {
 		const lineText = (index: number) => doc.line(index + 1).text;
-		if (localLedger) appendBalanceHints(ranges, doc, balanceHints(collectLines(doc.lines, lineText)));
+		const entry = docMemo(memo, doc, false);
+		if (localLedger) {
+			if (entry.balance === null) {
+				// Sequential read: `doc.line(n)` per line walks the tree each time.
+				const lines: string[] = [];
+				for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
+				entry.balance = balanceHints(lines, memo.lines);
+			}
+			appendBalanceHints(ranges, doc, entry.balance);
+		}
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	} else {
@@ -302,11 +324,12 @@ function inlayPlugin(host: BalanceInlayHost, views: Set<EditorView>) {
 	return class BalanceInlayPlugin {
 		decorations: DecorationSet;
 		private fileKey: string;
+		private readonly memo: EditorMemo = { current: null, lines: new BalanceLineCache() };
 
 		constructor(private readonly view: EditorView) {
 			views.add(view);
 			this.fileKey = editorFileKey(view.state);
-			this.decorations = balanceDecorations(view, host);
+			this.decorations = balanceDecorations(view, host, this.memo);
 		}
 
 		update(update: ViewUpdate): void {
@@ -317,7 +340,7 @@ function inlayPlugin(host: BalanceInlayHost, views: Set<EditorView>) {
 				tr.effects.some((effect) => effect.is(refreshBalanceHints))
 			);
 			if (!update.docChanged && !fileChanged && !forced && !update.viewportChanged) return;
-			this.decorations = balanceDecorations(update.view, host);
+			this.decorations = balanceDecorations(update.view, host, this.memo);
 		}
 
 		destroy(): void {

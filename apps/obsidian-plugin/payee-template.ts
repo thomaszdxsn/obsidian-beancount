@@ -80,11 +80,15 @@ const SIMPLE_AMOUNT =
  * template so a later file can win a date tie without re-reading.
  */
 export function extractLatestPayeeTemplates(content: string, path: string): Map<string, PayeeTemplate> {
-	const lines = content.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+	// Without a `\r`, the split lines need no trimming copy.
+	const split = content.split('\n');
+	const lines = content.includes('\r') ? split.map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line)) : split;
 	const found = new Map<string, PayeeTemplate>();
 	let line = 0;
 	while (line < lines.length) {
-		const header = HEADER_RE.exec(lines[line]);
+		// A header opens with its date: skip the regex for every other line.
+		const head = lines[line].charCodeAt(0);
+		const header = head >= 0x30 && head <= 0x39 ? HEADER_RE.exec(lines[line]) : null;
 		if (header === null) {
 			line += 1;
 			continue;

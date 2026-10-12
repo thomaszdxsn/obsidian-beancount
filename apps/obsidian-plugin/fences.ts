@@ -31,15 +31,34 @@ export interface FenceLedger {
 }
 
 /**
+ * `text.split(/\r?\n/)`; text without `\r` takes the much faster plain
+ * string split, with the same result.
+ */
+export function splitLines(text: string): string[] {
+	return text.includes('\r') ? text.split(/\r?\n/) : text.split('\n');
+}
+
+/**
  * Every `beancount`/`bean` fence in `text`, in document order. An unclosed
  * fence takes the rest of the file as its body.
  */
 export function extractBeancountFences(text: string): BeancountFence[] {
-	const lines = text.split(/\r?\n/);
+	return fencesOfLines(splitLines(text));
+}
+
+/** Whether `line` can be a fence marker: ` or ~ after at most three spaces. */
+function mayBeFence(line: string): boolean {
+	let i = 0;
+	while (i < 3 && line.charCodeAt(i) === 0x20) i += 1;
+	const c = line.charCodeAt(i);
+	return c === 0x60 || c === 0x7e;
+}
+
+function fencesOfLines(lines: readonly string[]): BeancountFence[] {
 	const fences: BeancountFence[] = [];
 	let i = 0;
 	while (i < lines.length) {
-		const open = OPEN_FENCE.exec(lines[i]);
+		const open = mayBeFence(lines[i]) ? OPEN_FENCE.exec(lines[i]) : null;
 		if (!open || (open[1][0] === '`' && open[2].includes('`'))) {
 			i += 1;
 			continue;
@@ -52,7 +71,7 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 		const body: string[] = [];
 		let j = i + 1;
 		for (; j < lines.length; j += 1) {
-			if (isClosingFence(lines[j], marker, minLen)) break;
+			if (mayBeFence(lines[j]) && isClosingFence(lines[j], marker, minLen)) break;
 			const line = lines[j];
 			let start = 0;
 			while (start < indent && line[start] === ' ') start += 1;
@@ -62,6 +81,63 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 		i = j + 1;
 	}
 	return fences;
+}
+
+/** A note's ledger fences and its lines with everything but fence bodies blanked. */
+export interface DocFences {
+	fences: readonly BeancountFence[];
+	/**
+	 * Host lines with fence bodies in place and every other line blank, so
+	 * ledger scans see fence text at host line numbers; null without a fence.
+	 */
+	masked: readonly string[] | null;
+}
+
+/** An editor document: its text, and its lines when it can iterate them (CodeMirror's `Text`). */
+interface FenceDoc {
+	toString(): string;
+	iterLines?(): { next(): { done?: boolean }; value: string };
+}
+
+const fencesByDoc = new WeakMap<object, DocFences>();
+
+/**
+ * `extractBeancountFences(doc.toString())` and its mask, once per document.
+ * Editor documents are immutable, so the inlay hints, flag warnings and
+ * include links of one note share a single scan per edit. A CodeMirror
+ * document is read line by line: no joined copy, and its line strings stay
+ * the same objects from edit to edit, which keeps the per-line caches of
+ * the hint scans cheap.
+ */
+export function docFences(doc: FenceDoc): DocFences {
+	let entry = fencesByDoc.get(doc);
+	if (entry === undefined) {
+		const lines = docLines(doc);
+		const fences = fencesOfLines(lines);
+		let masked: string[] | null = null;
+		if (fences.length > 0) {
+			masked = new Array<string>(lines.length).fill('');
+			for (const fence of fences) {
+				for (let i = 0; i < fence.lines.length; i += 1) masked[fence.startLine + i] = fence.lines[i];
+			}
+		}
+		entry = { fences, masked };
+		fencesByDoc.set(doc, entry);
+	}
+	return entry;
+}
+
+/** `splitLines(doc.toString())`, read from the document's own lines when it has them. */
+function docLines(doc: FenceDoc): string[] {
+	if (doc.iterLines === undefined) return splitLines(doc.toString());
+	const lines: string[] = [];
+	for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
+	// Joined with `\n` and split on `\r?\n`, a line's trailing `\r` would go
+	// (the last line's stays). CodeMirror's default lines never hold one.
+	for (let i = 0; i < lines.length - 1; i += 1) {
+		if (lines[i].endsWith('\r')) lines[i] = lines[i].slice(0, -1);
+	}
+	return lines;
 }
 
 function isClosingFence(line: string, marker: string, minLen: number): boolean {

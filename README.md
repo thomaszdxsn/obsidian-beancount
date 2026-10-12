@@ -259,6 +259,14 @@ Set `ESBUILD_OUTFILE` to write the bundle into a test vault's
 `.obsidian/plugins/beancount/main.js`; copy the root `manifest.json` and
 `apps/obsidian-plugin/styles.css` next to it.
 
+`pnpm --filter beancount-obsidian bench` runs the performance benchmarks on a
+generated 16.6k-line ledger: `bench/bench.ts` times whole-document work
+(parse, format, align, balances, indexes, outline) and `bench/editor.ts` the
+editor path (keystrokes, scrolling, the `.` and Enter keymaps, re-indexing on
+save). Each workload's output is hashed against `bench/expected.json` /
+`bench/editor-expected.json`, so a change in behaviour fails the run;
+`BENCH_UPDATE=1` rewrites them after an intended change.
+
 ## Release
 
 From `apps/obsidian-plugin`, `npm version <x.y.z>` bumps `package.json` and

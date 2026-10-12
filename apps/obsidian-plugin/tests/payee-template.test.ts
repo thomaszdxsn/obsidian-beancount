@@ -170,6 +170,32 @@ describe('PayeeTemplateIndex', () => {
 		});
 		expect(index.get('Cafe \\"North\\"')?.postings[0].account).toBe('Expenses:Food');
 	});
+
+	it('keeps a trailing posting flag off the amount', () => {
+		const templates = extractLatestPayeeTemplates(
+			['2026-03-01 * "Cafe"', '  Expenses:Food * 12.50 USD', '  Assets:Cash !'].join('\n'),
+			'a.bean',
+		);
+		expect([...templates.values()]).toEqual([
+			{
+				date: '2026-03-01',
+				path: 'a.bean',
+				line: 0,
+				postings: [
+					posting({ account: 'Expenses:Food', trailingFlag: '*', amount: '12.50 USD' }),
+					posting({ account: 'Assets:Cash', trailingFlag: '!' }),
+				],
+			},
+		]);
+	});
+
+	it('keeps CRLF postings identical to the same ledger with LF', () => {
+		const lf = ['2026-03-01 * "Cafe"', '  Expenses:Food * 12.50 USD', '  Assets:Cash !'].join('\n');
+		const crlf = lf.split('\n').join('\r\n');
+		expect([...extractLatestPayeeTemplates(crlf, 'a.bean').values()]).toEqual([
+			...extractLatestPayeeTemplates(lf, 'a.bean').values(),
+		]);
+	});
 });
 
 describe('buildPayeeAutofill', () => {
@@ -230,6 +256,15 @@ describe('buildPayeeAutofill', () => {
 		]);
 		expect(body?.text).toBe('\n  Expenses:餐饮  10.00 USD\n  Assets:Cash  -10.00 EUR');
 		expect(body?.stops).toHaveLength(2);
+	});
+
+	it('inserts a cost-only amount verbatim and does not make it a tab stop', () => {
+		const body = buildPayeeAutofill([
+			posting({ account: 'Assets:Stocks', amount: '{500.00 USD}' }),
+			posting({ account: 'Assets:Cash' }),
+		]);
+		expect(body?.text).toBe('\n  Assets:Stocks  {500.00 USD}\n  Assets:Cash');
+		expect(body?.stops).toEqual([]);
 	});
 });
 

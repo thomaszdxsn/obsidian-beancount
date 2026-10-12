@@ -24,7 +24,7 @@ export default defineConfig({
 		coverage: {
 			provider: 'istanbul',
 			include: ['**/*.ts'],
-			exclude: ['tests/**', 'vitest.config.mts', 'node_modules/**', 'coverage/**'],
+			exclude: ['tests/**', 'bench/**', 'vitest.config.mts', 'node_modules/**', 'coverage/**'],
 			thresholds: {
 				statements: 90,
 				branches: 90,

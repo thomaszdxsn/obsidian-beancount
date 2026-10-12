@@ -95,6 +95,10 @@ pnpm --filter @repo/beancount-parser generate
 pnpm turbo test --filter=@repo/beancount-parser
 ```
 
+### Parsing paths
+
+`parse()` first runs a hand-written lexer (`src/fast-lexer.ts`) and recursive-descent parser (`src/fast-parser.ts`) that mirror `Beancount.g4` and the tree visitor, several times faster. On any lexer or syntax error it re-parses through the generated ANTLR lexer/parser and the visitor, so error messages and recovery are ANTLR's. A rule changed in `Beancount.g4` (or a mapping changed in the visitor) must be mirrored in the hand-written path; `test/fast-lexer.test.ts` and `test/fast-parser.test.ts` compare both paths on generated input.
+
 ## License
 
 MIT
