@@ -256,6 +256,16 @@ function collect(lines: readonly string[], cache: BalanceLineCache): Ledger | nu
 	const balances: Balance[] = [];
 	let inTxn = false;
 	let txnDate = '';
+	// Drop lines this document no longer has once they outnumber its own,
+	// before the scan: a refused buffer returns early but is bounded too.
+	if (cache.lines.size > 2 * lines.length + 64) {
+		const kept = new Map<string, LineInfo>();
+		for (const raw of lines) {
+			const info = cache.lines.get(raw);
+			if (info !== undefined) kept.set(raw, info);
+		}
+		cache.lines = kept;
+	}
 	const known = cache.lines;
 
 	for (let i = 0; i < lines.length; i++) {
@@ -298,11 +308,6 @@ function collect(lines: readonly string[], cache: BalanceLineCache): Ledger | nu
 				break;
 			}
 		}
-	}
-	if (known.size > 2 * lines.length + 64) {
-		const current = new Map<string, LineInfo>();
-		for (const raw of lines) current.set(raw, known.get(raw)!);
-		cache.lines = current;
 	}
 	return { postings, taints, pads, balances };
 }

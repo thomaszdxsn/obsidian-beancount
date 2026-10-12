@@ -310,4 +310,12 @@ describe('a reused line cache', () => {
 		}
 		expect(cache.lines.size).toBeLessThan(200);
 	});
+
+	it('stays bounded while a refused buffer is edited', () => {
+		const cache = new BalanceLineCache();
+		for (let n = 0; n < 200; n += 1) {
+			balanceHints([`  Assets:Cash  ${n} USD`, 'include "other.beancount"'], cache);
+		}
+		expect(cache.lines.size).toBeLessThan(200);
+	});
 });
