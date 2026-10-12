@@ -14,9 +14,10 @@ const realView = require.resolve('@codemirror/view');
 const viewShim = {
 	name: 'view-shim',
 	setup(build) {
-		build.onResolve({ filter: /^@codemirror\/view(-real)?$/ }, (args) => ({
-			path: args.path === '@codemirror/view' && !args.importer.includes('node_modules') ? here('./cm-view.ts') : realView,
-		}));
+		build.onResolve({ filter: /^@codemirror\/view$/ }, (args) => {
+			const real = args.importer.includes('node_modules') || args.importer === here('./cm-view.ts');
+			return { path: real ? realView : here('./cm-view.ts') };
+		});
 	},
 };
 

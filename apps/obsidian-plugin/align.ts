@@ -216,6 +216,23 @@ function parsePosting(line: string): Posting | null {
 	};
 }
 
+/** How a line takes part in a transaction block; see `scanBlocks`. */
+const enum BlockRole {
+	/** Blank, or a comment at column 0: belongs to no block and ends the open one. */
+	Close,
+	/** Content at column 0: opens a block of its own. */
+	Open,
+	/** Indented content: joins the open block, or opens a loose run. */
+	Join,
+}
+
+function blockRole(line: string): BlockRole {
+	const head = line.charAt(0);
+	// `skipSpace` over the whole line: blank as `line.trim() === ''`.
+	if (head === ';' || skipSpace(line, 0) === line.length) return BlockRole.Close;
+	return head !== ' ' && head !== '\t' ? BlockRole.Open : BlockRole.Join;
+}
+
 /**
  * The transaction block each line belongs to (`-1` on lines that close a
  * block: blank lines and comments at column 0). A line at column 0 opens a
@@ -227,13 +244,10 @@ function scanBlocks(lines: readonly string[]): number[] {
 	let block = -1;
 	let next = 0;
 	for (const line of lines) {
-		const head = line.charAt(0);
-		// `skipSpace` over the whole line: blank as `line.trim() === ''`.
-		if (head === ';' || skipSpace(line, 0) === line.length) {
+		const role = blockRole(line);
+		if (role === BlockRole.Close) {
 			block = -1;
-		} else if (head !== ' ' && head !== '\t') {
-			block = next++;
-		} else if (block === -1) {
+		} else if (role === BlockRole.Open || block === -1) {
 			block = next++;
 		}
 		blockOfLine.push(block);
@@ -241,15 +255,23 @@ function scanBlocks(lines: readonly string[]): number[] {
 	return blockOfLine;
 }
 
-/** The block of lines containing `line`; a lone line when there is none. */
+/**
+ * The block of lines containing `line`; a lone line when there is none.
+ * Same blocks as `scanBlocks`, found from the neighbouring lines alone: a
+ * block is an opening line or a run of joining lines, plus the joining
+ * lines after it, so callers may ask once per line without rescanning.
+ */
 export function blockRangeAt(lines: readonly string[], line: number): LineRange {
-	const blockOfLine = scanBlocks(lines);
-	const block = blockOfLine[line];
-	if (block === -1) return { from: line, to: line };
+	if (line < 0 || line >= lines.length) return { from: line, to: line };
+	const role = blockRole(lines[line]);
+	if (role === BlockRole.Close) return { from: line, to: line };
 	let from = line;
+	if (role === BlockRole.Join) {
+		while (from > 0 && blockRole(lines[from - 1]) === BlockRole.Join) from -= 1;
+		if (from > 0 && blockRole(lines[from - 1]) === BlockRole.Open) from -= 1;
+	}
 	let to = line;
-	while (from > 0 && blockOfLine[from - 1] === block) from -= 1;
-	while (to + 1 < lines.length && blockOfLine[to + 1] === block) to += 1;
+	while (to + 1 < lines.length && blockRole(lines[to + 1]) === BlockRole.Join) to += 1;
 	return { from, to };
 }
 
