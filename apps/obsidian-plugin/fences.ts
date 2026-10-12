@@ -31,11 +31,19 @@ export interface FenceLedger {
 }
 
 /**
+ * `text.split(/\r?\n/)`; text without `\r` takes the much faster plain
+ * string split, with the same result.
+ */
+export function splitLines(text: string): string[] {
+	return text.includes('\r') ? text.split(/\r?\n/) : text.split('\n');
+}
+
+/**
  * Every `beancount`/`bean` fence in `text`, in document order. An unclosed
  * fence takes the rest of the file as its body.
  */
 export function extractBeancountFences(text: string): BeancountFence[] {
-	const lines = text.split(/\r?\n/);
+	const lines = splitLines(text);
 	const fences: BeancountFence[] = [];
 	let i = 0;
 	while (i < lines.length) {

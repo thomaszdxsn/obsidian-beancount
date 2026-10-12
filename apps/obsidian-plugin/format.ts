@@ -23,7 +23,7 @@
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import type { Directive, Posting } from '@repo/beancount-parser';
 import { alignLines, endsInString } from './align';
-import { extractBeancountFences } from './fences';
+import { extractBeancountFences, splitLines } from './fences';
 import type { BeancountFence } from './fences';
 
 /** Two spaces, matching posting auto-indent. */
@@ -59,6 +59,14 @@ export function formatErrorNotice(error: FormatError): string {
  * the first error and no text. Any other exception propagates.
  */
 export function formatLedger(text: string): FormatResult {
+	const formatted = formatLines(text);
+	if (!formatted.ok) return formatted;
+	const { lines, newline, trailing } = formatted.split;
+	return { ok: true, text: joinDocument(lines, newline, trailing) };
+}
+
+/** `formatLedger` before the lines are joined back into text. */
+function formatLines(text: string): { ok: true; split: SplitDoc } | { ok: false; error: FormatError } {
 	let directives: Directive[];
 	try {
 		directives = BeancountParser.parse(text).directives;
@@ -69,7 +77,7 @@ export function formatLedger(text: string): FormatResult {
 	const split = splitDocument(text);
 	rewriteLines(split.lines, directives);
 	alignLines(split.lines);
-	return { ok: true, text: joinDocument(split.lines, split.newline, split.trailing) };
+	return { ok: true, split };
 }
 
 /**
@@ -124,8 +132,8 @@ export function formatFencedDocument(text: string): FormatResult {
  */
 export function lineChanges(before: string, after: string): LineChange[] {
 	if (before === after) return [];
-	const oldLines = splitLoose(before);
-	const newLines = splitLoose(after);
+	const oldLines = splitLines(before);
+	const newLines = splitLines(after);
 	if (oldLines.length !== newLines.length) {
 		const last = Math.max(0, oldLines.length - 1);
 		return [
@@ -195,7 +203,7 @@ function splitDocument(text: string): SplitDoc {
 	const crlf = text.includes('\r\n') && !/(^|[^\r])\n/.test(text);
 	const trailing = text.endsWith('\n');
 	if (text.length === 0) return { lines: [], newline: '\n', trailing: false };
-	const lines = text.split(/\r?\n/);
+	const lines = splitLines(text);
 	if (trailing) lines.pop();
 	return { lines, newline: crlf ? '\r\n' : '\n', trailing };
 }
@@ -206,20 +214,18 @@ function joinDocument(lines: readonly string[], newline: '\n' | '\r\n', trailing
 	return trailing ? body + newline : body;
 }
 
-/** `split('\n')` shape, so a trailing newline is an extra empty element. */
-function splitLoose(text: string): string[] {
-	return text.split(/\r?\n/);
-}
-
 function formatFenceBody(fence: BeancountFence): { ok: true; lines: string[] } | { ok: false; error: FormatError } {
 	if (fence.lines.length === 0) return { ok: true, lines: [] };
 	// A trailing newline keeps a one-line body distinct from empty text and
 	// matches how the parser counts the body's last line.
-	const result = formatLedger(fence.lines.join('\n') + '\n');
+	const result = formatLines(fence.lines.join('\n') + '\n');
 	if (!result.ok) return result;
-	const lines = result.text.split('\n');
-	lines.pop();
-	return { ok: true, lines };
+	const { lines, newline, trailing } = result.split;
+	// Joined with `\n` and split again on `\n`, the lines would come back as they are.
+	if (newline === '\n') return { ok: true, lines };
+	const relined = joinDocument(lines, newline, trailing).split('\n');
+	relined.pop();
+	return { ok: true, lines: relined };
 }
 
 function openerIndent(lines: readonly string[], fence: BeancountFence): number {
