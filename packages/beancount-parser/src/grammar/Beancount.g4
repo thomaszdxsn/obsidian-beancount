@@ -1,10 +1,53 @@
 grammar Beancount;
 
 @lexer::members {
-    // True when the next char starts real content (not whitespace, newline or EOF).
-    private isFollowedByContent(): boolean {
-        const next = this.inputStream.LA(1);
-        return next !== -1 && next !== 0x20 && next !== 0x09 && next !== 0x0d && next !== 0x0a;
+    // Column-0 line structure is scanned here instead of by predicated lexer
+    // rules: any semantic predicate reachable from a whitespace run keeps
+    // ANTLR from caching DFA states, which made lexing ~5x slower.
+    //
+    // At column 0:
+    // - `[*:#!&?%]` starts an ignored line (org-mode headings/drawers,
+    //   flag-prefixed lines): skipped up to, not including, the newline.
+    // - `[ \t]+ ';'` starts an indented comment line: skipped with its
+    //   newline, so it can sit between postings or metadata without ending
+    //   the directive.
+    // - `[ \t]+` before other content is INDENT. Whitespace-only lines fall
+    //   through to WS so they read as plain blank lines.
+    public override nextToken(): Token {
+        const input = this.inputStream;
+        while (this.interpreter.column === 0) {
+            const c = input.LA(1);
+            if (c === 0x2a || c === 0x3a || c === 0x23 || c === 0x21 || c === 0x26 || c === 0x3f || c === 0x25) {
+                this.skipToLineEnd();
+                continue;
+            }
+            if (c !== 0x20 && c !== 0x09) break;
+            let k = 2;
+            while (input.LA(k) === 0x20 || input.LA(k) === 0x09) k++;
+            const next = input.LA(k);
+            if (next === 0x3b) {
+                this.skipToLineEnd();
+                if (input.LA(1) === 0x0d && input.LA(2) === 0x0a) this.interpreter.consume(input);
+                if (input.LA(1) === 0x0a) this.interpreter.consume(input);
+                continue;
+            }
+            if (next === -1 || next === 0x0d || next === 0x0a) break;
+            this.tokenStartCharIndex = input.index;
+            this.currentTokenStartLine = this.interpreter.line;
+            this.currentTokenColumn = 0;
+            this.channel = Token.DEFAULT_CHANNEL;
+            this.type = BeancountLexer.INDENT;
+            for (let i = 1; i < k; i++) this.interpreter.consume(input);
+            return this.emit();
+        }
+        return super.nextToken();
+    }
+
+    private skipToLineEnd(): void {
+        const input = this.inputStream;
+        for (let c = input.LA(1); c !== -1 && c !== 0x0d && c !== 0x0a; c = input.LA(1)) {
+            this.interpreter.consume(input);
+        }
     }
 }
 
@@ -258,22 +301,10 @@ account
 // ---------------------------------------------------------------------------
 // Order matters for equal-length matches: earlier rules win.
 //
-// Column-0 checks use `currentTokenColumn` and sit after the first char:
-// a predicate at the left edge of a rule stops ANTLR from caching the DFA
-// start state, which made lexing ~10x slower.
+// INDENT and the column-0 skips (ignored lines, indented comment lines) are
+// produced by nextToken() in @lexer::members.
 
 EOL: '\r'? '\n';
-
-// Leading whitespace at column 0 followed by content. Whitespace-only lines
-// fall through to WS so they read as plain blank lines.
-INDENT: [ \t]+ {this.currentTokenColumn === 0 && this.isFollowedByContent()}?;
-
-// An indented comment line vanishes entirely (newline included) so it can
-// sit between postings or metadata without ending the directive.
-INDENTED_COMMENT_LINE: [ \t]+ {this.currentTokenColumn === 0}? ';' ~[\r\n]* ('\r'? '\n')? -> skip;
-
-// Org-mode headings/drawers and flag-prefixed lines at column 0 are ignored.
-IGNORED_LINE: [*:#!&?%] {this.currentTokenColumn === 0}? ~[\r\n]* -> skip;
 
 WS: [ \t\r]+ -> skip;
 COMMENT: ';' ~[\r\n]* -> skip;
@@ -342,6 +373,11 @@ RPAREN: ')';
 HASH: '#';
 ASTERISK: '*';
 FLAG: [!&?%];
+
+// Emitted by nextToken() in @lexer::members. As a rule it never wins: WS
+// matches every `[ \t]+` run at least as long and comes first. It exists so
+// INDENT has a token type and a name in the lexer's vocabulary.
+INDENT: [ \t]+;
 
 fragment DIGIT: [0-9];
 fragment NON_ASCII: ~[\u0000-\u007F];
