@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { BaseErrorListener, CommonTokenStream } from "antlr4ng";
 import { StringCharStream } from "../src/char-stream";
-import { BeancountFastLexer, NeedsAntlrLexer } from "../src/fast-lexer";
+import { BeancountFastLexer, lexAll, NeedsAntlrLexer } from "../src/fast-lexer";
 import { BeancountLexer } from "../src/parser/BeancountLexer";
 
 // The hand-written lexer must produce exactly the generated lexer's tokens
@@ -30,15 +30,18 @@ function antlrTokens(input: string): string[] | null {
   return failed ? null : dump(tokens);
 }
 
-/** Fast lexer's tokens, or null when it gives up. */
+/** Fast lexer's tokens, replayed as the ANTLR parser reads them, or null when it gives up. */
 function fastTokens(input: string): string[] | null {
-  const tokens = new CommonTokenStream(new BeancountFastLexer(new StringCharStream(input)));
+  const stream = new StringCharStream(input);
+  let raw;
   try {
-    tokens.fill();
+    raw = lexAll(stream.data);
   } catch (e) {
     if (e instanceof NeedsAntlrLexer) return null;
     throw e;
   }
+  const tokens = new CommonTokenStream(new BeancountFastLexer(stream, raw));
+  tokens.fill();
   return dump(tokens);
 }
 

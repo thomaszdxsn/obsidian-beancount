@@ -6,6 +6,9 @@ import { BeancountLexer as L } from './parser/BeancountLexer';
 /** Thrown when no lexer rule matches: the caller re-lexes with the ANTLR lexer for its exact errors. */
 export class NeedsAntlrLexer extends Error {}
 
+// Token.EOF: kept local so the hot loop compares against a constant.
+const EOF = -1;
+
 // Lowercase keywords and their token types; KEY (`word:`) is the only other
 // rule starting with a lowercase letter.
 const KEYWORDS: readonly (readonly [string, number])[] = [
@@ -54,26 +57,28 @@ const isKeyChar = (c: number) => isUpper(c) || isLower(c) || isDigit(c) || c ===
  * Where no rule matches, ANTLR reports an error and recovers; this throws
  * `NeedsAntlrLexer` instead, so error messages stay exactly ANTLR's.
  */
-export class BeancountFastLexer extends L {
-  private readonly cp: Uint32Array;
-  private readonly stream: StringCharStream;
+class Scanner {
+  private p = 0;
+  private line = 1;
+  private column = 0;
+  // The token `next()` read.
+  tokType = 0;
+  tokStart = 0;
+  tokEnd = 0;
+  tokLine = 1;
+  tokColumn = 0;
 
-  constructor(input: StringCharStream) {
-    super(input);
-    this.stream = input;
-    this.cp = input.data;
-  }
+  constructor(private readonly cp: Uint32Array) {}
 
-  public override nextToken(): Token {
+  next(): void {
     const cp = this.cp;
     const n = cp.length;
-    const sim = this.interpreter;
     for (;;) {
-      const p = this.stream.index;
-      if (p >= n) return this.emitEOF();
+      const p = this.p;
+      if (p >= n) return this.makeToken(EOF, p, p);
       const c = cp[p]!;
 
-      if (sim.column === 0) {
+      if (this.column === 0) {
         // `[*:#!&?%]` at column 0: ignored line, up to the newline.
         if (c === 0x2a || c === 0x3a || c === 0x23 || c === 0x21 || c === 0x26 || c === 0x3f || c === 0x25) {
           this.skipTo(this.lineEnd(p));
@@ -263,37 +268,34 @@ export class BeancountFastLexer extends L {
     }
   }
 
-  private makeToken(type: number, start: number, end: number): Token {
-    const sim = this.interpreter;
-    this.tokenStartCharIndex = start;
-    this.currentTokenStartLine = sim.line;
-    this.currentTokenColumn = sim.column;
-    this.channel = 0;
-    this.type = type;
+  private makeToken(type: number, start: number, end: number): void {
+    this.tokType = type;
+    this.tokStart = start;
+    this.tokEnd = end;
+    this.tokLine = this.line;
+    this.tokColumn = this.column;
     this.advance(start, end);
-    return this.emit();
   }
 
   private skipTo(end: number): void {
-    this.advance(this.stream.index, end);
+    this.advance(this.p, end);
   }
 
-  // Moves the stream to `end`, tracking line and column as ANTLR does: a
-  // newline starts a line, any other code point is one column.
+  // Moves to `end`, tracking line and column as ANTLR does: a newline
+  // starts a line, any other code point is one column.
   private advance(start: number, end: number): void {
     const cp = this.cp;
-    const sim = this.interpreter;
-    let column = sim.column;
+    let column = this.column;
     for (let k = start; k < end; k++) {
       if (cp[k] === 0x0a) {
-        sim.line++;
+        this.line++;
         column = 0;
       } else {
         column++;
       }
     }
-    sim.column = column;
-    this.stream.index = end;
+    this.column = column;
+    this.p = end;
   }
 
   // Index of the first `\r`, `\n` or the end, from `p`.
@@ -373,5 +375,78 @@ export class BeancountFastLexer extends L {
       end = k;
     }
     return end;
+  }
+}
+
+/** Tokens as parallel arrays, ending with one EOF token; `end` is exclusive. */
+export interface RawTokens {
+  count: number;
+  type: Int8Array;
+  start: Int32Array;
+  end: Int32Array;
+  line: Int32Array;
+  column: Int32Array;
+}
+
+/** Lexes the whole input; throws `NeedsAntlrLexer` where no rule matches. */
+export function lexAll(cp: Uint32Array): RawTokens {
+  const scanner = new Scanner(cp);
+  // Roughly one token per 3 code points in a ledger; grown on demand.
+  let capacity = (cp.length >> 2) + 16;
+  let type = new Int8Array(capacity);
+  let start = new Int32Array(capacity);
+  let end = new Int32Array(capacity);
+  let line = new Int32Array(capacity);
+  let column = new Int32Array(capacity);
+  let count = 0;
+  for (;;) {
+    scanner.next();
+    if (count === capacity) {
+      capacity *= 2;
+      type = grow(type, new Int8Array(capacity));
+      start = grow(start, new Int32Array(capacity));
+      end = grow(end, new Int32Array(capacity));
+      line = grow(line, new Int32Array(capacity));
+      column = grow(column, new Int32Array(capacity));
+    }
+    type[count] = scanner.tokType;
+    start[count] = scanner.tokStart;
+    end[count] = scanner.tokEnd;
+    line[count] = scanner.tokLine;
+    column[count] = scanner.tokColumn;
+    count++;
+    if (scanner.tokType === EOF) return { count, type, start, end, line, column };
+  }
+}
+
+function grow<T extends Int8Array | Int32Array>(from: T, to: T): T {
+  to.set(from);
+  return to;
+}
+
+/**
+ * Feeds tokens from `lexAll` to the ANTLR parser as the generated lexer
+ * would emit them (same factory, source, spans, lines and columns).
+ */
+export class BeancountFastLexer extends L {
+  private next = 0;
+
+  constructor(
+    private readonly stream: StringCharStream,
+    private readonly tokens: RawTokens,
+  ) {
+    super(stream);
+  }
+
+  public override nextToken(): Token {
+    const t = this.tokens;
+    const i = Math.min(this.next++, t.count - 1);
+    this.tokenStartCharIndex = t.start[i]!;
+    this.currentTokenStartLine = t.line[i]!;
+    this.currentTokenColumn = t.column[i]!;
+    this.channel = 0;
+    this.type = t.type[i]!;
+    this.stream.index = t.end[i]!;
+    return this.emit();
   }
 }

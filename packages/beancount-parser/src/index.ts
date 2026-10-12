@@ -2,7 +2,11 @@ import { BaseErrorListener, CommonTokenStream, Token } from 'antlr4ng';
 import type { ParserRuleContext, TerminalNode } from 'antlr4ng';
 
 import { StringCharStream } from './char-stream';
-import { BeancountFastLexer, NeedsAntlrLexer } from './fast-lexer';
+import { BeancountFastLexer, lexAll, NeedsAntlrLexer } from './fast-lexer';
+import type { RawTokens } from './fast-lexer';
+import { fastParse } from './fast-parser';
+import { calendarDate, unquote } from './values';
+import type { ParsedNumber, SyntaxErrorInfo } from './values';
 
 import {
   BeancountFile,
@@ -73,12 +77,7 @@ import type {
 } from './parser/BeancountParser';
 import { BeancountVisitor } from './parser/BeancountVisitor';
 
-/** One lexer, parser or value error; `line` is 1-based, `column` 0-based. */
-export interface SyntaxErrorInfo {
-  line: number;
-  column: number;
-  message: string;
-}
+export type { SyntaxErrorInfo } from './values';
 
 /** Thrown by `BeancountParser.parse()` when the input is not valid Beancount. */
 export class BeancountSyntaxError extends Error {
@@ -99,14 +98,6 @@ class CollectingErrorListener extends BaseErrorListener {
   override syntaxError(_r: unknown, _s: unknown, line: number, column: number, message: string): void {
     this.errors.push({ line, column, message });
   }
-}
-
-const UNESCAPES: Record<string, string> = { n: '\n', t: '\t', r: '\r', f: '\f', b: '\b' };
-
-/** A number and, when it is a plain literal, its source spelling. */
-interface ParsedNumber {
-  value: number;
-  text?: string;
 }
 
 // Maps a syntactically valid parse tree to model objects. Errors in values the
@@ -141,8 +132,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     // The `txn` keyword is an alias for the `*` flag.
     const flag = flagCtx.TXN() ? '*' : flagCtx.getText();
     const strings = ctx._strings;
-    const payee = strings?._payee ? this.unquote(strings._payee.text!) : null;
-    const narration = strings?._narration ? this.unquote(strings._narration.text!) : null;
+    const payee = strings?._payee ? unquote(strings._payee.text!) : null;
+    const narration = strings?._narration ? unquote(strings._narration.text!) : null;
 
     const tags = new Set<string>();
     for (const pushed of this.pushedTags) tags.add(pushed.tag);
@@ -210,7 +201,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       this.date(ctx.DATE()),
       ctx.account().getText(),
       ctx.commodity().map((c) => c.getText()),
-      booking ? this.unquote(booking.STRING().getText()) : undefined,
+      booking ? unquote(booking.STRING().getText()) : undefined,
       this.location(ctx),
       this.metadata(ctx.metadata()._lines),
     );
@@ -251,7 +242,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     return new Note(
       this.date(ctx.DATE()),
       ctx.account().getText(),
-      this.unquote(ctx.STRING().getText()),
+      unquote(ctx.STRING().getText()),
       this.location(ctx),
       this.metadata(ctx.metadata()._lines),
       [...tags],
@@ -266,7 +257,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     return new Document(
       this.date(ctx.DATE()),
       ctx.account().getText(),
-      this.unquote(ctx.STRING().getText()),
+      unquote(ctx.STRING().getText()),
       this.location(ctx),
       this.metadata(ctx.metadata()._lines),
       [...tags],
@@ -277,8 +268,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   visitEvent = (ctx: EventContext): Event => {
     return new Event(
       this.date(ctx.DATE()),
-      this.unquote(ctx.STRING(0)!.getText()),
-      this.unquote(ctx.STRING(1)!.getText()),
+      unquote(ctx.STRING(0)!.getText()),
+      unquote(ctx.STRING(1)!.getText()),
       this.location(ctx),
       this.metadata(ctx.metadata()._lines),
     );
@@ -287,8 +278,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   visitQuery = (ctx: QueryContext): Query => {
     return new Query(
       this.date(ctx.DATE()),
-      this.unquote(ctx.STRING(0)!.getText()),
-      this.unquote(ctx.STRING(1)!.getText()),
+      unquote(ctx.STRING(0)!.getText()),
+      unquote(ctx.STRING(1)!.getText()),
       this.location(ctx),
       this.metadata(ctx.metadata()._lines),
     );
@@ -297,7 +288,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   visitCustom = (ctx: CustomContext): Custom => {
     return new Custom(
       this.date(ctx.DATE()),
-      this.unquote(ctx.STRING().getText()),
+      unquote(ctx.STRING().getText()),
       ctx.custom_value().map((v) => this.customValue(v)),
       this.location(ctx),
       this.metadata(ctx.metadata()._lines),
@@ -306,8 +297,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
 
   visitOptions = (ctx: OptionsContext): Option => {
     return new Option(
-      this.unquote(ctx.STRING(0)!.getText()),
-      this.unquote(ctx.STRING(1)!.getText()),
+      unquote(ctx.STRING(0)!.getText()),
+      unquote(ctx.STRING(1)!.getText()),
       this.location(ctx),
     );
   };
@@ -315,14 +306,14 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   visitPlugin = (ctx: PluginContext): Plugin => {
     const config = ctx.STRING(1);
     return new Plugin(
-      this.unquote(ctx.STRING(0)!.getText()),
-      config ? this.unquote(config.getText()) : undefined,
+      unquote(ctx.STRING(0)!.getText()),
+      config ? unquote(config.getText()) : undefined,
       this.location(ctx),
     );
   };
 
   visitInclude = (ctx: IncludeContext): Include => {
-    return new Include(this.unquote(ctx.STRING().getText()), this.location(ctx));
+    return new Include(unquote(ctx.STRING().getText()), this.location(ctx));
   };
 
   visitPushtag = (ctx: PushtagContext): null => {
@@ -431,7 +422,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       // Upstream rejects a repeated component instead of letting the last win.
       if (taken) this.error(comp.start!, `duplicate cost component '${comp.getText()}'`);
       if (date) cost.date = this.date(date);
-      else if (label) cost.label = this.unquote(label.getText());
+      else if (label) cost.label = unquote(label.getText());
       else if (comp.ASTERISK()) cost.merge = true;
       else if (compound) {
         const currency = compound.commodity()?.getText() ?? null;
@@ -468,7 +459,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
 
   private metadataValue(ctx: Key_value_valueContext): MetadataValue {
     const str = ctx.STRING();
-    if (str) return this.unquote(str.getText());
+    if (str) return unquote(str.getText());
     const date = ctx.DATE();
     if (date) return this.date(date);
     const tag = ctx.TAG();
@@ -486,7 +477,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
 
   private customValue(ctx: Custom_valueContext): CustomValue {
     const str = ctx.STRING();
-    if (str) return this.unquote(str.getText());
+    if (str) return unquote(str.getText());
     const date = ctx.DATE();
     if (date) return this.date(date);
     const bool = ctx.BOOL();
@@ -508,27 +499,12 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
     for (const l of ctx.LINK()) links.add(l.getText().slice(1));
   }
 
-  // DATE accepts `-` or `/` separators and unpadded parts; the calendar check
-  // happens here because the lexer cannot reject e.g. 2022-02-30. A ledger
-  // repeats each date many times, so valid ones are parsed once per file.
   private date(node: TerminalNode): Date {
     const text = node.getText();
-    const cached = this.dateTimes.get(text);
-    if (cached !== undefined) return new Date(cached);
-    const [year, month, day] = text.split(/[-/]/).map(Number) as [number, number, number];
-    const date = new Date(year, month - 1, day);
-    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-      this.error(node.symbol, `invalid date '${text}'`);
-    } else {
-      this.dateTimes.set(text, date.getTime());
-    }
-    return date;
-  }
-
-  // Escapes as upstream's cunescape; any other escaped char stands for itself.
-  private unquote(str: string): string {
-    const body = str.slice(1, -1);
-    return body.includes('\\') ? body.replace(/\\(.)/gs, (_m, c: string) => UNESCAPES[c] ?? c) : body;
+    const date = calendarDate(text, this.dateTimes);
+    if (date !== null) return date;
+    this.error(node.symbol, `invalid date '${text}'`);
+    return new Date(NaN);
   }
 
   // Span of the rule's own text: ends before the newline that terminates it.
@@ -569,53 +545,69 @@ export class BeancountParser {
    *   unbalanced pushtag, ...) instead
    */
   static parse(input: string): BeancountFile {
-    const errors: SyntaxErrorInfo[] = [];
-    const listener = new CollectingErrorListener(errors);
-
-    const parser = new AntlrBeancountParser(BeancountParser.tokens(input, listener));
-    parser.removeErrorListeners();
-    parser.addErrorListener(listener);
-
-    try {
-      const tree = parser.beancountFile();
-      // A tree built through error recovery holds phantom directives; never map it.
-      if (errors.length === 0) {
-        const file = new BeancountParserVisitor(errors).buildFile(tree);
-        if (errors.length === 0) return file;
-      }
-    } catch (e) {
-      // Both the ANTLR parser and the visitor recurse per nesting level.
-      if (!(e instanceof RangeError)) throw e;
-      throw new BeancountSyntaxError([{ line: 1, column: 0, message: 'input nested too deeply' }]);
-    }
-    // The token stream reads ahead, so lexer errors can arrive out of order.
-    errors.sort((a, b) => a.line - b.line || a.column - b.column);
-    throw new BeancountSyntaxError(errors);
-  }
-
-  /**
-   * Tokens for `input`, lexed up front by the hand-written lexer. Input it
-   * cannot lex (a lexer error) goes through the generated ANTLR lexer
-   * instead, lazily as the parser reads, so its errors reach `listener`
-   * exactly as before.
-   */
-  private static tokens(input: string, listener: CollectingErrorListener): CommonTokenStream {
     const stream = new StringCharStream(input);
-    const fast = new CommonTokenStream(new BeancountFastLexer(stream));
+    let tokens: RawTokens | null = null;
     try {
-      fast.fill();
-      return fast;
+      tokens = lexAll(stream.data);
     } catch (e) {
       if (!(e instanceof NeedsAntlrLexer)) throw e;
     }
-    stream.reset();
-    const lexer = new BeancountLexer(stream);
+    if (tokens !== null) {
+      // Hand-written lexer and parser; any syntax error takes the ANTLR path
+      // below, which reports it with ANTLR's messages and recovery.
+      const errors: SyntaxErrorInfo[] = [];
+      const file = fastParse(stream, tokens, errors);
+      if (file !== null) {
+        if (errors.length === 0) return file;
+        throw syntaxError(errors);
+      }
+    }
+    return parseWithAntlr(stream, tokens);
+  }
+}
+
+function syntaxError(errors: SyntaxErrorInfo[]): BeancountSyntaxError {
+  // The token stream reads ahead, so lexer errors can arrive out of order.
+  errors.sort((a, b) => a.line - b.line || a.column - b.column);
+  return new BeancountSyntaxError(errors);
+}
+
+/**
+ * `parse()` through the generated ANTLR parser and the tree visitor. Tokens
+ * from `lexAll` are replayed; without them (a lexer error) the generated
+ * lexer runs, lazily as the parser reads, so its errors interleave with the
+ * parser's exactly as ANTLR reports them.
+ */
+export function parseWithAntlr(stream: StringCharStream, tokens: RawTokens | null): BeancountFile {
+  const errors: SyntaxErrorInfo[] = [];
+  const listener = new CollectingErrorListener(errors);
+  let lexer: BeancountLexer;
+  if (tokens !== null) {
+    lexer = new BeancountFastLexer(stream, tokens);
+  } else {
+    lexer = new BeancountLexer(stream);
     // By default the lexer DFA caches transitions only for code points <= 256,
     // so every non-ASCII char (CJK account names, payees, narrations) re-ran
     // the ATN simulation, ~3x slower on such text.
     lexer.options.maxDFAEdge = 0x10ffff;
     lexer.removeErrorListeners();
     lexer.addErrorListener(listener);
-    return new CommonTokenStream(lexer);
   }
+  const parser = new AntlrBeancountParser(new CommonTokenStream(lexer));
+  parser.removeErrorListeners();
+  parser.addErrorListener(listener);
+
+  try {
+    const tree = parser.beancountFile();
+    // A tree built through error recovery holds phantom directives; never map it.
+    if (errors.length === 0) {
+      const file = new BeancountParserVisitor(errors).buildFile(tree);
+      if (errors.length === 0) return file;
+    }
+  } catch (e) {
+    // Both the ANTLR parser and the visitor recurse per nesting level.
+    if (!(e instanceof RangeError)) throw e;
+    throw new BeancountSyntaxError([{ line: 1, column: 0, message: 'input nested too deeply' }]);
+  }
+  throw syntaxError(errors);
 }
