@@ -40,12 +40,36 @@
 const MIN_GAP = 1;
 
 /**
- * Postings are indented; directives (`2026-01-01 balance …`, `include`)
- * start at column 0 and are out of scope.
+ * JS `\s` (WhiteSpace and LineTerminator), as one UTF-16 code unit: what
+ * separates the tokens of a posting line.
  */
-const INDENT_RE = /^[ \t]+/y;
-const TOKEN_RE = /[^\s]+/y;
-const WS_RE = /\s+/y;
+function isSpace(c: number): boolean {
+	if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) return true;
+	if (c < 0xa0) return false;
+	return (
+		c === 0xa0 ||
+		c === 0x1680 ||
+		(c >= 0x2000 && c <= 0x200a) ||
+		c === 0x2028 ||
+		c === 0x2029 ||
+		c === 0x202f ||
+		c === 0x205f ||
+		c === 0x3000 ||
+		c === 0xfeff
+	);
+}
+
+/** Offset past the `\s` run at `at`. */
+function skipSpace(line: string, at: number): number {
+	while (at < line.length && isSpace(line.charCodeAt(at))) at += 1;
+	return at;
+}
+
+/** Offset past the `[ \t]` run at `at`. */
+function skipBlank(line: string, at: number): number {
+	while (at < line.length && (line.charCodeAt(at) === 0x20 || line.charCodeAt(at) === 0x09)) at += 1;
+	return at;
+}
 
 /**
  * An account as the syntax mode highlights it: a capitalized root plus
@@ -55,14 +79,10 @@ const WS_RE = /\s+/y;
  */
 const ACCOUNT_RE = /^[A-Z][a-z]+(?::[^\s:]+)+$/;
 
-/**
- * A posting flag (`*!&#?%` or a single capital) followed by whitespace, for
- * the form that precedes the account: `  * Assets:Cash -1.00 USD`.
- */
-const LEADING_FLAG_RE = /[*!&#?%A-Z][ \t]+/y;
-
-/** A posting flag between account and amount: `  Assets:Cash * 12.50 USD`. */
-const TRAILING_FLAG_RE = /[*!&#?%A-Z](?=\s|$)/y;
+/** A posting flag: `*!&#?%` or a single capital. */
+function isFlag(c: number): boolean {
+	return (c >= 0x41 && c <= 0x5a) || c === 0x2a || c === 0x21 || c === 0x26 || c === 0x23 || c === 0x3f || c === 0x25;
+}
 
 /**
  * The units amount: optional sign, integer (thousands separators allowed),
@@ -104,12 +124,6 @@ interface Posting {
 	beforeDot: number;
 }
 
-interface Match {
-	text: string;
-	/** Offset just past the match. */
-	end: number;
-}
-
 /**
  * Whether `line` ends inside a `"` string. A `;` outside a string starts a
  * comment and is not scanned, so a quote there cannot open a string that
@@ -140,13 +154,6 @@ export function endsInString(line: string, inStringStart: boolean): boolean {
 	return inString;
 }
 
-function matchAt(re: RegExp, text: string, at: number): Match | null {
-	re.lastIndex = at;
-	const match = re.exec(text);
-	if (match === null) return null;
-	return { text: match[0], end: re.lastIndex };
-}
-
 /** Where the decimal point sits inside a number token; integers end there. */
 function dotOffset(number: string): number {
 	const dot = number.indexOf('.');
@@ -155,46 +162,54 @@ function dotOffset(number: string): number {
 
 /** What may follow the amount: nothing, a commodity, or annotation syntax. */
 function amountTailOk(line: string, at: number): boolean {
-	const ws = matchAt(WS_RE, line, at);
-	const next = ws ? ws.end : at;
+	const next = skipSpace(line, at);
 	if (next >= line.length) return true;
 	if (ANNOTATION_STARTS[line[next]] === true) return true;
-	return matchAt(COMMODITY_RE, line, next) !== null;
+	COMMODITY_RE.lastIndex = next;
+	return COMMODITY_RE.test(line);
 }
 
 function parsePosting(line: string): Posting | null {
-	const indent = matchAt(INDENT_RE, line, 0);
-	if (indent === null) return null;
+	// Postings are indented; directives (`2026-01-01 balance …`, `include`)
+	// start at column 0 and are out of scope.
+	let at = skipBlank(line, 0);
+	if (at === 0) return null;
 
 	// The flag may precede the account (`  * Assets:Cash …`).
-	let at = indent.end;
-	const leadingFlag = matchAt(LEADING_FLAG_RE, line, at);
-	if (leadingFlag !== null) at = leadingFlag.end;
+	if (isFlag(line.charCodeAt(at))) {
+		const afterFlag = skipBlank(line, at + 1);
+		if (afterFlag > at + 1) at = afterFlag;
+	}
 
-	const account = matchAt(TOKEN_RE, line, at);
-	if (account === null || !ACCOUNT_RE.test(account.text)) return null;
+	let accountEnd = at;
+	while (accountEnd < line.length && !isSpace(line.charCodeAt(accountEnd))) accountEnd += 1;
+	if (accountEnd === at || !ACCOUNT_RE.test(line.slice(at, accountEnd))) return null;
 
 	// …or sit between account and amount (`  Assets:Cash * 12.50 USD`);
 	// it stays with the account, so the gap after it is what gets rewritten.
-	let gapStart = account.end;
-	const wsBeforeFlag = matchAt(WS_RE, line, gapStart);
-	if (wsBeforeFlag !== null) {
-		const trailingFlag = matchAt(TRAILING_FLAG_RE, line, wsBeforeFlag.end);
-		if (trailingFlag !== null) gapStart = trailingFlag.end;
+	let gapStart = accountEnd;
+	const flagAt = skipSpace(line, gapStart);
+	if (
+		flagAt > gapStart &&
+		isFlag(line.charCodeAt(flagAt)) &&
+		(flagAt + 1 >= line.length || isSpace(line.charCodeAt(flagAt + 1)))
+	) {
+		gapStart = flagAt + 1;
 	}
 
-	const gap = matchAt(WS_RE, line, gapStart);
-	if (gap === null) return null;
+	const gapEnd = skipSpace(line, gapStart);
+	if (gapEnd === gapStart) return null;
 
-	const number = matchAt(NUMBER_RE, line, gap.end);
-	if (number === null || !amountTailOk(line, number.end)) return null;
+	NUMBER_RE.lastIndex = gapEnd;
+	const number = NUMBER_RE.exec(line);
+	if (number === null || !amountTailOk(line, NUMBER_RE.lastIndex)) return null;
 
 	return {
 		gapStart,
-		gapEnd: gap.end,
-		gapText: gap.text,
+		gapEnd,
+		gapText: line.slice(gapStart, gapEnd),
 		prefixWidth: displayWidth(line.slice(0, gapStart)),
-		beforeDot: dotOffset(number.text),
+		beforeDot: dotOffset(number[0]),
 	};
 }
 
@@ -210,7 +225,8 @@ function scanBlocks(lines: readonly string[]): number[] {
 	let next = 0;
 	for (const line of lines) {
 		const head = line.charAt(0);
-		if (line.trim() === '' || head === ';') {
+		// `skipSpace` over the whole line: blank as `line.trim() === ''`.
+		if (head === ';' || skipSpace(line, 0) === line.length) {
 			block = -1;
 		} else if (head !== ' ' && head !== '\t') {
 			block = next++;
