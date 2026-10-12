@@ -40,16 +40,19 @@ const FLAG = '(?:txn|[*!&#?%PSTCURM])';
 /** A quoted string body, escapes included, never crossing a quote or line. */
 const STRING_BODY = '(?:[^"\\\\\\n]|\\\\.)*';
 
-/** The `commodity` directive, dated as beancount requires. */
+/**
+ * The `commodity` directive, dated as beancount requires. Sticky: matched
+ * at each line start by `addLineMatches`.
+ */
 const COMMODITY_DIRECTIVE_RE = new RegExp(
 	`^[ \\t]*(?:${DATE}[ \\t]+)?commodity[ \\t]+(${COMMODITY_TOKEN})(?![A-Z0-9])`,
-	'gm'
+	'my'
 );
 
-/** The currency a `price` directive prices: right after the keyword. */
+/** The currency a `price` directive prices: right after the keyword. Sticky, as above. */
 const PRICE_DIRECTIVE_RE = new RegExp(
 	`^${DATE}[ \\t]+price[ \\t]+(${COMMODITY_TOKEN})(?![A-Z0-9])`,
-	'gm'
+	'my'
 );
 
 /** An amount's commodity: a digit, whitespace, then the token. */
@@ -86,14 +89,46 @@ function stripStringsAndComments(line: string): string {
 	return out;
 }
 
+/** JS LineTerminator: where `^` matches after, in multiline mode. */
+function isLineTerminator(c: number): boolean {
+	return c === 0x0a || c === 0x0d || c === 0x2028 || c === 0x2029;
+}
+
+/**
+ * Group 1 of sticky multiline `re` at the start of every line containing
+ * `word`, in document order. For a `^`-anchored pattern that holds `word`
+ * and cannot cross a line terminator, the same as `matchAll` with `gm`,
+ * without trying every line start.
+ */
+function addLineMatches(content: string, word: string, re: RegExp, into: Set<string>): void {
+	let at = content.indexOf(word);
+	while (at !== -1) {
+		let start = at;
+		while (start > 0 && !isLineTerminator(content.charCodeAt(start - 1))) start -= 1;
+		re.lastIndex = start;
+		const match = re.exec(content);
+		if (match !== null) into.add(match[1]);
+		let end = at + word.length;
+		while (end < content.length && !isLineTerminator(content.charCodeAt(end))) end += 1;
+		at = content.indexOf(word, end);
+	}
+}
+
 export function extractCommodities(content: string): ReadonlySet<string> {
 	const commodities = new Set<string>();
-	for (const match of content.matchAll(COMMODITY_DIRECTIVE_RE)) commodities.add(match[1]);
-	for (const match of content.matchAll(PRICE_DIRECTIVE_RE)) commodities.add(match[1]);
+	addLineMatches(content, 'commodity', COMMODITY_DIRECTIVE_RE, commodities);
+	addLineMatches(content, 'price', PRICE_DIRECTIVE_RE, commodities);
 	for (const line of content.split('\n')) {
-		// An indented line always qualifies: test the regex only on the rest.
+		// An indented line always qualifies; otherwise the dated form needs
+		// one of its keywords, checked before the unanchored regex.
 		const first = line.charCodeAt(0);
-		if (first !== 0x20 && first !== 0x09 && !AMOUNT_LINE_RE.test(line)) continue;
+		if (
+			first !== 0x20 &&
+			first !== 0x09 &&
+			!((line.includes('balance') || line.includes('price')) && AMOUNT_LINE_RE.test(line))
+		) {
+			continue;
+		}
 		const text = stripStringsAndComments(line);
 		AMOUNT_RE.lastIndex = 0;
 		for (let match = AMOUNT_RE.exec(text); match !== null; match = AMOUNT_RE.exec(text)) commodities.add(match[1]);
