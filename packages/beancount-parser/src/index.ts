@@ -114,6 +114,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   // Tags opened by `pushtag`, applied to every following transaction. A list,
   // not a set: pushing a tag twice needs two pops, as upstream.
   private readonly pushedTags: { tag: string; at: Token }[] = [];
+  // Time value of each valid DATE text seen in this file.
+  private readonly dateTimes = new Map<string, number>();
 
   constructor(private readonly errors: SyntaxErrorInfo[]) {
     super();
@@ -370,6 +372,15 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   }
 
   private parsedNumber(ctx: NumberContext): ParsedNumber {
+    const literal = ctx.NUMBER();
+    if (literal) {
+      // Plain literal: one digits string serves as both value and spelling.
+      const raw = literal.getText();
+      const text = raw.includes(',') ? raw.replace(/,/g, '') : raw;
+      const value = Number(text);
+      if (!Number.isFinite(value)) this.error(ctx.start!, `invalid number '${raw}'`);
+      return { value, text };
+    }
     const value = this.evaluate(ctx);
     if (!Number.isFinite(value)) this.error(ctx.start!, `invalid number '${ctx.getText()}'`);
     const text = this.literalText(ctx);
@@ -495,20 +506,26 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   }
 
   // DATE accepts `-` or `/` separators and unpadded parts; the calendar check
-  // happens here because the lexer cannot reject e.g. 2022-02-30.
+  // happens here because the lexer cannot reject e.g. 2022-02-30. A ledger
+  // repeats each date many times, so valid ones are parsed once per file.
   private date(node: TerminalNode): Date {
     const text = node.getText();
+    const cached = this.dateTimes.get(text);
+    if (cached !== undefined) return new Date(cached);
     const [year, month, day] = text.split(/[-/]/).map(Number) as [number, number, number];
     const date = new Date(year, month - 1, day);
     if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
       this.error(node.symbol, `invalid date '${text}'`);
+    } else {
+      this.dateTimes.set(text, date.getTime());
     }
     return date;
   }
 
   // Escapes as upstream's cunescape; any other escaped char stands for itself.
   private unquote(str: string): string {
-    return str.slice(1, -1).replace(/\\(.)/gs, (_m, c: string) => UNESCAPES[c] ?? c);
+    const body = str.slice(1, -1);
+    return body.includes('\\') ? body.replace(/\\(.)/gs, (_m, c: string) => UNESCAPES[c] ?? c) : body;
   }
 
   // Span of the rule's own text: ends before the newline that terminates it.
