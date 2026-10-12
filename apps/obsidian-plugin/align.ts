@@ -117,11 +117,13 @@ export interface LineRange {
 interface Posting {
 	gapStart: number;
 	gapEnd: number;
-	gapText: string;
 	/** Display width of the line before the gap (indent + flags + account). */
 	prefixWidth: number;
 	/** Characters of the amount before its decimal point (sign + integer). */
 	beforeDot: number;
+	/** Line index and transaction block, set by `computeAlignment`. */
+	line: number;
+	block: number;
 }
 
 /**
@@ -207,9 +209,10 @@ function parsePosting(line: string): Posting | null {
 	return {
 		gapStart,
 		gapEnd,
-		gapText: line.slice(gapStart, gapEnd),
 		prefixWidth: displayWidth(line.slice(0, gapStart)),
 		beforeDot: dotOffset(number[0]),
+		line: 0,
+		block: -1,
 	};
 }
 
@@ -265,7 +268,7 @@ export function computeAlignment(
 	targetColumn?: number
 ): LineEdit[] {
 	const blockOfLine = scanBlocks(lines);
-	const postings: Array<Posting & { line: number; block: number }> = [];
+	const postings: Posting[] = [];
 	let inString = false;
 	for (let line = 0; line < lines.length; line += 1) {
 		const continuation = inString;
@@ -273,7 +276,11 @@ export function computeAlignment(
 		if (range && (line < range.from || line > range.to)) continue;
 		if (continuation) continue;
 		const posting = parsePosting(lines[line]);
-		if (posting !== null) postings.push({ ...posting, line, block: blockOfLine[line] });
+		if (posting !== null) {
+			posting.line = line;
+			posting.block = blockOfLine[line];
+			postings.push(posting);
+		}
 	}
 	if (postings.length === 0) return [];
 
@@ -290,9 +297,13 @@ export function computeAlignment(
 
 	const edits: LineEdit[] = [];
 	for (const posting of postings) {
-		const gap = ' '.repeat(columnOfBlock[posting.block] - posting.prefixWidth - posting.beforeDot);
-		if (gap !== posting.gapText) {
-			edits.push({ line: posting.line, from: posting.gapStart, to: posting.gapEnd, text: gap });
+		const width = columnOfBlock[posting.block] - posting.prefixWidth - posting.beforeDot;
+		// The gap already is `width` spaces: no edit.
+		const text = lines[posting.line];
+		let same = posting.gapEnd - posting.gapStart === width;
+		for (let i = posting.gapStart; same && i < posting.gapEnd; i += 1) same = text.charCodeAt(i) === 0x20;
+		if (!same) {
+			edits.push({ line: posting.line, from: posting.gapStart, to: posting.gapEnd, text: ' '.repeat(width) });
 		}
 	}
 	return edits;
