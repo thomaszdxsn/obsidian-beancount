@@ -343,7 +343,15 @@ function includeMarks(view: EditorView): Array<{ from: number; to: number }> {
 	const doc = view.state.doc;
 	if (isLedgerFile(file)) return collectIncludeMarks(doc, visibleLineSpans(view));
 	if (file.extension !== 'md' || !docHasFence(doc)) return [];
-	return collectIncludeMarks(doc, fenceSpans(doc));
+	// Only a line holding `include` can be one; the rest skip `doc.line`.
+	// A fence body line is the host line less some leading spaces.
+	const candidates: Array<{ fromLine: number; toLine: number }> = [];
+	for (const fence of docFences(doc).fences) {
+		for (let i = 0; i < fence.lines.length; i += 1) {
+			if (fence.lines[i].includes('include')) candidates.push({ fromLine: fence.startLine + i, toLine: fence.startLine + i });
+		}
+	}
+	return collectIncludeMarks(doc, candidates);
 }
 
 /** Body lines of a note's ledger fences: disjoint, in document order. */
