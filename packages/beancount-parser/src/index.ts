@@ -1,5 +1,7 @@
-import { BaseErrorListener, CharStream, CommonTokenStream, Token } from 'antlr4ng';
+import { BaseErrorListener, CommonTokenStream, Token } from 'antlr4ng';
 import type { ParserRuleContext, TerminalNode } from 'antlr4ng';
+
+import { StringCharStream } from './char-stream';
 
 import {
   BeancountFile,
@@ -550,7 +552,7 @@ export class BeancountParser {
     const errors: SyntaxErrorInfo[] = [];
     const listener = new CollectingErrorListener(errors);
 
-    const lexer = new BeancountLexer(CharStream.fromString(input));
+    const lexer = new BeancountLexer(new StringCharStream(input));
     lexer.removeErrorListeners();
     lexer.addErrorListener(listener);
     const parser = new AntlrBeancountParser(new CommonTokenStream(lexer));
