@@ -36,31 +36,33 @@ export interface InstantPlan {
 	carets: number[];
 }
 
-interface LineSpan {
-	line: number;
-	start: number;
-	text: string;
+/** Lines of `text` and the offset each starts at. */
+interface Lines {
+	text: string[];
+	starts: number[];
 }
 
-function lineSpans(text: string): LineSpan[] {
-	const spans: LineSpan[] = [];
+function linesOf(text: string): Lines {
+	const lines = text.split('\n');
+	const starts = new Array<number>(lines.length);
 	let start = 0;
-	let line = 0;
-	for (;;) {
-		const nl = text.indexOf('\n', start);
-		const end = nl === -1 ? text.length : nl;
-		spans.push({ line, start, text: text.slice(start, end) });
-		if (nl === -1) return spans;
-		start = nl + 1;
-		line += 1;
+	for (let line = 0; line < lines.length; line += 1) {
+		starts[line] = start;
+		start += lines[line].length + 1;
 	}
+	return { text: lines, starts };
 }
 
-function lineAt(spans: readonly LineSpan[], offset: number): LineSpan {
-	for (const span of spans) {
-		if (offset <= span.start + span.text.length) return span;
+/** The line holding `offset`: the last one starting at or before it (line 0 before the text). */
+function lineAt(lines: Lines, offset: number): number {
+	let lo = 0;
+	let hi = lines.starts.length - 1;
+	while (lo < hi) {
+		const mid = (lo + hi + 1) >> 1;
+		if (lines.starts[mid] <= offset) lo = mid;
+		else hi = mid - 1;
 	}
-	return spans[spans.length - 1];
+	return lo;
 }
 
 /**
@@ -76,16 +78,16 @@ export function instantAlignmentPlan(
 ): InstantPlan | null {
 	if (carets.some((caret) => caret.anchor !== caret.head)) return null;
 
-	const spans = lineSpans(text);
+	const lines = linesOf(text);
 	const inserts: Array<{ line: number; ch: number; amount: boolean }> = [];
 	for (const caret of carets) {
-		const span = lineAt(spans, caret.head);
-		const ch = caret.head - span.start;
-		inserts.push({ line: span.line, ch, amount: isAmountDotInsert(span.text, ch) });
+		const line = lineAt(lines, caret.head);
+		const ch = caret.head - lines.starts[line];
+		inserts.push({ line, ch, amount: isAmountDotInsert(lines.text[line], ch) });
 	}
 	if (!inserts.some((insert) => insert.amount)) return null;
 
-	const working = spans.map((span) => span.text);
+	const working = lines.text.slice();
 	const dotsOfLine = new Map<number, number[]>();
 	for (const insert of inserts) {
 		const list = dotsOfLine.get(insert.line) ?? [];
@@ -115,36 +117,34 @@ export function instantAlignmentPlan(
 		working[edit.line] = line.slice(0, edit.from) + edit.text + line.slice(edit.to);
 	}
 
+	// Only lines that got a dot or an edit can differ; in document order.
+	const touched = [...new Set([...dotsOfLine.keys(), ...edits.map((edit) => edit.line)])].sort((a, b) => a - b);
 	const changes: InstantChange[] = [];
-	for (const span of spans) {
-		if (span.text === working[span.line]) continue;
-		changes.push({
-			from: span.start,
-			to: span.start + span.text.length,
-			insert: working[span.line],
-		});
+	for (const line of touched) {
+		const before = lines.text[line];
+		if (before === working[line]) continue;
+		changes.push({ from: lines.starts[line], to: lines.starts[line] + before.length, insert: working[line] });
 	}
-
-	const newStarts: number[] = [];
-	let start = 0;
-	for (let line = 0; line < working.length; line += 1) {
-		newStarts.push(start);
-		start += working[line].length + (line + 1 < working.length ? 1 : 0);
-	}
+	// Where `line` starts after the changes: shifted by every changed line above it.
+	const newStart = (line: number): number => {
+		let start = lines.starts[line];
+		for (const t of touched) if (t < line) start += working[t].length - lines.text[t].length;
+		return start;
+	};
 
 	const ordered = [...carets].sort((a, b) => a.head - b.head);
 	const landed: number[] = [];
 	for (const caret of ordered) {
-		const span = lineAt(spans, caret.head);
-		const origCh = caret.head - span.start;
-		const dots = (dotsOfLine.get(span.line) ?? []).filter((ch) => ch <= origCh).length;
+		const line = lineAt(lines, caret.head);
+		const origCh = caret.head - lines.starts[line];
+		const dots = (dotsOfLine.get(line) ?? []).filter((ch) => ch <= origCh).length;
 		let ch = origCh + dots;
 		for (const edit of edits) {
-			if (edit.line !== span.line) continue;
+			if (edit.line !== line) continue;
 			if (ch >= edit.to) ch += edit.text.length - (edit.to - edit.from);
 			else if (ch > edit.from) ch = edit.from + edit.text.length;
 		}
-		landed.push(newStarts[span.line] + ch);
+		landed.push(newStart(line) + ch);
 	}
 
 	return { changes, carets: landed };

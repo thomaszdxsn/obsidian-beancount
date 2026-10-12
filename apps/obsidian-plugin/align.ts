@@ -234,23 +234,25 @@ function blockRole(line: string): BlockRole {
 }
 
 /**
- * The transaction block each line belongs to (`-1` on lines that close a
- * block: blank lines and comments at column 0). A line at column 0 opens a
- * block of its own; indented lines join the open one, or open a run of loose
- * postings when none is open.
+ * The transaction block each line in `[from, to]` belongs to (`-1` on lines
+ * that close a block: blank lines and comments at column 0). A line at
+ * column 0 opens a block of its own; indented lines join the open one, or
+ * open a run of loose postings when none is open. Ids are only compared, so
+ * a scan starting mid-file groups the lines of its range exactly as a scan
+ * from line 0 would.
  */
-function scanBlocks(lines: readonly string[]): number[] {
+function scanBlocks(lines: readonly string[], from = 0, to = lines.length - 1): number[] {
 	const blockOfLine: number[] = [];
 	let block = -1;
 	let next = 0;
-	for (const line of lines) {
-		const role = blockRole(line);
+	for (let i = Math.max(0, from); i <= to && i < lines.length; i += 1) {
+		const role = blockRole(lines[i]);
 		if (role === BlockRole.Close) {
 			block = -1;
 		} else if (role === BlockRole.Open || block === -1) {
 			block = next++;
 		}
-		blockOfLine.push(block);
+		blockOfLine[i] = block;
 	}
 	return blockOfLine;
 }
@@ -289,13 +291,15 @@ export function computeAlignment(
 	range?: LineRange,
 	targetColumn?: number
 ): LineEdit[] {
-	const blockOfLine = scanBlocks(lines);
+	const blockOfLine = range ? scanBlocks(lines, range.from, range.to) : scanBlocks(lines);
 	const postings: Posting[] = [];
 	let inString = false;
-	for (let line = 0; line < lines.length; line += 1) {
+	// String state is carried from line 0; past the range nothing reads it.
+	const last = range ? Math.min(lines.length - 1, range.to) : lines.length - 1;
+	for (let line = 0; line <= last; line += 1) {
 		const continuation = inString;
 		inString = endsInString(lines[line], inString);
-		if (range && (line < range.from || line > range.to)) continue;
+		if (range && line < range.from) continue;
 		if (continuation) continue;
 		const posting = parsePosting(lines[line]);
 		if (posting !== null) {
