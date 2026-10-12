@@ -553,6 +553,10 @@ export class BeancountParser {
     const listener = new CollectingErrorListener(errors);
 
     const lexer = new BeancountLexer(new StringCharStream(input));
+    // By default the lexer DFA caches transitions only for code points <= 256,
+    // so every non-ASCII char (CJK account names, payees, narrations) re-ran
+    // the ATN simulation, ~3x slower on such text.
+    lexer.options.maxDFAEdge = 0x10ffff;
     lexer.removeErrorListeners();
     lexer.addErrorListener(listener);
     const parser = new AntlrBeancountParser(new CommonTokenStream(lexer));
