@@ -84,7 +84,9 @@ export function extractLatestPayeeTemplates(content: string, path: string): Map<
 	const found = new Map<string, PayeeTemplate>();
 	let line = 0;
 	while (line < lines.length) {
-		const header = HEADER_RE.exec(lines[line]);
+		// A header opens with its date: skip the regex for every other line.
+		const head = lines[line].charCodeAt(0);
+		const header = head >= 0x30 && head <= 0x39 ? HEADER_RE.exec(lines[line]) : null;
 		if (header === null) {
 			line += 1;
 			continue;

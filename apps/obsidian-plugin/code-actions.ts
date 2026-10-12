@@ -413,11 +413,16 @@ export class OpenFileIndex implements VaultCache {
 	}
 }
 
+/** Accounts of the `open` directives in `content`; only lines holding `open` are tried. */
 function openedAccountsIn(content: string): Set<string> {
 	const accounts = new Set<string>();
-	for (const line of content.split('\n')) {
-		const match = OPEN_LINE_RE.exec(line);
+	for (let at = content.indexOf('open'); at !== -1; ) {
+		const start = content.lastIndexOf('\n', at) + 1;
+		let end = content.indexOf('\n', at);
+		if (end === -1) end = content.length;
+		const match = OPEN_LINE_RE.exec(content.slice(start, end));
 		if (match !== null) accounts.add(match[2]);
+		at = end === content.length ? -1 : content.indexOf('open', end + 1);
 	}
 	return accounts;
 }
