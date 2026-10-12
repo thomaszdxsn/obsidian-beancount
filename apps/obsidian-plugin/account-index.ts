@@ -74,9 +74,38 @@ export interface AccountRecord {
 	currencies: readonly string[];
 }
 
+/**
+ * Same matches as `content.matchAll(ACCOUNT_RE)`, without running the
+ * Unicode regex over the whole text. A match holds a `:` and no whitespace,
+ * so every match lies in a whitespace-delimited run containing a `:`, and
+ * depends only on that run's text (the lookbehind sees whitespace before
+ * it, as at the start of a string). A ledger repeats the same runs, so each
+ * distinct run is matched once.
+ */
 export function extractAccounts(content: string): ReadonlySet<string> {
 	const accounts = new Set<string>();
-	for (const match of content.matchAll(ACCOUNT_RE)) accounts.add(match[0]);
+	const seenRuns = new Set<string>();
+	let pos = 0;
+	for (;;) {
+		const colon = content.indexOf(':', pos);
+		if (colon === -1) break;
+		let from = colon;
+		for (let c = content.charCodeAt(from - 1); from > pos && c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d; ) {
+			from -= 1;
+			c = content.charCodeAt(from - 1);
+		}
+		let to = colon + 1;
+		for (let c = content.charCodeAt(to); to < content.length && c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d; ) {
+			to += 1;
+			c = content.charCodeAt(to);
+		}
+		const run = content.slice(from, to);
+		if (!seenRuns.has(run)) {
+			seenRuns.add(run);
+			for (const match of run.matchAll(ACCOUNT_RE)) accounts.add(match[0]);
+		}
+		pos = to;
+	}
 	return accounts;
 }
 

@@ -91,8 +91,12 @@ export function extractCommodities(content: string): ReadonlySet<string> {
 	for (const match of content.matchAll(COMMODITY_DIRECTIVE_RE)) commodities.add(match[1]);
 	for (const match of content.matchAll(PRICE_DIRECTIVE_RE)) commodities.add(match[1]);
 	for (const line of content.split('\n')) {
-		if (!AMOUNT_LINE_RE.test(line)) continue;
-		for (const match of stripStringsAndComments(line).matchAll(AMOUNT_RE)) commodities.add(match[1]);
+		// An indented line always qualifies: test the regex only on the rest.
+		const first = line.charCodeAt(0);
+		if (first !== 0x20 && first !== 0x09 && !AMOUNT_LINE_RE.test(line)) continue;
+		const text = stripStringsAndComments(line);
+		AMOUNT_RE.lastIndex = 0;
+		for (let match = AMOUNT_RE.exec(text); match !== null; match = AMOUNT_RE.exec(text)) commodities.add(match[1]);
 	}
 	return commodities;
 }
