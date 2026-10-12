@@ -118,6 +118,8 @@ interface Match {
  * newline. Alignment and formatting share this scan.
  */
 export function endsInString(line: string, inStringStart: boolean): boolean {
+	// Most lines hold no quote at all: nothing can open a string.
+	if (!inStringStart && !line.includes('"')) return false;
 	let inString = inStringStart;
 	for (let i = 0; i < line.length; i += 1) {
 		const ch = line[i];
@@ -294,13 +296,17 @@ export function isAmountDotInsert(line: string, ch: number): boolean {
 /** `computeAlignment` applied to a whole document's text. */
 export function alignText(text: string): string {
 	const lines = text.split('\n');
+	return alignLines(lines) ? lines.join('\n') : text;
+}
+
+/** `computeAlignment` applied in place to every line; false when nothing changed. */
+export function alignLines(lines: string[]): boolean {
 	const edits = computeAlignment(lines);
-	if (edits.length === 0) return text;
 	for (const edit of edits) {
 		const line = lines[edit.line];
 		lines[edit.line] = line.slice(0, edit.from) + edit.text + line.slice(edit.to);
 	}
-	return lines.join('\n');
+	return edits.length > 0;
 }
 
 /**
@@ -331,7 +337,14 @@ function isZeroWidth(char: string): boolean {
 
 export function displayWidth(text: string): number {
 	let width = 0;
-	for (const char of text) {
+	for (let i = 0; i < text.length; i += 1) {
+		// Nothing below U+0300 is zero-width or wide: the common ASCII path.
+		if (text.charCodeAt(i) < 0x300) {
+			width += 1;
+			continue;
+		}
+		const char = String.fromCodePoint(text.codePointAt(i) as number);
+		i += char.length - 1;
 		if (isZeroWidth(char)) continue;
 		width += WIDE_CHAR_RE.test(char) ? 2 : 1;
 	}

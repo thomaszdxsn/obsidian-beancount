@@ -22,7 +22,7 @@
  */
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import type { Directive, Posting } from '@repo/beancount-parser';
-import { alignText, endsInString } from './align';
+import { alignLines, endsInString } from './align';
 import { extractBeancountFences } from './fences';
 import type { BeancountFence } from './fences';
 
@@ -68,9 +68,8 @@ export function formatLedger(text: string): FormatResult {
 	}
 	const split = splitDocument(text);
 	rewriteLines(split.lines, directives);
-	const aligned = alignText(split.lines.join('\n'));
-	const lines = aligned.length === 0 ? [] : aligned.split('\n');
-	return { ok: true, text: joinDocument(lines, split.newline, split.trailing) };
+	alignLines(split.lines);
+	return { ok: true, text: joinDocument(split.lines, split.newline, split.trailing) };
 }
 
 /**
