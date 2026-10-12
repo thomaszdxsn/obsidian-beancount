@@ -64,6 +64,11 @@ const AMOUNT_LINE_RE = /^[ \t]|[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]+(?:balance|
  * digit+capitalized-word shapes that are not amounts.
  */
 function stripStringsAndComments(line: string): string {
+	// Without a quote, only a comment can be cut: no per-char rebuild.
+	if (!line.includes('"')) {
+		const comment = line.indexOf(';');
+		return comment === -1 ? line : line.slice(0, comment);
+	}
 	let out = '';
 	let inString = false;
 	for (let i = 0; i < line.length; i += 1) {

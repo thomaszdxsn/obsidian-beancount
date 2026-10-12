@@ -2,6 +2,7 @@ import { BaseErrorListener, CommonTokenStream, Token } from 'antlr4ng';
 import type { ParserRuleContext, TerminalNode } from 'antlr4ng';
 
 import { StringCharStream } from './char-stream';
+import { BeancountFastLexer, NeedsAntlrLexer } from './fast-lexer';
 
 import {
   BeancountFile,
@@ -571,14 +572,7 @@ export class BeancountParser {
     const errors: SyntaxErrorInfo[] = [];
     const listener = new CollectingErrorListener(errors);
 
-    const lexer = new BeancountLexer(new StringCharStream(input));
-    // By default the lexer DFA caches transitions only for code points <= 256,
-    // so every non-ASCII char (CJK account names, payees, narrations) re-ran
-    // the ATN simulation, ~3x slower on such text.
-    lexer.options.maxDFAEdge = 0x10ffff;
-    lexer.removeErrorListeners();
-    lexer.addErrorListener(listener);
-    const parser = new AntlrBeancountParser(new CommonTokenStream(lexer));
+    const parser = new AntlrBeancountParser(BeancountParser.tokens(input, listener));
     parser.removeErrorListeners();
     parser.addErrorListener(listener);
 
@@ -597,5 +591,31 @@ export class BeancountParser {
     // The token stream reads ahead, so lexer errors can arrive out of order.
     errors.sort((a, b) => a.line - b.line || a.column - b.column);
     throw new BeancountSyntaxError(errors);
+  }
+
+  /**
+   * Tokens for `input`, lexed up front by the hand-written lexer. Input it
+   * cannot lex (a lexer error) goes through the generated ANTLR lexer
+   * instead, lazily as the parser reads, so its errors reach `listener`
+   * exactly as before.
+   */
+  private static tokens(input: string, listener: CollectingErrorListener): CommonTokenStream {
+    const stream = new StringCharStream(input);
+    const fast = new CommonTokenStream(new BeancountFastLexer(stream));
+    try {
+      fast.fill();
+      return fast;
+    } catch (e) {
+      if (!(e instanceof NeedsAntlrLexer)) throw e;
+    }
+    stream.reset();
+    const lexer = new BeancountLexer(stream);
+    // By default the lexer DFA caches transitions only for code points <= 256,
+    // so every non-ASCII char (CJK account names, payees, narrations) re-ran
+    // the ATN simulation, ~3x slower on such text.
+    lexer.options.maxDFAEdge = 0x10ffff;
+    lexer.removeErrorListeners();
+    lexer.addErrorListener(listener);
+    return new CommonTokenStream(lexer);
   }
 }

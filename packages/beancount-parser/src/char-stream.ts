@@ -11,7 +11,8 @@ export class StringCharStream implements CharStream {
   name = '';
   index = 0;
   readonly size: number;
-  private readonly data: Uint32Array;
+  // One element per symbol: the stream's code points.
+  readonly data: Uint32Array;
   // UTF-16 offset of each code point, plus one past the end; null when the
   // input has no surrogate pairs, so code point and UTF-16 offsets agree.
   private readonly offsets: Uint32Array | null;

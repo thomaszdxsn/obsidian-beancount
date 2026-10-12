@@ -95,6 +95,10 @@ pnpm --filter @repo/beancount-parser generate
 pnpm turbo test --filter=@repo/beancount-parser
 ```
 
+### Lexing
+
+`parse()` lexes with a hand-written lexer (`src/fast-lexer.ts`) that mirrors the generated one's rules, several times faster. Input it cannot lex falls back to the generated lexer, so lexer error messages are ANTLR's. A lexer rule changed in `Beancount.g4` must be mirrored there; `test/fast-lexer.test.ts` compares both lexers on generated input.
+
 ## License
 
 MIT
