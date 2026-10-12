@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
+
+Performance on large ledgers; no behaviour changes.
 
 ### Changed
 
