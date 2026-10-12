@@ -110,16 +110,84 @@ interface Inventory {
 	commodity: string;
 }
 
+/**
+ * What one line contributes, decided from its text alone; `balanceHints`
+ * adds the context (open transaction, line number). Lines repeat across
+ * edits of the same document, so this is cached by text.
+ */
+type LineInfo =
+	/** Makes the whole result empty: include/plugin, an unknown or unparsable dated directive, a bad pad. */
+	| { kind: 'refuse' }
+	/** Blank or comment: leaves an open transaction open. */
+	| { kind: 'ignore' }
+	/** Org heading or another column-0 line that is no transaction: closes it. */
+	| { kind: 'close' }
+	| { kind: 'txn'; date: string }
+	| { kind: 'balance'; date: string; account: string; qty: Qty; display: string; commodity: string }
+	| { kind: 'pad'; date: string; accounts: readonly string[] }
+	/** Indented: counts only inside a transaction. */
+	| { kind: 'indented'; posting: PostingParse };
+
+const REFUSE: LineInfo = { kind: 'refuse' };
+const IGNORE: LineInfo = { kind: 'ignore' };
+const CLOSE: LineInfo = { kind: 'close' };
+
+/** Bounded: cleared when it grows past this many distinct lines. */
+const LINE_CACHE_LIMIT = 200_000;
+const lineCache = new Map<string, LineInfo>();
+
+function lineInfo(raw: string): LineInfo {
+	const cached = lineCache.get(raw);
+	if (cached !== undefined) return cached;
+	const info = classifyLine(stripCarriage(raw));
+	if (lineCache.size >= LINE_CACHE_LIMIT) lineCache.clear();
+	lineCache.set(raw, info);
+	return info;
+}
+
+function classifyLine(line: string): LineInfo {
+	if (/^[ \t]*$/.test(line) || isComment(line)) return IGNORE;
+	if (isOrgHeading(line)) return CLOSE;
+	// A metadata key (`include:`) is not the directive. Indented forms
+	// still count: the syntax mode accepts leading whitespace.
+	if (/^[ \t]*(include|plugin)(?![A-Za-z0-9_])(?:[ \t]|"|$)/.test(line)) return REFUSE;
+	if (line.charAt(0) === ' ' || line.charAt(0) === '\t') return { kind: 'indented', posting: parsePosting(line) };
+	const txn = TXN_RE.exec(line);
+	if (txn !== null) return { kind: 'txn', date: txn[1] + '-' + txn[2] + '-' + txn[3] };
+	const dated = DATED_RE.exec(line);
+	if (dated === null) return CLOSE;
+	const keyword = dated[4];
+	if (KNOWN_DATED[keyword] !== true) return REFUSE;
+	const date = dated[1] + '-' + dated[2] + '-' + dated[3];
+	const rest = stripComment(dated[5]).trim();
+	if (keyword === 'balance') {
+		const balance = parseBalance(rest);
+		return balance === null ? CLOSE : { kind: 'balance', date, ...balance };
+	}
+	if (keyword === 'pad') {
+		const accounts = parsePad(rest);
+		return accounts === null ? REFUSE : { kind: 'pad', date, accounts };
+	}
+	// A dated keyword we recognized but do not classify must not be
+	// treated as a zero posting. `open`/`price`/`custom` and the rest
+	// of NO_UNIT are the only dated directives that add nothing.
+	return NO_UNIT[keyword] === true ? CLOSE : REFUSE;
+}
+
+/** Plain comparison: every date here is `YYYY-MM-DD`, fixed width. */
+function byDate(a: { date: string }, b: { date: string }): number {
+	return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
+}
+
 export function balanceHints(lines: readonly string[]): BalanceHint[] {
-	if (sourceDependent(lines) || unknownDirective(lines)) return [];
 	const parsed = collect(lines);
 	if (parsed === null) return [];
 	// One chronological sweep instead of rescanning all postings per assertion.
 	// Posting amounts enter after that day's balances; pad taints enter before.
 	const postings: Array<AmountPosting | TaintPosting> = [...parsed.postings, ...parsed.taints];
-	postings.sort((a, b) => a.date.localeCompare(b.date));
-	parsed.pads.sort((a, b) => a.date.localeCompare(b.date));
-	parsed.balances.sort((a, b) => a.date.localeCompare(b.date));
+	postings.sort(byDate);
+	parsed.pads.sort(byDate);
+	parsed.balances.sort(byDate);
 	const inventory = new Map<string, Inventory | null>();
 	const hints: BalanceHint[] = [];
 	let postingIndex = 0;
@@ -139,27 +207,6 @@ export function balanceHints(lines: readonly string[]): BalanceHint[] {
 	return hints;
 }
 
-function sourceDependent(lines: readonly string[]): boolean {
-	for (let i = 0; i < lines.length; i++) {
-		const line = stripCarriage(lines[i]);
-		if (isComment(line) || isOrgHeading(line)) continue;
-		// A metadata key (`include:`) is not the directive. Indented forms
-		// still count: the syntax mode accepts leading whitespace.
-		if (/^[ \t]*(include|plugin)(?![A-Za-z0-9_])(?:[ \t]|"|$)/.test(line)) return true;
-	}
-	return false;
-}
-
-function unknownDirective(lines: readonly string[]): boolean {
-	for (let i = 0; i < lines.length; i++) {
-		const line = stripCarriage(lines[i]);
-		if (isComment(line) || isOrgHeading(line) || TXN_RE.test(line)) continue;
-		const dated = DATED_RE.exec(line);
-		if (dated !== null && KNOWN_DATED[dated[4]] !== true) return true;
-	}
-	return false;
-}
-
 interface Ledger {
 	postings: AmountPosting[];
 	taints: TaintPosting[];
@@ -167,7 +214,11 @@ interface Ledger {
 	balances: Balance[];
 }
 
-/** `null` when a `pad` names accounts we cannot see — its effect is not zero. */
+/**
+ * `null` when any line refuses the buffer: `include`/`plugin` make it
+ * depend on another ledger, an unknown dated directive would be claimed to
+ * add nothing, and a `pad` naming accounts we cannot see is not zero.
+ */
 function collect(lines: readonly string[]): Ledger | null {
 	const postings: AmountPosting[] = [];
 	const taints: TaintPosting[] = [];
@@ -177,65 +228,67 @@ function collect(lines: readonly string[]): Ledger | null {
 	let txnDate = '';
 
 	for (let i = 0; i < lines.length; i++) {
-		const line = stripCarriage(lines[i]);
-		if (/^[ \t]*$/.test(line) || isComment(line)) continue;
-		if (isOrgHeading(line)) {
-			inTxn = false;
-			continue;
-		}
-		if (line.charAt(0) !== ' ' && line.charAt(0) !== '\t') {
-			inTxn = false;
-			const txn = TXN_RE.exec(line);
-			if (txn !== null) {
+		const info = lineInfo(lines[i]);
+		switch (info.kind) {
+			case 'refuse':
+				return null;
+			case 'ignore':
+				break;
+			case 'close':
+				inTxn = false;
+				break;
+			case 'txn':
 				inTxn = true;
-				txnDate = txn[1] + '-' + txn[2] + '-' + txn[3];
-				continue;
-			}
-			const dated = DATED_RE.exec(line);
-			if (dated === null) continue;
-			const date = dated[1] + '-' + dated[2] + '-' + dated[3];
-			const keyword = dated[4];
-			const rest = stripComment(dated[5]).trim();
-			if (keyword === 'balance') {
-				const balance = parseBalance(rest);
-				if (balance !== null) {
-					balances.push({
-						line: i,
-						date,
-						account: balance.account,
-						qty: balance.qty,
-						display: balance.display,
-						commodity: balance.commodity,
-					});
+				txnDate = info.date;
+				break;
+			case 'balance':
+				inTxn = false;
+				balances.push({
+					line: i,
+					date: info.date,
+					account: info.account,
+					qty: info.qty,
+					display: info.display,
+					commodity: info.commodity,
+				});
+				break;
+			case 'pad':
+				inTxn = false;
+				pads.push({ date: info.date, accounts: info.accounts });
+				break;
+			case 'indented': {
+				if (!inTxn) break;
+				const posting = info.posting;
+				if (posting.kind === 'amount') {
+					postings.push({ date: txnDate, account: posting.account, qty: posting.qty, commodity: posting.commodity });
+				} else if (posting.kind === 'taint') {
+					taints.push({ date: txnDate, account: posting.account });
 				}
-				continue;
-			}
-			if (keyword === 'pad') {
-				const accounts = parsePad(rest);
-				if (accounts === null) return null;
-				pads.push({ date, accounts });
-				continue;
-			}
-			// A dated keyword we recognized but do not classify must not be
-			// treated as a zero posting. `open`/`price`/`custom` and the rest
-			// of NO_UNIT are the only dated directives that add nothing.
-			if (NO_UNIT[keyword] !== true) return null;
-			continue;
-		} else if (inTxn) {
-			const posting = parsePosting(line);
-			if (posting.kind === 'amount') {
-				postings.push({ date: txnDate, account: posting.account, qty: posting.qty, commodity: posting.commodity });
-			} else if (posting.kind === 'taint') {
-				taints.push({ date: txnDate, account: posting.account });
+				break;
 			}
 		}
 	}
 	return { postings, taints, pads, balances };
 }
 
+/** An account and its ancestors that still hold a `:`, deepest first. */
+const ancestorCache = new Map<string, readonly string[]>();
+
+function ancestors(account: string): readonly string[] {
+	let list = ancestorCache.get(account);
+	if (list === undefined) {
+		const out: string[] = [];
+		for (let name = account; name.includes(':'); name = name.slice(0, name.lastIndexOf(':'))) out.push(name);
+		list = out;
+		if (ancestorCache.size >= LINE_CACHE_LIMIT) ancestorCache.clear();
+		ancestorCache.set(account, list);
+	}
+	return list;
+}
+
 /** Update the account and all ancestors once; null means inventory is unknown. */
 function accumulate(inventory: Map<string, Inventory | null>, posting: AmountPosting | TaintPosting): void {
-	for (let account = posting.account; account.includes(':'); account = account.slice(0, account.lastIndexOf(':'))) {
+	for (const account of ancestors(posting.account)) {
 		const current = inventory.get(account);
 		if (current === null) continue;
 		if (!('qty' in posting) || (current !== undefined && current.commodity !== posting.commodity)) {
