@@ -181,10 +181,17 @@ function byDate(a: { date: string }, b: { date: string }): number {
 
 export function balanceHints(lines: readonly string[]): BalanceHint[] {
 	const parsed = collect(lines);
-	if (parsed === null) return [];
+	if (parsed === null || parsed.balances.length === 0) return [];
+	// A hint reads only its asserted account's inventory, and an account's
+	// inventory depends on nothing else: other accounts are not tracked.
+	const asserted = new Set<string>();
+	for (const balance of parsed.balances) asserted.add(balance.account);
+	const tracked = (posting: { account: string }) => ancestors(posting.account).some((account) => asserted.has(account));
 	// One chronological sweep instead of rescanning all postings per assertion.
 	// Posting amounts enter after that day's balances; pad taints enter before.
-	const postings: Array<AmountPosting | TaintPosting> = [...parsed.postings, ...parsed.taints];
+	const postings: Array<AmountPosting | TaintPosting> = [];
+	for (const posting of parsed.postings) if (tracked(posting)) postings.push(posting);
+	for (const taint of parsed.taints) if (tracked(taint)) postings.push(taint);
 	postings.sort(byDate);
 	parsed.pads.sort(byDate);
 	parsed.balances.sort(byDate);
@@ -194,11 +201,11 @@ export function balanceHints(lines: readonly string[]): BalanceHint[] {
 	let padIndex = 0;
 	for (const balance of parsed.balances) {
 		while (postingIndex < postings.length && postings[postingIndex].date < balance.date) {
-			accumulate(inventory, postings[postingIndex++]);
+			accumulate(inventory, asserted, postings[postingIndex++]);
 		}
 		while (padIndex < parsed.pads.length && parsed.pads[padIndex].date <= balance.date) {
 			const pad = parsed.pads[padIndex++];
-			for (const account of pad.accounts) accumulate(inventory, { account, date: pad.date });
+			for (const account of pad.accounts) accumulate(inventory, asserted, { account, date: pad.date });
 		}
 		const hint = hintFor(balance, inventory.get(balance.account));
 		if (hint !== null) hints.push(hint);
@@ -286,9 +293,14 @@ function ancestors(account: string): readonly string[] {
 	return list;
 }
 
-/** Update the account and all ancestors once; null means inventory is unknown. */
-function accumulate(inventory: Map<string, Inventory | null>, posting: AmountPosting | TaintPosting): void {
+/** Update the account and each ancestor in `tracked` once; null means inventory is unknown. */
+function accumulate(
+	inventory: Map<string, Inventory | null>,
+	tracked: ReadonlySet<string>,
+	posting: AmountPosting | TaintPosting
+): void {
 	for (const account of ancestors(posting.account)) {
+		if (!tracked.has(account)) continue;
 		const current = inventory.get(account);
 		if (current === null) continue;
 		if (!('qty' in posting) || (current !== undefined && current.commodity !== posting.commodity)) {
