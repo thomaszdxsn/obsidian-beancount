@@ -71,10 +71,20 @@ export function collectFlagDiagnostics(
 	text: string,
 	flagWarnings: Readonly<Record<string, FlagWarningLevel | undefined>>
 ): FlagDiagnostic[] {
-	const lines = text.split('\n');
+	return flagDiagnosticsOfLines(text.split('\n'), flagWarnings);
+}
+
+function flagDiagnosticsOfLines(
+	lines: readonly string[],
+	flagWarnings: Readonly<Record<string, FlagWarningLevel | undefined>>
+): FlagDiagnostic[] {
 	const diagnostics: FlagDiagnostic[] = [];
 	for (let line = 0; line < lines.length; line++) {
-		const match = TXN_FLAG_RE.exec(lines[line] ?? '');
+		const text = lines[line] ?? '';
+		// A header opens with its date: skip the regex for every other line.
+		const head = text.charCodeAt(0);
+		if (!(head >= 0x30 && head <= 0x39)) continue;
+		const match = TXN_FLAG_RE.exec(text);
 		if (!match) continue;
 		const flag = match[2] === 'txn' ? '*' : match[2];
 		const severity = flagWarnings[flag];
@@ -117,14 +127,21 @@ function fenceMaskedLines(text: string): string[] | null {
 	return masked;
 }
 
-function scanText(view: EditorView): string | null {
+/**
+ * The document's lines the flags are read from: all of a ledger (or an
+ * editor without a file), only fence bodies of a note; null when a note has
+ * no fence. Read line by line, without joining the document into one string.
+ */
+function scanLines(view: EditorView): string[] | null {
 	const info = view.state.field(editorInfoField, false) as EditorFileInfo | undefined;
 	const file = info?.file;
-	const text = view.state.doc.toString();
-	if (!file) return text;
-	if (isLedgerFile(file)) return text;
-	const masked = fenceMaskedLines(text);
-	return masked ? masked.join('\n') : null;
+	const doc = view.state.doc;
+	if (!file || isLedgerFile(file)) {
+		const lines: string[] = [];
+		for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
+		return lines;
+	}
+	return fenceMaskedLines(doc.toString());
 }
 
 /** The line decoration and wavy underline for each flagged transaction. */
@@ -152,9 +169,9 @@ export function flagDecorationRanges(
 }
 
 function flagDecorations(view: EditorView, host: FlagWarningHost): DecorationSet {
-	const text = scanText(view);
-	if (text === null) return Decoration.none;
-	const ranges = flagDecorationRanges(view.state.doc, collectFlagDiagnostics(text, host.settings.flagWarnings));
+	const lines = scanLines(view);
+	if (lines === null) return Decoration.none;
+	const ranges = flagDecorationRanges(view.state.doc, flagDiagnosticsOfLines(lines, host.settings.flagWarnings));
 	return Decoration.set(ranges, true);
 }
 

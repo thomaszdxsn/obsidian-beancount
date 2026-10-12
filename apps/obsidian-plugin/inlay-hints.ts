@@ -314,7 +314,13 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: { cu
 		const lineText = (index: number) => doc.line(index + 1).text;
 		const entry = docMemo(memo, doc, false);
 		if (localLedger) {
-			appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(collectLines(doc.lines, lineText))));
+			if (entry.balance === null) {
+				// Sequential read: `doc.line(n)` per line walks the tree each time.
+				const lines: string[] = [];
+				for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
+				entry.balance = balanceHints(lines);
+			}
+			appendBalanceHints(ranges, doc, entry.balance);
 		}
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
