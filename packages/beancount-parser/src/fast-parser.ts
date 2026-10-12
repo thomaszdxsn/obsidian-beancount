@@ -1,4 +1,3 @@
-import type { StringCharStream } from './char-stream';
 import type { RawTokens } from './fast-lexer';
 import {
   Amount,
@@ -104,9 +103,9 @@ interface Num {
  * them; returns null on any syntax error, so the ANTLR parser can report
  * it with its own messages and recovery.
  */
-export function fastParse(stream: StringCharStream, tokens: RawTokens, errors: SyntaxErrorInfo[]): BeancountFile | null {
+export function fastParse(input: string, tokens: RawTokens, errors: SyntaxErrorInfo[]): BeancountFile | null {
   try {
-    return new FastParser(stream, tokens, errors).file();
+    return new FastParser(input, tokens, errors).file();
   } catch (e) {
     if (e === NEEDS_ANTLR || e instanceof RangeError) return null;
     throw e;
@@ -123,7 +122,7 @@ class FastParser {
   private readonly dateTimes = new Map<string, number>();
 
   constructor(
-    private readonly stream: StringCharStream,
+    private readonly input: string,
     private readonly tokens: RawTokens,
     private readonly errors: SyntaxErrorInfo[],
   ) {
@@ -159,7 +158,7 @@ class FastParser {
   }
 
   private text(i: number): string {
-    return this.stream.getTextFromRange(this.tokens.start[i]!, this.tokens.end[i]! - 1);
+    return this.input.slice(this.tokens.start[i]!, this.tokens.end[i]!);
   }
 
   // Concatenated token texts of [first, last], as ParserRuleContext.getText().

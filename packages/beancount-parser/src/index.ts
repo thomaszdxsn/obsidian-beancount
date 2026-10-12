@@ -545,10 +545,9 @@ export class BeancountParser {
    *   unbalanced pushtag, ...) instead
    */
   static parse(input: string): BeancountFile {
-    const stream = new StringCharStream(input);
     let tokens: RawTokens | null = null;
     try {
-      tokens = lexAll(stream.data);
+      tokens = lexAll(input);
     } catch (e) {
       if (!(e instanceof NeedsAntlrLexer)) throw e;
     }
@@ -556,13 +555,13 @@ export class BeancountParser {
       // Hand-written lexer and parser; any syntax error takes the ANTLR path
       // below, which reports it with ANTLR's messages and recovery.
       const errors: SyntaxErrorInfo[] = [];
-      const file = fastParse(stream, tokens, errors);
+      const file = fastParse(input, tokens, errors);
       if (file !== null) {
         if (errors.length === 0) return file;
         throw syntaxError(errors);
       }
     }
-    return parseWithAntlr(stream, tokens);
+    return parseWithAntlr(new StringCharStream(input), tokens);
   }
 }
 

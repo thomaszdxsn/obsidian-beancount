@@ -35,7 +35,7 @@ function fastTokens(input: string): string[] | null {
   const stream = new StringCharStream(input);
   let raw;
   try {
-    raw = lexAll(stream.data);
+    raw = lexAll(input);
   } catch (e) {
     if (e instanceof NeedsAntlrLexer) return null;
     throw e;

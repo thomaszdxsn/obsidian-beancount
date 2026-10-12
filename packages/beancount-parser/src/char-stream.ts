@@ -11,8 +11,7 @@ export class StringCharStream implements CharStream {
   name = '';
   index = 0;
   readonly size: number;
-  // One element per symbol: the stream's code points.
-  readonly data: Uint32Array;
+  private readonly data: Uint32Array;
   // UTF-16 offset of each code point, plus one past the end; null when the
   // input has no surrogate pairs, so code point and UTF-16 offsets agree.
   private readonly offsets: Uint32Array | null;
@@ -82,6 +81,20 @@ export class StringCharStream implements CharStream {
     return offsets === null
       ? this.input.slice(start, stop + 1)
       : this.input.slice(offsets[start], offsets[stop + 1]);
+  }
+
+  /** Code point index of UTF-16 offset `offset`, which starts a code point (or is the end). */
+  indexOfOffset(offset: number): number {
+    const offsets = this.offsets;
+    if (offsets === null) return offset;
+    let lo = 0;
+    let hi = this.size;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (offsets[mid]! < offset) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
   }
 
   getTextFromInterval(interval: Interval): string {

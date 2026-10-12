@@ -68,15 +68,15 @@ class Scanner {
   tokLine = 1;
   tokColumn = 0;
 
-  constructor(private readonly cp: Uint32Array) {}
+  constructor(private readonly src: string) {}
 
   next(): void {
-    const cp = this.cp;
-    const n = cp.length;
+    const src = this.src;
+    const n = src.length;
     for (;;) {
       const p = this.p;
       if (p >= n) return this.makeToken(EOF, p, p);
-      const c = cp[p]!;
+      const c = src.charCodeAt(p);
 
       if (this.column === 0) {
         // `[*:#!&?%]` at column 0: ignored line, up to the newline.
@@ -86,13 +86,13 @@ class Scanner {
         }
         if (c === 0x20 || c === 0x09) {
           let k = p + 1;
-          while (k < n && (cp[k] === 0x20 || cp[k] === 0x09)) k++;
-          const next = k < n ? cp[k]! : -1;
+          while (k < n && (src.charCodeAt(k) === 0x20 || src.charCodeAt(k) === 0x09)) k++;
+          const next = k < n ? src.charCodeAt(k) : -1;
           if (next === 0x3b) {
             // Indented comment line, newline included.
             let end = this.lineEnd(k);
-            if (cp[end] === 0x0d && cp[end + 1] === 0x0a) end += 2;
-            else if (cp[end] === 0x0a) end += 1;
+            if (src.charCodeAt(end) === 0x0d && src.charCodeAt(end + 1) === 0x0a) end += 2;
+            else if (src.charCodeAt(end) === 0x0a) end += 1;
             this.skipTo(end);
             continue;
           }
@@ -112,8 +112,8 @@ class Scanner {
         case 0x09: {
           // WS [ \t\r]+, unless `\r\n` makes a longer EOL.
           let k = p + 1;
-          while (k < n && (cp[k] === 0x20 || cp[k] === 0x09 || cp[k] === 0x0d)) k++;
-          if (c === 0x0d && cp[p + 1] === 0x0a) {
+          while (k < n && (src.charCodeAt(k) === 0x20 || src.charCodeAt(k) === 0x09 || src.charCodeAt(k) === 0x0d)) k++;
+          if (c === 0x0d && src.charCodeAt(p + 1) === 0x0a) {
             type = L.EOL;
             end = p + 2;
             break;
@@ -130,14 +130,14 @@ class Scanner {
           break;
         case 0x23: {
           let k = p + 1;
-          while (k < n && isTagChar(cp[k]!)) k++;
+          while (k < n && isTagChar(src.charCodeAt(k))) k++;
           type = k > p + 1 ? L.TAG : L.HASH;
           end = k > p + 1 ? k : p + 1;
           break;
         }
         case 0x5e: {
           let k = p + 1;
-          while (k < n && isTagChar(cp[k]!)) k++;
+          while (k < n && isTagChar(src.charCodeAt(k))) k++;
           if (k === p + 1) throw new NeedsAntlrLexer();
           type = L.LINK;
           end = k;
@@ -148,9 +148,9 @@ class Scanner {
           // run ending in [A-Z0-9] that holds an [A-Z]; else SLASH.
           let best = -1;
           let upper = false;
-          for (let k = p + 1; k < n && isCurrencyChar(cp[k]!); k++) {
-            if (isUpper(cp[k]!)) upper = true;
-            if (upper && (isUpper(cp[k]!) || isDigit(cp[k]!))) best = k;
+          for (let k = p + 1; k < n && isCurrencyChar(src.charCodeAt(k)); k++) {
+            if (isUpper(src.charCodeAt(k))) upper = true;
+            if (upper && (isUpper(src.charCodeAt(k)) || isDigit(src.charCodeAt(k)))) best = k;
           }
           type = best === -1 ? L.SLASH : L.CURRENCY;
           end = best === -1 ? p + 1 : best + 1;
@@ -161,16 +161,16 @@ class Scanner {
           end = p + 1;
           break;
         case 0x40:
-          type = cp[p + 1] === 0x40 ? L.ATAT : L.AT;
-          end = cp[p + 1] === 0x40 ? p + 2 : p + 1;
+          type = src.charCodeAt(p + 1) === 0x40 ? L.ATAT : L.AT;
+          end = src.charCodeAt(p + 1) === 0x40 ? p + 2 : p + 1;
           break;
         case 0x7b:
-          type = cp[p + 1] === 0x7b ? L.LCURLCURL : L.LCURL;
-          end = cp[p + 1] === 0x7b ? p + 2 : p + 1;
+          type = src.charCodeAt(p + 1) === 0x7b ? L.LCURLCURL : L.LCURL;
+          end = src.charCodeAt(p + 1) === 0x7b ? p + 2 : p + 1;
           break;
         case 0x7d:
-          type = cp[p + 1] === 0x7d ? L.RCURLCURL : L.RCURL;
-          end = cp[p + 1] === 0x7d ? p + 2 : p + 1;
+          type = src.charCodeAt(p + 1) === 0x7d ? L.RCURLCURL : L.RCURL;
+          end = src.charCodeAt(p + 1) === 0x7d ? p + 2 : p + 1;
           break;
         case 0x2c:
           type = L.COMMA;
@@ -226,8 +226,8 @@ class Scanner {
             }
             // KEY: [a-z] [a-zA-Z0-9_-]+ ':', always longer than a keyword.
             let k = p + 1;
-            while (k < n && isKeyChar(cp[k]!)) k++;
-            if (k > p + 1 && cp[k] === 0x3a) {
+            while (k < n && isKeyChar(src.charCodeAt(k))) k++;
+            if (k > p + 1 && src.charCodeAt(k) === 0x3a) {
               type = L.KEY;
               end = k + 1;
             }
@@ -235,7 +235,7 @@ class Scanner {
             // In rule order: BOOL, NONE, ACCOUNT, CAPITAL, CURRENCY. A later
             // rule wins only with a strictly longer match.
             if (this.matches(p, 'TRUE') || this.matches(p, 'NULL')) {
-              type = cp[p] === 0x54 ? L.BOOL : L.NONE;
+              type = src.charCodeAt(p) === 0x54 ? L.BOOL : L.NONE;
               end = p + 4;
             } else if (this.matches(p, 'FALSE')) {
               type = L.BOOL;
@@ -253,8 +253,8 @@ class Scanner {
               }
               // CURRENCY: [A-Z] CURRENCY_CHAR* [A-Z0-9]
               let last = -1;
-              for (let k = p + 1; k < n && isCurrencyChar(cp[k]!); k++) {
-                if (isUpper(cp[k]!) || isDigit(cp[k]!)) last = k;
+              for (let k = p + 1; k < n && isCurrencyChar(src.charCodeAt(k)); k++) {
+                if (isUpper(src.charCodeAt(k)) || isDigit(src.charCodeAt(k))) last = k;
               }
               if (last + 1 > end) {
                 type = L.CURRENCY;
@@ -281,16 +281,18 @@ class Scanner {
     this.advance(this.p, end);
   }
 
-  // Moves to `end`, tracking line and column as ANTLR does: a newline
-  // starts a line, any other code point is one column.
+  // Moves to `end`, tracking line and column as ANTLR does over code points:
+  // a newline starts a line, any other code point is one column, so the low
+  // half of a surrogate pair adds none.
   private advance(start: number, end: number): void {
-    const cp = this.cp;
+    const src = this.src;
     let column = this.column;
     for (let k = start; k < end; k++) {
-      if (cp[k] === 0x0a) {
+      const c = src.charCodeAt(k);
+      if (c === 0x0a) {
         this.line++;
         column = 0;
-      } else {
+      } else if ((c & 0xfc00) !== 0xdc00 || k === 0 || (src.charCodeAt(k - 1) & 0xfc00) !== 0xd800) {
         column++;
       }
     }
@@ -300,25 +302,25 @@ class Scanner {
 
   // Index of the first `\r`, `\n` or the end, from `p`.
   private lineEnd(p: number): number {
-    const cp = this.cp;
-    while (p < cp.length && cp[p] !== 0x0d && cp[p] !== 0x0a) p++;
+    const src = this.src;
+    while (p < src.length && src.charCodeAt(p) !== 0x0d && src.charCodeAt(p) !== 0x0a) p++;
     return p;
   }
 
   private matches(p: number, word: string): boolean {
-    const cp = this.cp;
-    if (p + word.length > cp.length) return false;
-    for (let i = 0; i < word.length; i++) if (cp[p + i] !== word.charCodeAt(i)) return false;
+    const src = this.src;
+    if (p + word.length > src.length) return false;
+    for (let i = 0; i < word.length; i++) if (src.charCodeAt(p + i) !== word.charCodeAt(i)) return false;
     return true;
   }
 
   // STRING: '"' (~["\\] | '\\' .)* '"'; -1 when unterminated.
   private stringEnd(p: number): number {
-    const cp = this.cp;
-    const n = cp.length;
+    const src = this.src;
+    const n = src.length;
     let k = p + 1;
     while (k < n) {
-      const c = cp[k];
+      const c = src.charCodeAt(k);
       if (c === 0x22) return k + 1;
       k += c === 0x5c ? 2 : 1;
     }
@@ -327,19 +329,19 @@ class Scanner {
 
   // DATE: ('17' | '18' | '19' | '20') DIGIT DIGIT [-/] DIGIT+ [-/] DIGIT+; -1 when absent.
   private dateEnd(p: number): number {
-    const cp = this.cp;
-    const n = cp.length;
+    const src = this.src;
+    const n = src.length;
     if (p + 4 > n) return -1;
-    const a = cp[p]!;
-    const b = cp[p + 1]!;
+    const a = src.charCodeAt(p);
+    const b = src.charCodeAt(p + 1);
     if (!((a === 0x31 && b >= 0x37 && b <= 0x39) || (a === 0x32 && b === 0x30))) return -1;
-    if (!isDigit(cp[p + 2]!) || !isDigit(cp[p + 3]!)) return -1;
+    if (!isDigit(src.charCodeAt(p + 2)) || !isDigit(src.charCodeAt(p + 3))) return -1;
     let k = p + 4;
     for (let part = 0; part < 2; part++) {
-      if (k >= n || (cp[k] !== 0x2d && cp[k] !== 0x2f)) return -1;
+      if (k >= n || (src.charCodeAt(k) !== 0x2d && src.charCodeAt(k) !== 0x2f)) return -1;
       k++;
       const digits = k;
-      while (k < n && isDigit(cp[k]!)) k++;
+      while (k < n && isDigit(src.charCodeAt(k))) k++;
       if (k === digits) return -1;
     }
     return k;
@@ -347,38 +349,42 @@ class Scanner {
 
   // NUMBER: ([0-9]+ | [0-9] [0-9,]+ [0-9]) ('.' [0-9]*)?
   private numberEnd(p: number): number {
-    const cp = this.cp;
-    const n = cp.length;
+    const src = this.src;
+    const n = src.length;
     let end = p + 1;
-    for (let k = p + 1; k < n && (isDigit(cp[k]!) || cp[k] === 0x2c); k++) {
-      if (cp[k] !== 0x2c) end = k + 1;
+    for (let k = p + 1; k < n && (isDigit(src.charCodeAt(k)) || src.charCodeAt(k) === 0x2c); k++) {
+      if (src.charCodeAt(k) !== 0x2c) end = k + 1;
     }
-    if (cp[end] === 0x2e) {
+    if (src.charCodeAt(end) === 0x2e) {
       end++;
-      while (end < n && isDigit(cp[end]!)) end++;
+      while (end < n && isDigit(src.charCodeAt(end))) end++;
     }
     return end;
   }
 
   // ACCOUNT: ACCOUNT_TYPE (':' ACCOUNT_NAME)+; -1 when absent.
   private accountEnd(p: number): number {
-    const cp = this.cp;
-    const n = cp.length;
+    const src = this.src;
+    const n = src.length;
     let k = p + 1;
-    while (k < n && isAccountChar(cp[k]!)) k++;
+    while (k < n && isAccountChar(src.charCodeAt(k))) k++;
     let end = -1;
-    while (k + 1 < n && cp[k] === 0x3a) {
-      const d = cp[k + 1]!;
+    while (k + 1 < n && src.charCodeAt(k) === 0x3a) {
+      const d = src.charCodeAt(k + 1);
       if (!(isUpper(d) || isDigit(d) || d >= 0x80)) break;
       k += 2;
-      while (k < n && isAccountChar(cp[k]!)) k++;
+      while (k < n && isAccountChar(src.charCodeAt(k))) k++;
       end = k;
     }
     return end;
   }
 }
 
-/** Tokens as parallel arrays, ending with one EOF token; `end` is exclusive. */
+/**
+ * Tokens as parallel arrays, ending with one EOF token. `start`/`end`
+ * (exclusive) are UTF-16 offsets into the input; `line`/`column` count code
+ * points, as ANTLR's.
+ */
 export interface RawTokens {
   count: number;
   type: Int8Array;
@@ -388,11 +394,16 @@ export interface RawTokens {
   column: Int32Array;
 }
 
-/** Lexes the whole input; throws `NeedsAntlrLexer` where no rule matches. */
-export function lexAll(cp: Uint32Array): RawTokens {
-  const scanner = new Scanner(cp);
+/**
+ * Lexes the whole input; throws `NeedsAntlrLexer` where no rule matches.
+ * Scans UTF-16 code units: every rule treats code points >= 0x80 alike, so
+ * a token never ends inside a surrogate pair and the matches are those over
+ * code points.
+ */
+export function lexAll(src: string): RawTokens {
+  const scanner = new Scanner(src);
   // Roughly one token per 3 code points in a ledger; grown on demand.
-  let capacity = (cp.length >> 2) + 16;
+  let capacity = (src.length >> 2) + 16;
   let type = new Int8Array(capacity);
   let start = new Int32Array(capacity);
   let end = new Int32Array(capacity);
@@ -441,12 +452,12 @@ export class BeancountFastLexer extends L {
   public override nextToken(): Token {
     const t = this.tokens;
     const i = Math.min(this.next++, t.count - 1);
-    this.tokenStartCharIndex = t.start[i]!;
+    this.tokenStartCharIndex = this.stream.indexOfOffset(t.start[i]!);
     this.currentTokenStartLine = t.line[i]!;
     this.currentTokenColumn = t.column[i]!;
     this.channel = 0;
     this.type = t.type[i]!;
-    this.stream.index = t.end[i]!;
+    this.stream.index = this.stream.indexOfOffset(t.end[i]!);
     return this.emit();
   }
 }
