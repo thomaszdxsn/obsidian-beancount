@@ -408,19 +408,19 @@ export class BeancountParser extends antlr.Parser {
             this.state = 120;
             this.match(BeancountParser.DATE);
             this.state = 121;
-            this.txn_flag();
+            localContext._txnFlag = this.txn_flag();
             this.state = 123;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
             if (_la === 29) {
                 {
                 this.state = 122;
-                this.txn_strings();
+                localContext._strings = this.txn_strings();
                 }
             }
 
             this.state = 125;
-            this.tags_links();
+            localContext._tagsLinks = this.tags_links();
             this.state = 126;
             this.eol();
             this.state = 131;
@@ -435,13 +435,15 @@ export class BeancountParser extends antlr.Parser {
                     case 1:
                         {
                         this.state = 127;
-                        this.key_value_line();
+                        localContext._key_value_line = this.key_value_line();
+                        localContext._meta.push(localContext._key_value_line!);
                         }
                         break;
                     case 2:
                         {
                         this.state = 128;
-                        this.tags_links_line();
+                        localContext._tags_links_line = this.tags_links_line();
+                        localContext._tagLines.push(localContext._tags_links_line!);
                         }
                         break;
                     }
@@ -458,7 +460,8 @@ export class BeancountParser extends antlr.Parser {
                 {
                 {
                 this.state = 134;
-                this.posting();
+                localContext._posting = this.posting();
+                localContext._postings.push(localContext._posting!);
                 }
                 }
                 this.state = 139;
@@ -701,19 +704,19 @@ export class BeancountParser extends antlr.Parser {
             if (((((_la - 27)) & ~0x1F) === 0 && ((1 << (_la - 27)) & 14680065) !== 0)) {
                 {
                 this.state = 169;
-                this.flag();
+                localContext._postingFlag = this.flag();
                 }
             }
 
             this.state = 172;
-            this.account();
+            localContext._acct = this.account();
             this.state = 174;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
             if (((((_la - 27)) & ~0x1F) === 0 && ((1 << (_la - 27)) & 720907) !== 0)) {
                 {
                 this.state = 173;
-                this.incomplete_amount();
+                localContext._units = this.incomplete_amount();
                 }
             }
 
@@ -723,7 +726,7 @@ export class BeancountParser extends antlr.Parser {
             if (_la === 37 || _la === 39) {
                 {
                 this.state = 176;
-                this.cost();
+                localContext._costSpec = this.cost();
                 }
             }
 
@@ -733,14 +736,14 @@ export class BeancountParser extends antlr.Parser {
             if (_la === 35 || _la === 36) {
                 {
                 this.state = 179;
-                this.price_annotation();
+                localContext._priceSpec = this.price_annotation();
                 }
             }
 
             this.state = 182;
             this.eol();
             this.state = 183;
-            this.metadata();
+            localContext._meta = this.metadata();
             }
         }
         catch (re) {
@@ -771,14 +774,14 @@ export class BeancountParser extends antlr.Parser {
                 this.enterOuterAlt(localContext, 1);
                 {
                 this.state = 185;
-                this.number_(0);
+                localContext._num = this.number_(0);
                 this.state = 187;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
                 if (_la === 27 || _la === 28) {
                     {
                     this.state = 186;
-                    this.commodity();
+                    localContext._cur = this.commodity();
                     }
                 }
 
@@ -789,7 +792,7 @@ export class BeancountParser extends antlr.Parser {
                 this.enterOuterAlt(localContext, 2);
                 {
                 this.state = 189;
-                this.commodity();
+                localContext._cur = this.commodity();
                 }
                 break;
             default:
@@ -1293,7 +1296,8 @@ export class BeancountParser extends antlr.Parser {
                     {
                     {
                     this.state = 263;
-                    this.key_value_line();
+                    localContext._key_value_line = this.key_value_line();
+                    localContext._lines.push(localContext._key_value_line!);
                     }
                     }
                 }
@@ -2533,20 +2537,29 @@ export class EolContext extends antlr.ParserRuleContext {
 
 
 export class TransactionContext extends antlr.ParserRuleContext {
+    public _txnFlag?: Txn_flagContext;
+    public _strings?: Txn_stringsContext;
+    public _tagsLinks?: Tags_linksContext;
+    public _key_value_line?: Key_value_lineContext;
+    public _meta: Key_value_lineContext[] = [];
+    public _tags_links_line?: Tags_links_lineContext;
+    public _tagLines: Tags_links_lineContext[] = [];
+    public _posting?: PostingContext;
+    public _postings: PostingContext[] = [];
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
     }
     public DATE(): antlr.TerminalNode {
         return this.getToken(BeancountParser.DATE, 0)!;
     }
+    public eol(): EolContext {
+        return this.getRuleContext(0, EolContext)!;
+    }
     public txn_flag(): Txn_flagContext {
         return this.getRuleContext(0, Txn_flagContext)!;
     }
     public tags_links(): Tags_linksContext {
         return this.getRuleContext(0, Tags_linksContext)!;
-    }
-    public eol(): EolContext {
-        return this.getRuleContext(0, EolContext)!;
     }
     public txn_strings(): Txn_stringsContext | null {
         return this.getRuleContext(0, Txn_stringsContext);
@@ -2751,17 +2764,23 @@ export class Tags_links_lineContext extends antlr.ParserRuleContext {
 
 
 export class PostingContext extends antlr.ParserRuleContext {
+    public _postingFlag?: FlagContext;
+    public _acct?: AccountContext;
+    public _units?: Incomplete_amountContext;
+    public _costSpec?: CostContext;
+    public _priceSpec?: Price_annotationContext;
+    public _meta?: MetadataContext;
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
     }
     public INDENT(): antlr.TerminalNode {
         return this.getToken(BeancountParser.INDENT, 0)!;
     }
-    public account(): AccountContext {
-        return this.getRuleContext(0, AccountContext)!;
-    }
     public eol(): EolContext {
         return this.getRuleContext(0, EolContext)!;
+    }
+    public account(): AccountContext {
+        return this.getRuleContext(0, AccountContext)!;
     }
     public metadata(): MetadataContext {
         return this.getRuleContext(0, MetadataContext)!;
@@ -2792,6 +2811,8 @@ export class PostingContext extends antlr.ParserRuleContext {
 
 
 export class Incomplete_amountContext extends antlr.ParserRuleContext {
+    public _num?: NumberContext;
+    public _cur?: CommodityContext;
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
     }
@@ -3064,6 +3085,8 @@ export class Price_annotationContext extends antlr.ParserRuleContext {
 
 
 export class MetadataContext extends antlr.ParserRuleContext {
+    public _key_value_line?: Key_value_lineContext;
+    public _lines: Key_value_lineContext[] = [];
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
     }

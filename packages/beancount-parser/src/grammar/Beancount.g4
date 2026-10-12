@@ -97,7 +97,7 @@ eol
 // Tag/link lines after the first posting are rejected (upstream rejects them
 // in its builder: "Tags or links not allowed after first Posting").
 transaction
-    : DATE txn_flag txn_strings? tags_links eol (key_value_line | tags_links_line)* posting*
+    : DATE txnFlag=txn_flag strings=txn_strings? tagsLinks=tags_links eol (meta+=key_value_line | tagLines+=tags_links_line)* postings+=posting*
     ;
 
 txn_flag
@@ -126,13 +126,13 @@ tags_links_line
     ;
 
 posting
-    : INDENT flag? account incomplete_amount? cost? price_annotation? eol metadata
+    : INDENT postingFlag=flag? acct=account units=incomplete_amount? costSpec=cost? priceSpec=price_annotation? eol meta=metadata
     ;
 
 // Posting amounts may omit the number or the currency (interpolated later).
 incomplete_amount
-    : number commodity?
-    | commodity
+    : num=number cur=commodity?
+    | cur=commodity
     ;
 
 amount
@@ -183,7 +183,7 @@ price_annotation
     ;
 
 metadata
-    : key_value_line*
+    : lines+=key_value_line*
     ;
 
 key_value_line

@@ -136,45 +136,47 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   };
 
   visitTransaction = (ctx: TransactionContext): Transaction => {
-    const flagCtx = ctx.txn_flag();
+    const flagCtx = ctx._txnFlag!;
     // The `txn` keyword is an alias for the `*` flag.
     const flag = flagCtx.TXN() ? '*' : flagCtx.getText();
-    const strings = ctx.txn_strings();
+    const strings = ctx._strings;
     const payee = strings?._payee ? this.unquote(strings._payee.text!) : null;
     const narration = strings?._narration ? this.unquote(strings._narration.text!) : null;
 
-    const tags = new Set(this.pushedTags.map((p) => p.tag));
+    const tags = new Set<string>();
+    for (const pushed of this.pushedTags) tags.add(pushed.tag);
     const links = new Set<string>();
-    for (const tl of [ctx.tags_links(), ...ctx.tags_links_line()]) {
-      this.collectTagsLinks(tl, tags, links);
-    }
+    this.collectTagsLinks(ctx._tagsLinks!, tags, links);
+    for (const tl of ctx._tagLines) this.collectTagsLinks(tl, tags, links);
 
     return new Transaction(
       this.date(ctx.DATE()),
       flag,
       payee,
       narration,
-      ctx.posting().map(this.posting),
+      ctx._postings.map(this.posting),
       this.location(ctx),
-      this.metadata(ctx.key_value_line()),
+      this.metadata(ctx._meta),
       [...tags],
       [...links],
     );
   };
 
+  // Labeled children (`_units`, `_costSpec`, ...) instead of the generated
+  // accessors, which scan every child with `instanceof` on each call.
   private posting = (ctx: PostingContext): Posting => {
-    const amount = ctx.incomplete_amount();
-    const cost = ctx.cost();
-    const price = ctx.price_annotation();
+    const amount = ctx._units;
+    const cost = ctx._costSpec;
+    const price = ctx._priceSpec;
     const priceAmount = price?.incomplete_amount();
     return new Posting(
-      ctx.account().getText(),
+      ctx._acct!.getText(),
       amount ? this.incompleteAmount(amount) : undefined,
       cost ? this.cost(cost) : undefined,
       price ? new PriceAnnotation(priceAmount ? this.incompleteAmount(priceAmount) : undefined, price.ATAT() !== null) : undefined,
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
-      ctx.flag()?.getText(),
+      this.metadata(ctx._meta!._lines),
+      ctx._postingFlag?.getText(),
     );
   };
 
@@ -184,7 +186,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       ctx.commodity().getText(),
       this.amount(ctx.amount()),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -195,7 +197,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       ctx.account().getText(),
       this.amountFrom(this.parsedNumber(ctx._balanceNumber!), ctx.commodity().getText()),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
       tolerance?.value,
       tolerance?.text,
     );
@@ -209,7 +211,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       ctx.commodity().map((c) => c.getText()),
       booking ? this.unquote(booking.STRING().getText()) : undefined,
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -218,7 +220,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       this.date(ctx.DATE()),
       ctx.account().getText(),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -227,7 +229,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       this.date(ctx.DATE()),
       ctx.commodity().getText(),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -237,7 +239,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       ctx.account(0)!.getText(),
       ctx.account(1)!.getText(),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -250,7 +252,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       ctx.account().getText(),
       this.unquote(ctx.STRING().getText()),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
       [...tags],
       [...links],
     );
@@ -265,7 +267,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       ctx.account().getText(),
       this.unquote(ctx.STRING().getText()),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
       [...tags],
       [...links],
     );
@@ -277,7 +279,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       this.unquote(ctx.STRING(0)!.getText()),
       this.unquote(ctx.STRING(1)!.getText()),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -287,7 +289,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       this.unquote(ctx.STRING(0)!.getText()),
       this.unquote(ctx.STRING(1)!.getText()),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -297,7 +299,7 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
       this.unquote(ctx.STRING().getText()),
       ctx.custom_value().map((v) => this.customValue(v)),
       this.location(ctx),
-      this.metadata(ctx.metadata().key_value_line()),
+      this.metadata(ctx.metadata()._lines),
     );
   };
 
@@ -348,8 +350,8 @@ class BeancountParserVisitor extends BeancountVisitor<Directive | null> {
   }
 
   private incompleteAmount(ctx: Incomplete_amountContext): Amount | IncompleteAmount {
-    const num = ctx.number();
-    return this.amountOrIncomplete(num ? this.parsedNumber(num) : null, ctx.commodity()?.getText() ?? null)!;
+    const num = ctx._num;
+    return this.amountOrIncomplete(num ? this.parsedNumber(num) : null, ctx._cur?.getText() ?? null)!;
   }
 
   private amountFrom(parsed: ParsedNumber, currency: string): Amount {
