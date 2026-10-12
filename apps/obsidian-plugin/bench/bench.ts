@@ -41,11 +41,12 @@ const workloads: [string, () => unknown][] = [
 	[
 		'balances',
 		() => {
-			// Fresh text each run defeats balances.ts' per-path parse cache, so
-			// the measured cost includes parsing, as on the first open.
+			// Fresh text in every file each run defeats balances.ts' per-path
+			// parse cache, so the measured cost includes parsing the whole
+			// include chain, as on the first open.
 			balanceRun += 1;
-			const fresh = new Map(files);
-			fresh.set('main.beancount', `${files.get('main.beancount')}; run ${balanceRun}\n`);
+			const fresh = new Map<string, string>();
+			for (const [path, text] of files) fresh.set(path, `${text}; run ${balanceRun}\n`);
 			const r = accountBalances('main.beancount', fresh, '/vault', vaultFiles);
 			return { rows: r.rows, errors: r.errors };
 		},

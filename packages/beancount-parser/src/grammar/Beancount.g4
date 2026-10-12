@@ -14,6 +14,21 @@ grammar Beancount;
     // - `[ \t]+` before other content is INDENT. Whitespace-only lines fall
     //   through to WS so they read as plain blank lines.
     public override nextToken(): Token {
+        return this.lineStart() ? this.emit() : super.nextToken();
+    }
+
+    // A lexer error is recovered inside super.nextToken()'s own loop, which
+    // then lexes on without coming back here. When recovery ends at a line
+    // start, scan it the same way: an INDENT set up here is what that loop
+    // emits next.
+    public override recover(e: antlr.LexerNoViableAltException | antlr.RecognitionException): void {
+        super.recover(e);
+        this.lineStart();
+    }
+
+    // The column-0 scan. Skips ignored and indented comment lines; true when
+    // it has consumed an INDENT and set it up as the current token.
+    private lineStart(): boolean {
         const input = this.inputStream;
         while (this.interpreter.column === 0) {
             const c = input.LA(1);
@@ -21,7 +36,7 @@ grammar Beancount;
                 this.skipToLineEnd();
                 continue;
             }
-            if (c !== 0x20 && c !== 0x09) break;
+            if (c !== 0x20 && c !== 0x09) return false;
             let k = 2;
             while (input.LA(k) === 0x20 || input.LA(k) === 0x09) k++;
             const next = input.LA(k);
@@ -31,16 +46,16 @@ grammar Beancount;
                 if (input.LA(1) === 0x0a) this.interpreter.consume(input);
                 continue;
             }
-            if (next === -1 || next === 0x0d || next === 0x0a) break;
+            if (next === -1 || next === 0x0d || next === 0x0a) return false;
             this.tokenStartCharIndex = input.index;
             this.currentTokenStartLine = this.interpreter.line;
             this.currentTokenColumn = 0;
             this.channel = Token.DEFAULT_CHANNEL;
             this.type = BeancountLexer.INDENT;
             for (let i = 1; i < k; i++) this.interpreter.consume(input);
-            return this.emit();
+            return true;
         }
-        return super.nextToken();
+        return false;
     }
 
     private skipToLineEnd(): void {

@@ -132,16 +132,27 @@ const REFUSE: LineInfo = { kind: 'refuse' };
 const IGNORE: LineInfo = { kind: 'ignore' };
 const CLOSE: LineInfo = { kind: 'close' };
 
-/** Bounded: cleared when it grows past this many distinct lines. */
-const LINE_CACHE_LIMIT = 200_000;
-const lineCache = new Map<string, LineInfo>();
+/**
+ * Line classifications and account ancestor lists kept between one
+ * caller's `balanceHints` calls (an editor's inlay hints keep one), so a
+ * keystroke reclassifies just the edited line. Entries for lines the
+ * current document no longer has are dropped once they outnumber its
+ * lines: memory follows the document, not every line ever seen.
+ */
+export class BalanceLineCache {
+	lines = new Map<string, LineInfo>();
+	ancestors = new Map<string, readonly string[]>();
+}
 
-function lineInfo(raw: string): LineInfo {
-	const cached = lineCache.get(raw);
-	if (cached !== undefined) return cached;
-	const info = classifyLine(stripCarriage(raw));
-	if (lineCache.size >= LINE_CACHE_LIMIT) lineCache.clear();
-	lineCache.set(raw, info);
+/** Distinct account names an ancestor map may hold before it starts over. */
+const ANCESTOR_LIMIT = 4096;
+
+function lineInfo(raw: string, cache: Map<string, LineInfo>): LineInfo {
+	let info = cache.get(raw);
+	if (info === undefined) {
+		info = classifyLine(stripCarriage(raw));
+		cache.set(raw, info);
+	}
 	return info;
 }
 
@@ -179,9 +190,21 @@ function byDate(a: { date: string }, b: { date: string }): number {
 	return a.date < b.date ? -1 : a.date > b.date ? 1 : 0;
 }
 
-export function balanceHints(lines: readonly string[]): BalanceHint[] {
-	const parsed = collect(lines);
+export function balanceHints(lines: readonly string[], cache = new BalanceLineCache()): BalanceHint[] {
+	const parsed = collect(lines, cache);
 	if (parsed === null || parsed.balances.length === 0) return [];
+	if (cache.ancestors.size > ANCESTOR_LIMIT) cache.ancestors = new Map();
+	const known = cache.ancestors;
+	const ancestors = (account: string): readonly string[] => {
+		let list = known.get(account);
+		if (list === undefined) {
+			const out: string[] = [];
+			for (let name = account; name.includes(':'); name = name.slice(0, name.lastIndexOf(':'))) out.push(name);
+			list = out;
+			known.set(account, list);
+		}
+		return list;
+	};
 	// A hint reads only its asserted account's inventory, and an account's
 	// inventory depends on nothing else: other accounts are not tracked.
 	const asserted = new Set<string>();
@@ -201,11 +224,11 @@ export function balanceHints(lines: readonly string[]): BalanceHint[] {
 	let padIndex = 0;
 	for (const balance of parsed.balances) {
 		while (postingIndex < postings.length && postings[postingIndex].date < balance.date) {
-			accumulate(inventory, asserted, postings[postingIndex++]);
+			accumulate(inventory, asserted, ancestors, postings[postingIndex++]);
 		}
 		while (padIndex < parsed.pads.length && parsed.pads[padIndex].date <= balance.date) {
 			const pad = parsed.pads[padIndex++];
-			for (const account of pad.accounts) accumulate(inventory, asserted, { account, date: pad.date });
+			for (const account of pad.accounts) accumulate(inventory, asserted, ancestors, { account, date: pad.date });
 		}
 		const hint = hintFor(balance, inventory.get(balance.account));
 		if (hint !== null) hints.push(hint);
@@ -226,16 +249,17 @@ interface Ledger {
  * depend on another ledger, an unknown dated directive would be claimed to
  * add nothing, and a `pad` naming accounts we cannot see is not zero.
  */
-function collect(lines: readonly string[]): Ledger | null {
+function collect(lines: readonly string[], cache: BalanceLineCache): Ledger | null {
 	const postings: AmountPosting[] = [];
 	const taints: TaintPosting[] = [];
 	const pads: Pad[] = [];
 	const balances: Balance[] = [];
 	let inTxn = false;
 	let txnDate = '';
+	const known = cache.lines;
 
 	for (let i = 0; i < lines.length; i++) {
-		const info = lineInfo(lines[i]);
+		const info = lineInfo(lines[i], known);
 		switch (info.kind) {
 			case 'refuse':
 				return null;
@@ -275,28 +299,19 @@ function collect(lines: readonly string[]): Ledger | null {
 			}
 		}
 	}
-	return { postings, taints, pads, balances };
-}
-
-/** An account and its ancestors that still hold a `:`, deepest first. */
-const ancestorCache = new Map<string, readonly string[]>();
-
-function ancestors(account: string): readonly string[] {
-	let list = ancestorCache.get(account);
-	if (list === undefined) {
-		const out: string[] = [];
-		for (let name = account; name.includes(':'); name = name.slice(0, name.lastIndexOf(':'))) out.push(name);
-		list = out;
-		if (ancestorCache.size >= LINE_CACHE_LIMIT) ancestorCache.clear();
-		ancestorCache.set(account, list);
+	if (known.size > 2 * lines.length + 64) {
+		const current = new Map<string, LineInfo>();
+		for (const raw of lines) current.set(raw, known.get(raw)!);
+		cache.lines = current;
 	}
-	return list;
+	return { postings, taints, pads, balances };
 }
 
 /** Update the account and each ancestor in `tracked` once; null means inventory is unknown. */
 function accumulate(
 	inventory: Map<string, Inventory | null>,
 	tracked: ReadonlySet<string>,
+	ancestors: (account: string) => readonly string[],
 	posting: AmountPosting | TaintPosting
 ): void {
 	for (const account of ancestors(posting.account)) {

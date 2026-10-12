@@ -38,7 +38,7 @@ import type { EditorState, Extension, Range, Text } from '@codemirror/state';
 import { Decoration, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
-import { balanceHints } from './balance-hints';
+import { BalanceLineCache, balanceHints } from './balance-hints';
 import type { BalanceHint } from './balance-hints';
 import { docFences } from './fences';
 import { postingHints } from './posting-hints';
@@ -264,7 +264,13 @@ interface DocMemo {
 	balance: readonly BalanceHint[] | null;
 }
 
-function docMemo(memo: { current: DocMemo | null }, doc: Text, markdown: boolean): DocMemo {
+/** One editor's memo: the last document's work and its balance line cache. */
+interface EditorMemo {
+	current: DocMemo | null;
+	lines: BalanceLineCache;
+}
+
+function docMemo(memo: EditorMemo, doc: Text, markdown: boolean): DocMemo {
 	const last = memo.current;
 	if (last !== null && last.doc === doc && last.markdown === markdown) return last;
 	const next: DocMemo = { doc, markdown, masked: markdown ? docFences(doc).masked : null, balance: null };
@@ -272,7 +278,7 @@ function docMemo(memo: { current: DocMemo | null }, doc: Text, markdown: boolean
 	return next;
 }
 
-function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: { current: DocMemo | null }): DecorationSet {
+function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: EditorMemo): DecorationSet {
 	if (!host.settings.inlayHints) return Decoration.none;
 	const file = view.state.field(editorInfoField, false)?.file;
 	if (!file) return Decoration.none;
@@ -289,7 +295,7 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: { cu
 		const masked = entry.masked;
 		if (!masked) return Decoration.none;
 		const lineText = (index: number) => (index >= 0 && index < masked.length ? masked[index] : '');
-		if (localLedger) appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(masked)));
+		if (localLedger) appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(masked, memo.lines)));
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	} else if (isLedgerFile(file)) {
@@ -300,7 +306,7 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: { cu
 				// Sequential read: `doc.line(n)` per line walks the tree each time.
 				const lines: string[] = [];
 				for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
-				entry.balance = balanceHints(lines);
+				entry.balance = balanceHints(lines, memo.lines);
 			}
 			appendBalanceHints(ranges, doc, entry.balance);
 		}
@@ -318,7 +324,7 @@ function inlayPlugin(host: BalanceInlayHost, views: Set<EditorView>) {
 	return class BalanceInlayPlugin {
 		decorations: DecorationSet;
 		private fileKey: string;
-		private readonly memo: { current: DocMemo | null } = { current: null };
+		private readonly memo: EditorMemo = { current: null, lines: new BalanceLineCache() };
 
 		constructor(private readonly view: EditorView) {
 			views.add(view);

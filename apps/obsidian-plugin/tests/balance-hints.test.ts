@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { balanceHints, stripComment } from '../balance-hints';
+import { BalanceLineCache, balanceHints, stripComment } from '../balance-hints';
 
 const hints = (...lines: string[]) => balanceHints(lines);
 
@@ -279,5 +279,35 @@ describe('balance assertion hints', () => {
 		expect(stripComment('  Assets:Cash  10 USD "a \\" ; b" ; 99 EUR')).toBe(
 			'  Assets:Cash  10 USD "a \\" ; b" ',
 		);
+	});
+});
+
+describe('a reused line cache', () => {
+	const ledger = [
+		'2026-01-01 * "D"',
+		'  Assets:Cash  10 USD',
+		'  Assets:Cash:Wallet  2 USD',
+		'2026-01-02 balance Assets:Cash 15 USD',
+	];
+
+	it('gives each document the hints of a fresh cache, whatever it saw before', () => {
+		const cache = new BalanceLineCache();
+		// The same posting text outside a transaction, then a refused buffer.
+		balanceHints(['  Assets:Cash  10 USD', '2026-01-02 balance Assets:Cash 15 USD'], cache);
+		balanceHints(['plugin "auto"', ...ledger], cache);
+		expect(balanceHints(ledger, cache)).toEqual([{ line: 3, label: 'Δ +3 USD' }]);
+		// An edited line is reclassified, not served from the previous call.
+		const edited = [...ledger.slice(0, 2), '  Assets:Cash:Wallet  4 USD', ledger[3]];
+		expect(balanceHints(edited, cache)).toEqual(balanceHints(edited));
+		expect(balanceHints(edited, cache)).toEqual([{ line: 3, label: 'Δ +1 USD' }]);
+	});
+
+	it('stays bounded by the current document while documents keep changing', () => {
+		const cache = new BalanceLineCache();
+		// Every call is a different 3-line document, as typing produces.
+		for (let n = 0; n < 200; n += 1) {
+			balanceHints([`2026-01-01 * "T${n}"`, `  Assets:Cash  ${n} USD`, '2026-01-02 balance Assets:Cash 1 USD'], cache);
+		}
+		expect(cache.lines.size).toBeLessThan(200);
 	});
 });

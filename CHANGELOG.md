@@ -6,7 +6,8 @@
 
 - Large ledgers are much faster; behaviour is unchanged (#62). On a
   16.6k-line ledger: parsing 277 → 6 ms, **Format ledger** 312 → 13 ms
-  (fenced notes 297 → 16 ms), the balances view's first parse 105 → 6 ms.
+  (fenced notes 297 → 16 ms), opening the balances view on a three-file
+  include chain 274 → 12 ms.
   Editing: re-indexing after each save (and per file at startup) 882 → 12 ms,
   a keystroke's inlay hints / flag warnings / include links 12 → 3 ms in a
   ledger and 20 → 3 ms in a fenced note, scrolling 10 → 0.3 ms, the `.` and

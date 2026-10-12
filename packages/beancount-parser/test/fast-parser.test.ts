@@ -338,3 +338,47 @@ describe("number nesting at the fast-path depth limit", () => {
     expect(priceAmount(expr)).toEqual(new Amount(3, "CNY"));
   });
 });
+
+// The differential tests above compare the two paths of this version. These
+// pin the errors the parser reported before the hand-written path existed:
+// after a lexer error recovered at a newline, the next line still gets its
+// column-0 handling (INDENT, ignored lines, indented comment lines).
+describe("errors after a lexer error that ends a line", () => {
+  const cases: Array<[string, SyntaxErrorInfo[]]> = [
+    [
+      '2022-01-01 * "a" ^\n  Assets:A 1 USD\n',
+      [
+        { line: 1, column: 17, message: "token recognition error at: '^\n'" },
+        { line: 2, column: 0, message: "missing {<EOF>, EOL} at '  '" },
+      ],
+    ],
+    ["x\n* Heading\n2022-01-01 open Assets:A\n", [{ line: 1, column: 0, message: "token recognition error at: 'x\n'" }]],
+    [
+      "2022-01-01 open Assets:A ^\n  ; note\n2022-01-02 close Assets:A\n",
+      [
+        { line: 1, column: 25, message: "token recognition error at: '^\n'" },
+        { line: 3, column: 0, message: "mismatched input '2022-01-02' expecting {<EOF>, EOL, CAPITAL, CURRENCY, STRING}" },
+      ],
+    ],
+    [
+      '2020-01-01 * "x"\n  Assets:A 1 USD bar\n  Assets:B\n',
+      [
+        { line: 2, column: 17, message: "token recognition error at: 'bar\n'" },
+        { line: 3, column: 0, message: "mismatched input '  ' expecting {<EOF>, EOL, '@@', '@', '{{', '{'}" },
+      ],
+    ],
+    [
+      "1999-12-31 pri\n  ce /ES 1. CNY\n",
+      [
+        { line: 1, column: 11, message: "token recognition error at: 'pri\n'" },
+        { line: 2, column: 0, message: "no viable alternative at input '1999-12-31  '" },
+        { line: 2, column: 2, message: "token recognition error at: 'ce '" },
+      ],
+    ],
+  ];
+  for (const [input, errors] of cases) {
+    test(JSON.stringify(input), () => {
+      expect(outcome(input, () => BeancountParser.parse(input))).toEqual({ input, errors });
+    });
+  }
+});
