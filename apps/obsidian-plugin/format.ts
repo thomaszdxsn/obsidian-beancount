@@ -248,17 +248,16 @@ function rewriteLines(lines: string[], directives: readonly Directive[]): void {
 		const start = loc.start.line - 1;
 		const end = Math.min(loc.end.line - 1, lines.length - 1);
 		if (start < 0 || start >= lines.length || end < start) continue;
-		const txn = directive instanceof Transaction ? directive : null;
-		const postingAt = new Map<number, Posting>();
-		if (txn) {
-			for (const posting of txn.postings) {
-				if (posting.location) postingAt.set(posting.location.start.line - 1, posting);
-			}
-		}
+		// Postings start on increasing lines and `i` only grows: a cursor
+		// finds the posting starting at line `i`, if any.
+		const txn = directive instanceof Transaction;
+		const postings: readonly Posting[] = txn ? directive.postings : [];
+		let cursor = 0;
 		let i = rewriteHeader(lines, start, end);
 		markConsumed(consumed, start, i - 1);
 		while (i <= end) {
-			const posting = postingAt.get(i);
+			while (cursor < postings.length && (postings[cursor].location?.start.line ?? 0) - 1 < i) cursor += 1;
+			const posting = cursor < postings.length && postings[cursor].location!.start.line - 1 === i ? postings[cursor] : undefined;
 			if (posting?.location) {
 				const postingEnd = Math.min(posting.location.end.line - 1, end);
 				let j = rewriteIndented(lines, i, postingEnd, POSTING_INDENT);
@@ -377,6 +376,17 @@ function stripTrailing(line: string): string {
 }
 
 function collapseHeaderLine(line: string, inStringStart: boolean): { text: string; inString: boolean } {
+	// Already collapsed: no tab, no double space, nothing to trim at either
+	// end. The text stays; the string state is the same scan's.
+	const last = line.charCodeAt(line.length - 1);
+	if (
+		!line.includes('\t') &&
+		!line.includes('  ') &&
+		line.charCodeAt(0) !== 0x20 &&
+		last !== 0x20
+	) {
+		return { text: line, inString: endsInString(line, inStringStart) };
+	}
 	let inString = inStringStart;
 	let inComment = false;
 	let inWs = false;
