@@ -72,7 +72,8 @@ function quotedFields(rest: string): string[] {
 	while (fields.length < 2) {
 		const match = QUOTED_FIELD_RE.exec(leftover);
 		if (!match) break;
-		fields.push(match[1].replace(/\\(.)/g, '$1'));
+		const field = match[1];
+		fields.push(field.includes('\\') ? field.replace(/\\(.)/g, '$1') : field);
 		leftover = leftover.slice(match[0].length);
 	}
 	return fields;
@@ -133,6 +134,9 @@ export function parseBeancountOutline(text: string): OutlineNode[] {
 			attachHeading(heading.level, heading.name, line);
 			continue;
 		}
+		// Both entry shapes open with a date.
+		const head = raw.charCodeAt(0);
+		if (!(head >= 0x30 && head <= 0x39)) continue;
 		const txn = TXN_RE.exec(raw);
 		if (txn) {
 			pushDated(currentSiblings(), txn[1], line, {
