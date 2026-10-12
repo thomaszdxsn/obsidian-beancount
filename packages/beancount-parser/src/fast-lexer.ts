@@ -118,7 +118,9 @@ class Scanner {
             end = p + 2;
             break;
           }
-          this.skipTo(k);
+          // `[ \t\r]` only: one column each.
+          this.column += k - p;
+          this.p = k;
           continue;
         }
         case 0x3b:
@@ -274,7 +276,18 @@ class Scanner {
     this.tokEnd = end;
     this.tokLine = this.line;
     this.tokColumn = this.column;
-    this.advance(start, end);
+    if (type === L.STRING || type === L.ACCOUNT) {
+      // May hold newlines (strings) or surrogate pairs (non-ASCII).
+      this.advance(start, end);
+    } else if (type === L.EOL) {
+      this.line++;
+      this.column = 0;
+      this.p = end;
+    } else {
+      // Every other token is ASCII on one line: one column per code unit.
+      this.column += end - start;
+      this.p = end;
+    }
   }
 
   private skipTo(end: number): void {
