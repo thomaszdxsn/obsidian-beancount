@@ -10,7 +10,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS } from './diagnostics';
-import { extractBeancountFences } from './fences';
+import { docFences } from './fences';
 import { isLedgerFile } from './vault-index';
 
 /** The CSS contract between these markers and `styles.css`. */
@@ -112,27 +112,11 @@ function editorFileKey(state: EditorState): string {
 }
 
 /**
- * Host lines with fence bodies in place and every other line blank, so
- * flag regexes see ledger text at the host line numbers.
- */
-function fenceMaskedLines(text: string): string[] | null {
-	const fences = extractBeancountFences(text);
-	if (fences.length === 0) return null;
-	const masked = text.split('\n').map(() => '');
-	for (const fence of fences) {
-		for (let i = 0; i < fence.lines.length; i++) {
-			masked[fence.startLine + i] = fence.lines[i] ?? '';
-		}
-	}
-	return masked;
-}
-
-/**
  * The document's lines the flags are read from: all of a ledger (or an
  * editor without a file), only fence bodies of a note; null when a note has
  * no fence. Read line by line, without joining the document into one string.
  */
-function scanLines(view: EditorView): string[] | null {
+function scanLines(view: EditorView): readonly string[] | null {
 	const info = view.state.field(editorInfoField, false) as EditorFileInfo | undefined;
 	const file = info?.file;
 	const doc = view.state.doc;
@@ -141,7 +125,7 @@ function scanLines(view: EditorView): string[] | null {
 		for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
 		return lines;
 	}
-	return fenceMaskedLines(doc.toString());
+	return docFences(doc).masked;
 }
 
 /** The line decoration and wavy underline for each flagged transaction. */

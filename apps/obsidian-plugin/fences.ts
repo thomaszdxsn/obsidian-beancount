@@ -72,6 +72,44 @@ export function extractBeancountFences(text: string): BeancountFence[] {
 	return fences;
 }
 
+/** A note's ledger fences and its lines with everything but fence bodies blanked. */
+export interface DocFences {
+	fences: readonly BeancountFence[];
+	/**
+	 * Host lines with fence bodies in place and every other line blank, so
+	 * ledger scans see fence text at host line numbers; null without a fence.
+	 */
+	masked: readonly string[] | null;
+}
+
+const fencesByDoc = new WeakMap<object, DocFences>();
+
+/**
+ * `extractBeancountFences(doc.toString())` and its mask, once per document.
+ * Editor documents are immutable, so the inlay hints, flag warnings and
+ * include links of one note share a single scan per edit.
+ */
+export function docFences(doc: { toString(): string }): DocFences {
+	let entry = fencesByDoc.get(doc);
+	if (entry === undefined) {
+		const text = doc.toString();
+		const fences = extractBeancountFences(text);
+		let masked: string[] | null = null;
+		if (fences.length > 0) {
+			// As many lines as `splitLines(text)`: one more than there are `\n`.
+			let count = 1;
+			for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) count += 1;
+			masked = new Array<string>(count).fill('');
+			for (const fence of fences) {
+				for (let i = 0; i < fence.lines.length; i += 1) masked[fence.startLine + i] = fence.lines[i];
+			}
+		}
+		entry = { fences, masked };
+		fencesByDoc.set(doc, entry);
+	}
+	return entry;
+}
+
 function isClosingFence(line: string, marker: string, minLen: number): boolean {
 	const close = /^( {0,3})(`{3,}|~{3,})[ \t]*$/.exec(line);
 	return close !== null && close[2][0] === marker && close[2].length >= minLen;

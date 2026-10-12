@@ -40,7 +40,7 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { balanceHints } from './balance-hints';
 import type { BalanceHint } from './balance-hints';
-import { extractBeancountFences } from './fences';
+import { docFences } from './fences';
 import { postingHints } from './posting-hints';
 import type { PostingHint } from './posting-hints';
 import { isLedgerFile } from './vault-index';
@@ -69,24 +69,6 @@ function editorFileKey(state: EditorState): string {
 	const file = state.field(editorInfoField, false)?.file;
 	if (!file) return '';
 	return file.path + '\0' + file.extension;
-}
-
-/**
- * Host lines with fence bodies in place and every other line blank. Blank
- * lines do not split the ledger `balanceHints` walks, which is how one note's
- * fences stay one inventory while hint lines remain the note's lines.
- * `null` when the note has no ledger fence — prose is not a ledger.
- */
-function fenceMaskedLines(text: string): string[] | null {
-	const fences = extractBeancountFences(text);
-	if (fences.length === 0) return null;
-	const masked = text.split(/\r?\n/).map(() => '');
-	for (const fence of fences) {
-		for (let i = 0; i < fence.lines.length; i += 1) {
-			masked[fence.startLine + i] = fence.lines[i];
-		}
-	}
-	return masked;
 }
 
 /** Inline, after the line text, so the caret at EOL stays in the document. */
@@ -276,8 +258,8 @@ function appendPostingHints(
 interface DocMemo {
 	doc: Text;
 	markdown: boolean;
-	/** Fence-masked lines of a markdown note; null for a ledger file or a note without fences. */
-	masked: string[] | null;
+	/** Fence-masked lines of a markdown note (see `docFences`); null for a ledger file or a note without fences. */
+	masked: readonly string[] | null;
 	/** Balance hints of the whole document, once computed. */
 	balance: readonly BalanceHint[] | null;
 }
@@ -285,7 +267,7 @@ interface DocMemo {
 function docMemo(memo: { current: DocMemo | null }, doc: Text, markdown: boolean): DocMemo {
 	const last = memo.current;
 	if (last !== null && last.doc === doc && last.markdown === markdown) return last;
-	const next: DocMemo = { doc, markdown, masked: markdown ? fenceMaskedLines(doc.toString()) : null, balance: null };
+	const next: DocMemo = { doc, markdown, masked: markdown ? docFences(doc).masked : null, balance: null };
 	memo.current = next;
 	return next;
 }
