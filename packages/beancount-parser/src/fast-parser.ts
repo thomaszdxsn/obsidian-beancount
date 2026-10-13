@@ -84,8 +84,12 @@ const {
 // which decides between a result and "input nested too deeply".
 const MAX_NUMBER_DEPTH = 64;
 
-/** Signals input this parser does not accept; the ANTLR parser then reports its exact errors. */
-const NEEDS_ANTLR = Symbol('needs ANTLR');
+/**
+ * Signals input this parser does not accept; the ANTLR parser then reports its
+ * exact errors. One shared instance: thrown on a hot path, it must not capture
+ * a fresh stack trace per bail-out.
+ */
+const NEEDS_ANTLR = new Error('needs ANTLR');
 
 /** A number expression before its finiteness check: value, literal spelling, token span. */
 interface Num {
@@ -158,7 +162,7 @@ class FastParser {
   }
 
   private text(i: number): string {
-    return this.input.slice(this.tokens.start[i]!, this.tokens.end[i]!);
+    return this.input.slice(this.tokens.start[i], this.tokens.end[i]);
   }
 
   // Concatenated token texts of [first, last], as ParserRuleContext.getText().

@@ -1,4 +1,5 @@
 import esbuild from "esbuild";
+import { writeFileSync } from "fs";
 import process from "process";
 import builtins from "builtin-modules";
 
@@ -41,11 +42,30 @@ const context = await esbuild.context({
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
 	outfile: process.env.ESBUILD_OUTFILE || "main.js",
+	// Production output is post-processed below before it is written.
+	write: !prod,
 });
 
+/**
+ * esbuild prefixes each bundled module with a `// <path>` marker relative to
+ * the build directory. For dependencies that path spells out the package
+ * manager's layout (`node_modules/.pnpm/antlr4ng@3.0.16/node_modules/...` under
+ * pnpm, `node_modules/antlr4ng/...` under npm), so the same sources bundled
+ * after a different install differ byte-for-byte. Obsidian's community review
+ * rebuilds the plugin and compares it to the released main.js; keeping only
+ * the path below the last `node_modules/` makes the bundle depend on sources
+ * and dependency versions alone.
+ */
+function normalizeModuleMarkers(code) {
+	return code.replace(/^\/\/ .*node_modules\/(.+)$/gm, "// node_modules/$1");
+}
+
 if (prod) {
-	await context.rebuild();
-	process.exit(0);
+	const result = await context.rebuild();
+	for (const file of result.outputFiles) {
+		writeFileSync(file.path, normalizeModuleMarkers(file.text));
+	}
+	await context.dispose();
 } else {
 	await context.watch();
 }

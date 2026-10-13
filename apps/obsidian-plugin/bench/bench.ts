@@ -70,7 +70,7 @@ const expectedPath = 'bench/expected.json';
 const update = process.env.BENCH_UPDATE === '1';
 let expected: Record<string, string> = {};
 try {
-	expected = JSON.parse(readFileSync(expectedPath, 'utf8'));
+	expected = JSON.parse(readFileSync(expectedPath, 'utf8')) as Record<string, string>;
 } catch {
 	/* first run */
 }
@@ -100,6 +100,7 @@ if (update) {
 	}
 }
 
-console.log(`ledger: ${ledger.length} chars, ${lines.length} lines`);
-console.log(`METRIC total_ms=${total.toFixed(3)}`);
-for (const [k, v] of Object.entries(metrics)) console.log(`METRIC ${k}_ms=${v.toFixed(3)}`);
+// Results go to stdout for the benchmark harness that parses METRIC lines.
+const report = [`ledger: ${ledger.length} chars, ${lines.length} lines`, `METRIC total_ms=${total.toFixed(3)}`];
+for (const [k, v] of Object.entries(metrics)) report.push(`METRIC ${k}_ms=${v.toFixed(3)}`);
+process.stdout.write(report.join('\n') + '\n');

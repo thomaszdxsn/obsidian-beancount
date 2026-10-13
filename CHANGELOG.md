@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.2
+
+Clears the Obsidian community review findings (#65) and rewrites the README
+as a getting-started guide.
+
+### Changed
+
+- The **Beancount outline** and **Beancount problems** sidebars use sentence
+  case in their titles.
+- The README opens with a quick start, ways to organize a ledger,
+  troubleshooting, and a privacy and permissions section listing every
+  program the plugin runs and what it reads and writes outside the vault
+  API, with screenshots of entry, validation, and the sidebars taken in a
+  demo vault. Development and release steps moved to `CONTRIBUTING.md`.
+
+### Fixed
+
+- `main.js` no longer depends on how dependencies were installed: bundled
+  module markers drop the package manager's store path
+  (`node_modules/.pnpm/…`), so rebuilding the same source after an npm or
+  pnpm install gives the same file. `antlr4ng`, the one bundled dependency,
+  is pinned to an exact version.
+- Lint findings from the review: errors thrown as `Error` objects, an
+  unchecked workspace lookup, redundant type assertions, and the unused code
+  and undescribed `eslint-disable` comment in the generated ANTLR parser
+  (now stripped by `pnpm generate`).
+
+### Added
+
+- `pnpm lint` runs `eslint-plugin-obsidianmd`'s recommended rules over the
+  repository; the release workflow runs it before building.
+- `CONTRIBUTING.md`.
+
 ## 0.2.1
 
 Performance on large ledgers; no behaviour changes.

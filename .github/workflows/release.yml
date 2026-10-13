@@ -37,6 +37,8 @@ jobs:
             exit 1
           fi
 
+      - run: pnpm lint
+
       - run: pnpm build
 
       - run: pnpm test

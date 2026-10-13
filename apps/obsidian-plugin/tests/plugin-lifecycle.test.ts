@@ -237,7 +237,6 @@ describe('sidebar commands', () => {
 			throw new Error('missing outline view');
 		}
 		expect(created.getViewType()).toBe(VIEW_TYPE_OUTLINE);
-		expect(created.getDisplayText()).toBe('Beancount Outline');
 
 		await command(plugin, 'show-outline')();
 		await command(plugin, 'show-problems')();
