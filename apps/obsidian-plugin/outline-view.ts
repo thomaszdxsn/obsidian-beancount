@@ -70,7 +70,7 @@ export class BeancountOutlineView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'Beancount Outline';
+		return 'Beancount outline';
 	}
 
 	getIcon(): string {

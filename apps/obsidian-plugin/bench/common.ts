@@ -113,7 +113,7 @@ export function fencedMarkdown(ledger: string): string {
 // ---------- measurement ----------
 export const hash = (v: unknown) =>
 	createHash('sha1')
-		.update(typeof v === 'string' ? v : JSON.stringify(v, (_k, x) => (x instanceof Set ? [...x] : x instanceof Map ? [...x] : x)))
+		.update(typeof v === 'string' ? v : JSON.stringify(v, (_k, x: unknown): unknown => (x instanceof Set ? [...x] : x instanceof Map ? [...x] : x)))
 		.digest('hex')
 		.slice(0, 16);
 

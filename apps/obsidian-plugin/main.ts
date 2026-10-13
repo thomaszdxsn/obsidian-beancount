@@ -605,10 +605,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	}
 
 	private async refreshBalanceViews(): Promise<void> {
-		const lookup = this.app.workspace.getLeavesOfType;
-		if (typeof lookup !== 'function') return;
+		const workspace = this.app.workspace;
+		if (typeof workspace.getLeavesOfType !== 'function') return;
 		const pending: Array<Promise<void>> = [];
-		for (const leaf of lookup.call(this.app.workspace, VIEW_TYPE_BALANCES)) {
+		for (const leaf of workspace.getLeavesOfType(VIEW_TYPE_BALANCES)) {
 			const view = leaf.view;
 			if (view instanceof BeancountBalancesView) pending.push(view.sync());
 		}

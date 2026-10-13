@@ -31,6 +31,10 @@ describe('esbuild production bundle', () => {
 			expect(bundle).not.toMatch(/\beval\s*\(/);
 			expect(bundle).not.toMatch(/new\s+Function\s*\(/);
 			expect(bundle).not.toMatch(/\bimport\s*\(/);
+			// Obsidian's review rebuilds main.js after its own install and diffs
+			// it against the release; module markers must not name the pnpm store.
+			expect(bundle).toMatch(/^\/\/ node_modules\/antlr4ng\//m);
+			expect(bundle).not.toMatch(/node_modules\/\.pnpm\//);
 			const moduleShim = { exports: {} as { default?: unknown } };
 			// Modules from the esbuild `external` list are provided by Obsidian
 			// at runtime (`obsidian` plus the CodeMirror/Lezer packages it

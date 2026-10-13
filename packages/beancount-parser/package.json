@@ -6,11 +6,11 @@
   "module": "index.ts",
   "types": "index.ts",
   "scripts": {
-    "generate": "antlr-ng -Dlanguage=TypeScript --generate-visitor --generate-listener false -o src/parser src/grammar/Beancount.g4",
+    "generate": "antlr-ng -Dlanguage=TypeScript --generate-visitor --generate-listener false -o src/parser src/grammar/Beancount.g4 && node scripts/tidy-generated.mjs src/parser",
     "test": "bun test"
   },
   "dependencies": {
-    "antlr4ng": "^3.0.16"
+    "antlr4ng": "3.0.16"
   },
   "devDependencies": {
     "@types/bun": "latest",

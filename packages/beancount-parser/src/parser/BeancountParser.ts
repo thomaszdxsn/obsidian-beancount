@@ -4,9 +4,6 @@ import { Token } from "antlr4ng";
 
 import { BeancountVisitor } from "./BeancountVisitor.js";
 
-// for running tests with parameters, TODO: discuss strategy for typed parameters in CI
-// eslint-disable-next-line no-unused-vars
-type int = number;
 
 
 export class BeancountParser extends antlr.Parser {
@@ -436,14 +433,14 @@ export class BeancountParser extends antlr.Parser {
                         {
                         this.state = 127;
                         localContext._key_value_line = this.key_value_line();
-                        localContext._meta.push(localContext._key_value_line!);
+                        localContext._meta.push(localContext._key_value_line);
                         }
                         break;
                     case 2:
                         {
                         this.state = 128;
                         localContext._tags_links_line = this.tags_links_line();
-                        localContext._tagLines.push(localContext._tags_links_line!);
+                        localContext._tagLines.push(localContext._tags_links_line);
                         }
                         break;
                     }
@@ -461,7 +458,7 @@ export class BeancountParser extends antlr.Parser {
                 {
                 this.state = 134;
                 localContext._posting = this.posting();
-                localContext._postings.push(localContext._posting!);
+                localContext._postings.push(localContext._posting);
                 }
                 }
                 this.state = 139;
@@ -848,7 +845,6 @@ export class BeancountParser extends antlr.Parser {
         let parentContext = this.context;
         let parentState = this.state;
         let localContext = new NumberContext(this.context, parentState);
-        let previousContext = localContext;
         let _startState = 24;
         this.enterRecursionRule(localContext, 24, BeancountParser.RULE_number, _p);
         let _la: number;
@@ -903,7 +899,6 @@ export class BeancountParser extends antlr.Parser {
                     if (this.parseListeners != null) {
                         this.triggerExitRuleEvent();
                     }
-                    previousContext = localContext;
                     {
                     this.state = 211;
                     this.errorHandler.sync(this);
@@ -1297,7 +1292,7 @@ export class BeancountParser extends antlr.Parser {
                     {
                     this.state = 263;
                     localContext._key_value_line = this.key_value_line();
-                    localContext._lines.push(localContext._key_value_line!);
+                    localContext._lines.push(localContext._key_value_line);
                     }
                     }
                 }

@@ -42,7 +42,7 @@ interface Plugin {
 }
 
 interface Editor {
-	view: { state: { doc: Text; field(): unknown }; visibleRanges: Array<{ from: number; to: number }> };
+	view: { state: { doc: Text; field(this: void): unknown }; visibleRanges: Array<{ from: number; to: number }> };
 	plugins: Plugin[];
 }
 
@@ -225,7 +225,7 @@ const expectedPath = 'bench/editor-expected.json';
 const update = process.env.BENCH_UPDATE === '1';
 let expected: Record<string, string> = {};
 try {
-	expected = JSON.parse(readFileSync(expectedPath, 'utf8'));
+	expected = JSON.parse(readFileSync(expectedPath, 'utf8')) as Record<string, string>;
 } catch {
 	/* first run */
 }
@@ -252,6 +252,7 @@ if (update) {
 		process.exit(1);
 	}
 }
-console.log(`ledger line ${ledgerLine}/${ledgerDoc.lines}, note line ${markdownLine}/${markdownDoc.lines}`);
-console.log(`METRIC editor_ms=${total.toFixed(3)}`);
-for (const [k, v] of Object.entries(metrics)) console.log(`METRIC ${k}_ms=${v.toFixed(3)}`);
+// Results go to stdout for the benchmark harness that parses METRIC lines.
+const report = [`ledger line ${ledgerLine}/${ledgerDoc.lines}, note line ${markdownLine}/${markdownDoc.lines}`, `METRIC editor_ms=${total.toFixed(3)}`];
+for (const [k, v] of Object.entries(metrics)) report.push(`METRIC ${k}_ms=${v.toFixed(3)}`);
+process.stdout.write(report.join('\n') + '\n');

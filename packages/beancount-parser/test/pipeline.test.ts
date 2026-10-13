@@ -254,19 +254,23 @@ describe("field mapping", () => {
   });
 });
 
-// src/parser/* is committed; it must match what `bun run generate` produces,
-// or grammar/script edits silently fail to take effect.
+// src/parser/* is committed; it must match what `bun run generate` produces
+// (antlr-ng, then scripts/tidy-generated.mjs), or grammar/script edits
+// silently fail to take effect.
 test("committed src/parser matches regenerated output of Beancount.g4", () => {
   const root = join(import.meta.dir, "..");
   const out = mkdtempSync(join(tmpdir(), "beancount-antlr-"));
   try {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-    const args: string[] = pkg.scripts.generate.split(/\s+/);
-    const outFlag = args.indexOf("-o");
+    const [antlr, tidy] = (pkg.scripts.generate as string).split("&&").map((step) => step.trim().split(/\s+/));
+    const outFlag = antlr!.indexOf("-o");
     expect(outFlag).toBeGreaterThan(0);
-    args[outFlag + 1] = out;
-    const gen = Bun.spawnSync([process.execPath, "x", ...args], { cwd: root });
+    antlr![outFlag + 1] = out;
+    const gen = Bun.spawnSync([process.execPath, "x", ...antlr!], { cwd: root });
     expect(gen.exitCode).toBe(0);
+    expect(tidy!.slice(0, -1)).toEqual(["node", "scripts/tidy-generated.mjs"]);
+    const tidied = Bun.spawnSync([process.execPath, tidy![1]!, out], { cwd: root });
+    expect(tidied.exitCode).toBe(0);
     const generated = readdirSync(out).filter((f) => f.endsWith(".ts")).sort();
     const committed = readdirSync(join(root, "src/parser")).filter((f) => f.endsWith(".ts")).sort();
     expect(committed).toEqual(generated);

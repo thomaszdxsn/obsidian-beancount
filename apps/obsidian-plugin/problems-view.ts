@@ -109,7 +109,7 @@ export class BeancountProblemsView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'Beancount Problems';
+		return 'Beancount problems';
 	}
 
 	getIcon(): string {

@@ -378,7 +378,7 @@ function interpolate(txn: Transaction, options: LedgerOptions): UnitLeg[] | stri
 	const missing = txn.postings.filter((posting) => !(posting.amount instanceof Amount));
 	if (missing.length > 1) return TOO_MANY;
 	if (missing.length === 0) return unitLegs(txn.postings);
-	const posting = missing[0] as Posting;
+	const posting = missing[0];
 	if (posting.cost || posting.priceAnnotation) return HAS_COST;
 	const residual = new Map<string, Decimal>();
 	for (const other of txn.postings) {

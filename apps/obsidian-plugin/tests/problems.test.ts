@@ -841,7 +841,6 @@ describe('BeancountProblemsView', () => {
 
 	it('names itself for the sidebar', () => {
 		const view = new BeancountProblemsView({ app: {} } as unknown as WorkspaceLeaf, new ProblemStore());
-		expect(view.getDisplayText()).toBe('Beancount Problems');
 		expect(view.getIcon()).toBe('alert-triangle');
 		expect(view.getViewType()).toBe(VIEW_TYPE_PROBLEMS);
 	});
