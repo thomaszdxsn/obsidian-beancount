@@ -1,47 +1,208 @@
-# Obsidian Beancount
+# Beancount for Obsidian
 
-Edit [Beancount](https://beancount.github.io/) ledgers in Obsidian: syntax
-highlighting, account/payee completion, directive snippets, posting auto-indent,
-decimal-point alignment, ledger formatting, date insert, outline, account
-balances, and `bean-check` validation on save.
+Keep your [Beancount](https://beancount.github.io/) plain-text accounting
+ledger in your Obsidian vault and edit it like code: syntax highlighting,
+completion for accounts, payees, commodities, tags and links, transaction
+snippets, decimal-point alignment, one-command formatting, an outline, an
+account-balances table, and `bean-check` validation every time you save.
 
-Desktop only — validation shells out to the `bean-check` executable.
+It works with standalone `.bean` / `.beancount` files and with
+```` ```beancount ```` code blocks inside ordinary notes, so a daily note can
+record the day's spending next to what you wrote about it.
 
-Plugin id: `beancount`. Source: `apps/obsidian-plugin`; `manifest.json` and
-`versions.json` live at the repository root.
+![Typing a transaction in a note: the txn snippet, payee completion that fills in the postings, and the amount aligning on the decimal point](https://raw.githubusercontent.com/thomaszdxsn/obsidian-beancount/main/docs/images/quick-entry.webp)
 
-## Requirements
+**Desktop only.** Validation runs Beancount's own `bean-check`; see
+[Privacy and permissions](#privacy-and-permissions) for exactly what the
+plugin runs and touches.
 
-- Obsidian desktop 1.7.2 or later (`minAppVersion`).
-- For save-time validation: Beancount's `bean-check`:
+## Quick start
 
-  ```sh
-  pip install beancount
-  ```
+About five minutes, from a fresh install to a validated ledger.
 
-  Then either leave **Bean-check executable** empty (uses `bean-check` on
-  `PATH`) or set `beanCheckPath` to the binary. Only a program named
-  `bean-check` is accepted.
+### 1. Install the plugin
 
-## Markdown fences
+Settings → **Community plugins** → **Browse**, search for **Beancount**,
+install it, then enable it.
 
-Ledger snippets in notes use a `beancount` or `bean` info-string (backticks
-or tildes; an extra suffix like `linenums` is ignored):
+To install by hand instead, download `main.js`, `manifest.json` and
+`styles.css` from a
+[GitHub release](https://github.com/thomaszdxsn/obsidian-beancount/releases)
+into `<Vault>/.obsidian/plugins/beancount/` and enable **Beancount** under
+Settings → Community plugins.
+
+### 2. Install Beancount (for validation)
+
+Everything except validation and Fava works without this step.
+
+```sh
+pip install beancount
+```
+
+Then run `bean-check --help` in a terminal to confirm it is on your `PATH`.
+
+> [!tip]
+> On macOS, Obsidian started from the Dock or Finder does not see the `PATH`
+> your shell sets up (pyenv, Homebrew, virtualenvs). If saving a ledger later
+> reports *bean-check not found*, run `which bean-check` and paste the full
+> path into Settings → Beancount → **Bean-check executable**.
+
+### 3. Write a first transaction
+
+The quickest start needs no new file type: open any note and paste a fenced
+ledger.
 
 ````markdown
 ```beancount
-2026-10-04 * "Coffee"
-  Expenses:Food   12.00 CNY
+2026-01-01 open Assets:Cash          CNY
+2026-01-01 open Expenses:Food        CNY
+
+2026-10-14 * "Corner café" "Coffee"
+  Expenses:Food   18.00 CNY
   Assets:Cash
 ```
 ````
 
-Saving a markdown note copies those fence bodies into a temporary `.bean`
-file, runs `bean-check`, and maps errors back onto the fence lines.
+Save the note (Ctrl/Cmd+S, or just wait for autosave). The fence is checked
+with `bean-check`; nothing is marked because the ledger is valid.
+
+### 4. Try the editor features
+
+Inside the fence:
+
+1. On a new line at column 0, type `txn` and pick the snippet. It inserts
+   today's date and puts the caret in the payee quotes.
+2. Type `Cor` — the payee **Corner café** is suggested. Picking it fills in
+   the postings of that payee's last transaction, with the amounts as Tab
+   stops.
+3. Type an account such as `Exp`; matching open accounts are suggested.
+4. In an amount, type `.` — the posting is re-spaced so its decimal point
+   sits on the separator column (column 50 by default), in line with the
+   other postings of that transaction.
+5. In the coffee transaction, change the posting `Assets:Cash` to
+   `Assets:Wallet` and save. The transaction's header line gets an underline
+   and a gutter dot; hover for bean-check's message (*Invalid reference to
+   unknown account 'Assets:Wallet'*), click the dot for a quick fix that adds
+   the missing `open` directive.
+6. Open the command palette (Ctrl/Cmd+P) and run **Beancount: Show account
+   balances**.
+
+![A note whose beancount fence uses an account the ledger never opened: the header line is underlined with a gutter dot, and the Problems sidebar shows bean-check's message](https://raw.githubusercontent.com/thomaszdxsn/obsidian-beancount/main/docs/images/validation.webp)
+
+### 5. Point the plugin at your main ledger
+
+If you already keep a Beancount ledger, put its files in the vault and set
+Settings → Beancount → **Entry ledger** to the vault path of the top-level file
+(for example `Finance/main.bean`). From then on:
+
+- saving any `.bean` file checks the whole `include` chain from that entry;
+- fences in notes are checked *as if included after it*, so they can use the
+  accounts the main ledger opens;
+- **Show account balances** reports the full ledger.
+
+## Ways to organize a ledger
+
+| Setup | Good for | How validation works |
+| --- | --- | --- |
+| Fences in notes | Trying the plugin; journaling expenses alongside notes | Each note's fences are checked together on save. |
+| `.bean` / `.beancount` files | An existing ledger; larger books | Each saved file is checked on its own. |
+| Entry ledger plus either of the above | Most real setups | `.bean` saves check the whole include chain; fences are checked against the entry's opens. |
+
+A typical vault:
+
+```
+Finance/
+  main.bean          ; options, plus: include "accounts.bean"  include "2026/*.bean"
+  accounts.bean      ; open / close directives
+  2026/
+    01.bean
+    02.bean
+Daily/
+  2026-10-14.md      ; prose plus ```beancount fences for the day
+```
+
+with **Entry ledger** set to `Finance/main.bean`.
+
+Fences are checked against the entry ledger but are not part of it:
+Beancount cannot `include` a markdown note, so the balances view and Fava
+show only what the `.bean` files contain.
+
+`.bean` files can't be created from Obsidian's **New note** (it always makes
+a `.md`). Create them from your file manager or a terminal; once they exist,
+Obsidian opens them in its editor with full Beancount highlighting. Use
+Source mode for them — Live Preview can still render embeds and checkboxes.
+
+## Everyday features
+
+**Writing entries**
+
+- Completion for accounts (still-open ones only, with open date and allowed
+  currencies), payees, narrations (opt-in), commodities, `#tags` and `^links`,
+  drawn from every ledger file and fence in the vault. Frequently and
+  recently picked items rank first.
+- Directive snippets at column 0: `txn`, `open`, `balance`, `pad`, and the
+  rest of vscode-beancount's set. Tab walks the stops.
+- **Insert today's date** writes `YYYY-MM-DD` at the cursor.
+- Enter inside an entry indents the next posting by two spaces.
+- Optional pinyin-initial matching: `cy` finds `餐饮`.
+
+**Keeping it tidy**
+
+- Typing `.` in an amount aligns that transaction on the separator column
+  (default 50, shown as a dotted ruler in ledger files).
+- **Align decimal points** aligns the current transaction or the selection;
+  **Align amounts on save** does every transaction in the file.
+- **Format ledger** normalizes indentation and spacing and aligns every
+  transaction, in one undo step. A syntax error stops it and names the line.
+- Transactions fold to their header line.
+
+**Checking**
+
+- `bean-check` runs on save and when a ledger is opened. Errors appear as
+  underlines with the message in a tooltip and a gutter dot that offers quick
+  fixes: mark a `!` transaction cleared, add the missing balancing posting,
+  or add an `open` directive for an unknown account.
+- **Show problems** lists the latest report by file, including include-chain
+  files that are not open.
+- Inline hints while typing, before any save: the amount Beancount will infer
+  for the posting that omits it, `≠ 0` on transactions that do not balance,
+  the difference on `balance` assertions, and markers on `!` transactions.
+
+**Navigating and reporting**
+
+- **Show outline**: `*` sections, date groups, transactions, and `open` /
+  `close` / `balance` directives; click to jump.
+- Cmd/Ctrl-click the path in `include "…"` to open that file.
+- **Show account balances**: per-account balance per currency, following
+  `include`, with omitted amounts interpolated, `pad` applied, and
+  Beancount's tolerance rules.
+- **Start Fava** runs [Fava](https://beancount.github.io/fava/) on the entry
+  ledger and opens it in your browser.
+
+![A ledger file with the outline sidebar (sections, dates, transactions) and the account balances table](https://raw.githubusercontent.com/thomaszdxsn/obsidian-beancount/main/docs/images/ledger-sidebars.webp)
+
+Every feature's exact behaviour and edge cases are documented in the
+[feature reference](https://github.com/thomaszdxsn/obsidian-beancount/blob/main/apps/obsidian-plugin/README.md#features).
+
+## Commands
+
+Run from the command palette; none has a default hotkey. Bind the ones you
+use under Settings → Hotkeys.
+
+| Command | What it does |
+| --- | --- |
+| Align decimal points | Current transaction block, or the selection when there is one. |
+| Format ledger | Whole `.bean` / `.beancount` file, or each ```beancount / ```bean fence in any other buffer. A syntax error names the line and changes nothing. |
+| Insert today's date | `YYYY-MM-DD` at the cursor. |
+| Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
+| Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
+| Show account balances | Sidebar table of per-account unit balances, one line per currency. Uses the entry ledger when set, otherwise the active ledger or the active note's fences, and follows `include`. |
+| Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
+| Stop Fava | Kills the Fava process started by this plugin. |
 
 ## Settings
 
-Configured in **Settings → Beancount**. Keys match `data.json`.
+Settings → Beancount. Keys match the plugin's `data.json`.
 
 | Setting | Key | Default | Description |
 | --- | --- | --- | --- |
@@ -49,8 +210,9 @@ Configured in **Settings → Beancount**. Keys match `data.json`.
 | Instant alignment | `instantAlignment` | on | Typing `.` in a posting amount aligns that transaction block and leaves the caret after the point. |
 | Separator column | `separatorColumn` | `50` | 1-based display column of the decimal point for instant alignment (wide accounts still push past it). |
 | Show separator ruler | `showRuler` | on | Dotted vertical line at the separator column in `.bean` / `.beancount` files. |
-| Bean-check executable | `beanCheckPath` | empty | Path to `bean-check`; empty runs `bean-check` from `PATH`. |
+| Bean-check executable | `beanCheckPath` | empty | Path to `bean-check`; empty runs `bean-check` from `PATH`. Only a program named `bean-check` is accepted. |
 | Entry ledger | `entryLedger` | empty | Vault path of the ledger entry file (e.g. `main.bean`). |
+| Balance inlay hints | `inlayHints` | on | Show the single-commodity difference (asserted minus accumulated) at the end of `balance` lines. Hidden when an entry ledger is set, because postings outside the file are unknown. |
 | Complete payees | `completePayee` | on | Suggest historical payees in the first quoted field. |
 | Autofill payee postings | `payeeAutofill` | on | Picking a payee on an entry with no postings yet inserts the postings of that payee's latest transaction, amounts as Tab stops. |
 | Complete narrations | `completeNarration` | off | Suggest vault narrations in the second quoted field. |
@@ -61,222 +223,91 @@ Configured in **Settings → Beancount**. Keys match `data.json`.
 | Incomplete transactions (!) | `flagWarnings["!"]` | warning | Marker style for `!` transactions (`none` / `warning` / `error`). |
 | Cleared transactions (*) | `flagWarnings["*"]` | none | Marker style for `*` / `txn` transactions. |
 
-**`entryLedger` behaviour**
+**What the entry ledger changes**
 
 - Saving a `.bean` / `.beancount` file checks that entry's whole `include`
   chain.
-- Saving a markdown note with ` ```beancount ` / ` ```bean ` fences checks
-  those fences: with an entry ledger they are validated as if included after
-  it (opens and accounts apply); without one, the fences are checked on their
-  own.
+- Saving a markdown note with ```beancount / ```bean fences checks those
+  fences as if included after the entry (its opens and accounts apply);
+  without an entry ledger, the fences are checked on their own.
 - Empty: each saved ledger file (or note's fences) is validated alone.
 
-A missing or rejected `bean-check` shows:
+## Troubleshooting
 
-> bean-check not found — install beancount (`pip install beancount`) or set
-> the bean-check path in the plugin settings.
+**"bean-check not found — install beancount …"**
+The plugin could not start `bean-check`. Install Beancount, or set
+**Bean-check executable** to the full path printed by `which bean-check`
+(`where bean-check` on Windows). The setting must point at a file named
+`bean-check` (or `bean-check.exe`); wrappers such as `python -m beancount`
+are refused, so the setting cannot run some other program on your ledger.
 
-## Commands
+**Nothing is marked after saving.**
+Validation runs on save and on open, not on every keystroke. Check that the
+file ends in `.bean` / `.beancount`, or that the fence's info string is
+`beancount` or `bean`. If `bean-check` itself crashes, a Notice shows the
+first line of its output.
 
-| Command | Notes |
-| --- | --- |
-| Align decimal points | Current transaction block, or the selection when there is one. No default hotkey; bind one under Settings → Hotkeys. |
-| Format ledger | Whole `.bean` / `.beancount` file, or each ```beancount / ```bean fence in any other buffer. A syntax error names the line and changes nothing. No default hotkey. |
-| Insert today's date | `YYYY-MM-DD` at the cursor. No default hotkey; bind one under Settings → Hotkeys. |
-| Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
-| Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
-| Show account balances | Sidebar table of per-account unit balances, one line per currency. Uses the entry ledger when set, otherwise the active ledger or the active note's fences, and follows `include`. |
-| Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
-| Stop Fava | Kills the Fava process started by this plugin. |
+**Fences report unknown accounts that my main ledger opens.**
+Set **Entry ledger**; fences are then checked against it.
 
-## Features
+**Balance hints disappeared.**
+They are hidden while an entry ledger is set: with an include chain, the
+totals in one file are not the account's balance. Use **Show account
+balances** instead.
 
-- **Beancount syntax highlighting**: `beancount`/`bean` fenced code blocks get
-  highlighting through a CodeMirror stream mode ported from
-  `beancount.tmLanguage`. Inside those fences, Cmd+/ toggles `; ` line
-  comments (Obsidian's own command would wrap `%%` and break the ledger),
-  `{` `[` `(` and `'` auto-close (`"` does not — narration uses it), and
-  `;#region` / `;#endregion` fold. Matching-bracket highlight is not
-  available: Obsidian paints the fence with a CM5 overlay, so the CM6 tree
-  has no inner bracket nodes.
-- **Ledger files**: `.bean` / `.beancount` files open in the markdown editor
-  but are painted whole with the same beancount mode, in the monospace font,
-  with markdown presentation reset (headings, tag pills, emphasis, links, list
-  hanging indent; the org `*` shows as text). Live Preview widgets that
-  replace text (embeds, checkboxes) can still render; Source mode avoids them.
-  A dotted ruler marks the separator column (`showRuler`).
-- **Transaction folding**: in ledger files and fences, each transaction folds
-  to its header line, hiding metadata and postings through the last posting.
-  Every entry is parsed on its own, so a syntax error while typing drops only
-  that entry's fold.
-- **Include links**: Mod-click the quoted path of `include "…"` (ledger files
-  and fences) to open it; paths resolve relative to the including file, a
-  glob opens its first match, a missing target raises a Notice.
-- **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
-  editor suggests still-open account names found in the vault's ledger text:
-  whole `.bean` / `.beancount` files, and only the `beancount` / `bean` fences
-  of markdown notes (prose such as `PG_DATA_DIR:-x` never becomes a name).
-  Names are extracted per file with a regex, cached, and invalidated when files are
-  created, modified, deleted or renamed. Segments after the capitalized root
-  may hold non-ASCII letters and CJK middle dots (`Expenses:餐饮:午饭`,
-  `Expenses:カード・ローン`); other punctuation and symbols (`，`, `：`, `☕`) end a
-  name, so CJK prose does not index whole clauses.
-  Suggestions rank prefix matches first, then case-insensitive subsequence
-  matches; within a rank, names picked more often / more recently float to
-  the top. Pick counts persist in the plugin `data.json` (`completionUsage`);
-  a corrupt bag is ignored so the plugin still starts.
-  An account with a `close` directive
-  is omitted unless a later `open` reopens it. The popup shows the latest
-  open date and constrained currencies when those directives are present.
-  Balances are not computed here: doing it in JS would reimplement
-  beancount's booking, and a Python subprocess would add latency on every
-  index refresh.
-- **Account hover**: hovering a complete account name shows an info card with
-  the latest open/close dates and constrained currencies when those directives
-  are in the vault. Names the vault has never seen produce no tooltip. Closed
-  accounts still hover — the card is how their close date is visible.
-  Balances are not computed here, for the same reason as completion.
-- **Payee completion**: typing the first quoted field of a transaction line
-  (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
-  of every historical transaction. Ranking matches account completion
-  (prefix, then subsequence, then frecency). One vault scan feeds both
-  completion indexes. Picking a payee closes an unclosed payee field. With
-  `payeeAutofill` on, picking a payee on an entry
-  that has no postings yet inserts the postings of that payee's latest
-  transaction; a two-leg entry keeps one amount and leaves the other leg
-  implicit, and each amount is a Tab stop with the first one selected.
-- **Pinyin matching**: with `pinyinMatching` on, an ASCII query also matches
-  the pinyin initials of CJK names in account, payee and narration completion
-  (`Expenses:cy` → `Expenses:餐饮`), ranked direct prefix, pinyin prefix,
-  direct subsequence, pinyin subsequence. Initials data comes from
-  vscode-beancount (MIT).
-- **Posting hints**: with inlay hints on, the one posting that omits its amount
-  shows the amount beancount will infer (only for 3+ postings or several
-  commodities), aligned on the decimal point; a transaction whose written
-  amounts do not sum to zero beyond beancount's default tolerance (half a unit
-  of the coarsest written precision) shows `≠ 0: …` on its header. Cost,
-  price and arithmetic suppress both.
-- **Directive snippets**: typing a directive prefix at column 0 (`txn`, `open`,
-  `balance`, …) offers the vscode-beancount templates. `txn` expands to
-  `YYYY-MM-DD * "" ""` with the caret in the payee quotes, so payee completion
-  still runs. Tab walks `$1`-style stops; today's date fills `$CURRENT_*`.
-- **Posting auto-indent**: pressing Enter inside a beancount entry opens the
-  next line already indented two spaces — the first posting under a
-  transaction header, or the next posting/metadata line while the entry
-  continues. Enter everywhere else — prose, blank lines, an open completion
-  popover — behaves exactly as before.
-- **Decimal point alignment**: the "Align decimal points" command lines up the
-  decimal points of the posting amounts in the transaction block at the cursor
-  — or in the selection, when there is one. Each block gets its own column:
-  the amounts' `sign + integer` blocks right-align at it (integers at the
-  units place) and cost/price annotations stay put. A line inside a multi-line
-  string is not a posting, even if it looks like one. An optional setting walks
-  every block of each markdown/beancount file the same way whenever it is
-  saved. Instant alignment (on by default) intercepts `.` in a posting amount,
-  aligns that transaction block onto the separator column (default 50), and
-  leaves the caret just after the point — one undo restores the insert.
-  Alignment pads with spaces, so `.bean` / `.beancount` editors switch to the
-  monospace font (`--font-monospace`); fences are already code blocks.
-- **Format ledger**: the "Format ledger" command rewrites a `.bean` /
-  `.beancount` file, or each ```beancount / ```bean fence in any other buffer
-  (a markdown note, an untitled file), in one undo step. Postings and directive
-  metadata use the two-space indent; posting metadata is indented one level
-  further. Header lines collapse runs of spaces, strings and `;` comments keep
-  their text (a `"` in a comment does not start a string), and each
-  transaction's decimal points are aligned. A syntax error raises a Notice
-  with the document line and changes nothing.
-- **Date quick-insert**: the "Insert today's date" command drops today's date
-  — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
-  selection when there is one. It has no default hotkey; bind one under
-  Settings → Hotkeys.
-- **Save-time validation**: saving a `.bean` or `.beancount` file runs
-  `bean-check` (debounced) and marks every line it complains about — a zigzag
-  underline whose tooltip is the message, plus a dot in the gutter. The
-  message is parsed from stderr, which is the whole report: the exit code is
-  not consulted. Markdown notes with ```beancount / ```bean fences are
-  checked the same way: fence bodies are copied to a temp `.bean` file and
-  error lines are mapped back onto the fence. Settings hold the executable
-  path (empty uses `bean-check` from PATH; a missing one prompts to
-  `pip install beancount`; only a `bean-check` binary is accepted) and an
-  optional entry ledger. A `.bean` save checks that entry's whole `include`
-  chain; a markdown save includes the entry first so the fence is checked
-  against its opens and accounts. Without an entry ledger each saved file
-  (or note's fences) is validated on its own. Unloading the plugin cancels
-  pending timers and drops in-flight `bean-check` results: they do not mark
-  the editor or raise a Notice. The process is not killed; only the report
-  is discarded. Opening a ledger file, or a note with beancount fences,
-  validates it too, unless its target has not changed since the last report.
-- **Outline**: the "Show outline" command opens a sidebar of the active
-  ledger. Org-mode `*` section titles nest the same way vscode-beancount's
-  DocumentSymbolProvider does (including `_` fillers for skipped levels).
-  Dated transactions, `open`, `close` and `balance` directives hang under
-  consecutive date groups; clicking a row jumps the editor to that line.
-- **Account balances**: **Show account balances** opens a sidebar table of
-  each account's units, one line per currency, sorted by account. Zero
-  balances are hidden. The configured entry ledger wins; otherwise the
-  active `.bean` / `.beancount` file, or the `beancount` / `bean` fences of
-  the active note. `include` is followed, including `**` globs (zero or more
-  directories, hidden names skipped unless the pattern asks for them). A
-  posting that omits its amount is filled from the other postings' weights
-  (cost before price; `{per # total}` is units × per + sign(units) × total;
-  `{{ }}` and `@@` use the total) and quantized like beancount 2.3.5
-  (`inferred_tolerance_default`, `inferred_tolerance_multiplier`, and
-  `infer_tolerance_from_cost`). `pad` plus a later `balance` on that account
-  or a child inserts the start-of-day difference when it exceeds the balance
-  tolerance (explicit `~ tol`, or inferred from the balance number's
-  exponent); a difference inside the tolerance still consumes that currency.
-  Only the first balance of each currency consumes a pad. If a file fails to
-  parse, or a transaction cannot be interpolated, the view shows the error
-  instead of numbers. Sums use the literal spelling when the parser kept it,
-  so `10.00` and amounts past 2^53 stay exact. Each amount renders at the
-  sum's own scale.
+**Embeds or checkboxes appear inside a `.bean` file.**
+Switch that tab to Source mode. Live Preview can render widgets that
+replace ledger text.
 
-## Install
+**Fava does not start.**
+Install it (`pip install fava`), or set **Fava executable** as for
+bean-check. If the port is taken, change **Fava port**.
 
-Install **Beancount** from Settings → Community plugins, or copy
-`apps/obsidian-plugin/main.js`, the root `manifest.json`, and
-`apps/obsidian-plugin/styles.css` (all three are attached to each GitHub
-release) into:
+## Privacy and permissions
 
-```
-<Vault>/.obsidian/plugins/beancount/
-```
+The plugin never sends data over the network and has no telemetry. Because
+validation and Fava need native programs, it also uses Node.js APIs beyond
+Obsidian's vault API. All of it is listed here.
 
-Enable **Beancount** under Settings → Community plugins.
+**Runs programs** (`child_process`)
 
-## Development
+- `bean-check <ledger>`, when a ledger file or a note with fences is saved or
+  opened. Only a program named `bean-check` is accepted.
+- `fava -H 127.0.0.1 -p <port> <ledger>`, only when you run **Start Fava** or
+  enable **Run Fava on activate**. Only a program named `fava` is accepted;
+  it listens on localhost only, and the plugin stops it when it unloads.
+- Programs are started directly, never through a shell, and the ledger path
+  must resolve inside the vault.
 
-pnpm + Turborepo. Node `>=22.12.0`.
+**Reads and writes files outside the vault API** (`fs`, `os`)
 
-```sh
-pnpm install
-pnpm build   # type-check + production bundle → apps/obsidian-plugin/main.js
-pnpm test
-pnpm dev     # watch mode
-```
+- Resolves the vault's real path so the entry ledger and include paths
+  cannot point outside the vault.
+- To validate a note's fences, writes them to a temporary `.bean` file in
+  the system temp folder, runs `bean-check` on it, and deletes it.
 
-Set `ESBUILD_OUTFILE` to write the bundle into a test vault's
-`.obsidian/plugins/beancount/main.js`; copy the root `manifest.json` and
-`apps/obsidian-plugin/styles.css` next to it.
+**Lists vault files** (`vault.getFiles`)
 
-`pnpm --filter beancount-obsidian bench` runs the performance benchmarks on a
-generated 16.6k-line ledger: `bench/bench.ts` times whole-document work
-(parse, format, align, balances, indexes, outline) and `bench/editor.ts` the
-editor path (keystrokes, scrolling, the `.` and Enter keymaps, re-indexing on
-save). Each workload's output is hashed against `bench/expected.json` /
-`bench/editor-expected.json`, so a change in behaviour fails the run;
-`BENCH_UPDATE=1` rewrites them after an intended change.
+- To build the completion indexes (accounts, payees, commodities, tags,
+  links) from `.bean` / `.beancount` files and the beancount fences of
+  notes; to resolve `include` paths; and to find where a quick fix should
+  add an `open` directive. Indexes stay in memory.
 
-## Release
+**Changes your files only when you ask**
 
-From `apps/obsidian-plugin`, `npm version <x.y.z>` bumps `package.json` and
-writes the version into the root `manifest.json` / `versions.json`. Push a tag
-equal to that version (no `v` prefix); `.github/workflows/release.yml` builds,
-tests, and drafts a GitHub release with `main.js`, `manifest.json`, and
-`styles.css`. Publish the draft to ship it.
+- Running **Format ledger** or **Align decimal points**, typing `.` with
+  instant alignment on, saving with **Align amounts on save** on, picking a
+  completion, or applying a quick fix.
+- The plugin's own `data.json` stores your settings and completion pick
+  counts used for ranking.
 
-See [CHANGELOG.md](./CHANGELOG.md) for release notes.
+## Contributing
+
+Bug reports and pull requests are welcome; see
+[CONTRIBUTING.md](https://github.com/thomaszdxsn/obsidian-beancount/blob/main/CONTRIBUTING.md)
+for the development setup, checks, and release process. Release notes are in
+[CHANGELOG.md](https://github.com/thomaszdxsn/obsidian-beancount/blob/main/CHANGELOG.md).
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](https://github.com/thomaszdxsn/obsidian-beancount/blob/main/LICENSE)
