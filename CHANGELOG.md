@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 Clears the Obsidian community review findings (#65) and rewrites the README
 as a getting-started guide.
