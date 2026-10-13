@@ -5,13 +5,19 @@
     "build": "pnpm -r build",
     "dev": "turbo dev",
     "test": "turbo test",
+    "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {
-    "@repo/eslint-config": "workspace:*",
+    "@eslint/js": "9.39.5",
+    "@eslint/json": "0.14.0",
     "@repo/typescript-config": "workspace:*",
+    "eslint": "9.39.5",
+    "eslint-plugin-obsidianmd": "0.4.2",
     "prettier": "^3.1.1",
-    "turbo": "2.11.5"
+    "turbo": "2.11.5",
+    "typescript": "5.3.3",
+    "typescript-eslint": "8.71.2"
   },
   "packageManager": "pnpm@9.15.6",
   "engines": {

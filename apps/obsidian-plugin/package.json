@@ -20,8 +20,6 @@
 		"@lezer/highlight": "^1.2.5",
 		"@repo/beancount-parser": "workspace:*",
 		"@types/node": "^16.11.6",
-		"@typescript-eslint/eslint-plugin": "5.29.0",
-		"@typescript-eslint/parser": "5.29.0",
 		"@vitest/coverage-istanbul": "^5.0.2",
 		"builtin-modules": "3.3.0",
 		"esbuild": "0.25.10",
