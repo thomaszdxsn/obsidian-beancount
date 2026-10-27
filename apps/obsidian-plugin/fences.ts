@@ -200,8 +200,8 @@ function createLedgerDoc(kind: LedgerKind, hostLines: readonly string[]): Ledger
 		kind === 'ledger-file'
 			? [{ hostStartLine: 0, hostIndent: 0, lines: hostLines }]
 			: fencesOfLines(hostLines);
-	const source = hostLines.join('\n');
 	let mask: readonly string[] | null | undefined;
+	let length: number | undefined;
 	const lineIsLedger = (hostLine0: number): boolean =>
 		kind === 'ledger-file' || regionContainsLine(regions, hostLine0);
 
@@ -211,7 +211,15 @@ function createLedgerDoc(kind: LedgerKind, hostLines: readonly string[]): Ledger
 		lineIsLedger,
 		containsPos(pos: number): boolean {
 			if (pos < 0) return false;
-			const clamped = pos > source.length ? source.length : pos;
+			if (kind === 'ledger-file') return true;
+			if (length === undefined) {
+				length = 0;
+				for (let i = 0; i < hostLines.length; i += 1) {
+					length += hostLines[i].length;
+					if (i + 1 < hostLines.length) length += 1;
+				}
+			}
+			const clamped = pos > length ? length : pos;
 			return lineIsLedger(lineIndexAt(hostLines, clamped));
 		},
 		masked(): readonly string[] | null {
@@ -238,15 +246,48 @@ function createLedgerDoc(kind: LedgerKind, hostLines: readonly string[]): Ledger
 	};
 }
 
+function lazyLedgerFileDoc(source: FenceDoc): LedgerDoc {
+	let inner: LedgerDoc | undefined;
+	const materialize = (): LedgerDoc => {
+		inner ??= createLedgerDoc('ledger-file', docLines(source));
+		return inner;
+	};
+	return {
+		kind: 'ledger-file',
+		get regions() {
+			return materialize().regions;
+		},
+		lineIsLedger() {
+			return true;
+		},
+		containsPos(pos: number) {
+			return pos >= 0;
+		},
+		masked() {
+			return materialize().masked();
+		},
+		ledgerSource() {
+			return materialize().ledgerSource();
+		},
+		tempLedger(includePath?: string) {
+			return materialize().tempLedger(includePath);
+		},
+	};
+}
+
 /**
  * Regions and queries for a buffer. A CodeMirror `Text` is scanned once and
- * reused; a vault string is not cached.
+ * reused; a vault string is not cached. A ledger file does not copy lines
+ * until a query needs the region text.
  */
 export function ledgerDoc(kind: LedgerKind, source: string | FenceDoc): LedgerDoc {
 	if (typeof source === 'string') return createLedgerDoc(kind, splitLines(source));
 	let entry = ledgerByDoc.get(source);
 	if (entry === undefined || entry.kind !== kind) {
-		entry = { kind, doc: createLedgerDoc(kind, docLines(source)) };
+		entry = {
+			kind,
+			doc: kind === 'ledger-file' ? lazyLedgerFileDoc(source) : createLedgerDoc(kind, docLines(source)),
+		};
 		ledgerByDoc.set(source, entry);
 	}
 	return entry.doc;

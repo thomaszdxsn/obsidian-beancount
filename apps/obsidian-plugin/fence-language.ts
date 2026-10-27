@@ -61,8 +61,8 @@ interface FenceBodyLines {
 	endLine: number;
 }
 
-function fenceBodies(text: string): FenceBodyLines[] {
-	return ledgerDoc('fenced', text).regions.map((region) => ({
+function fenceBodies(source: string | { toString(): string; iterLines?(): { next(): { done?: boolean }; value: string } }): FenceBodyLines[] {
+	return ledgerDoc('fenced', source).regions.map((region) => ({
 		startLine: region.hostStartLine,
 		endLine: region.hostStartLine + region.lines.length,
 	}));
@@ -110,9 +110,12 @@ function mapPos(pos: number, changes: readonly CommentChange[]): number {
  * Whether `pos` sits on a `beancount`/`bean` fence body line — not the
  * opening or closing marker, and not prose or a different language.
  */
-export function posInBeancountFence(text: string, pos: number): boolean {
+export function posInBeancountFence(
+	source: string | { toString(): string; iterLines?(): { next(): { done?: boolean }; value: string } },
+	pos: number
+): boolean {
 	if (pos < 0) return false;
-	return ledgerDoc('fenced', text).containsPos(pos);
+	return ledgerDoc('fenced', source).containsPos(pos);
 }
 
 /**
@@ -120,10 +123,10 @@ export function posInBeancountFence(text: string, pos: number): boolean {
  * nothing outside so markdown's own comments/brackets stay in charge.
  */
 export function fenceLanguageData(
-	text: string,
+	source: string | { toString(): string; iterLines?(): { next(): { done?: boolean }; value: string } },
 	pos: number
 ): readonly [typeof BEANCOUNT_LANGUAGE_DATA] | readonly [] {
-	return posInBeancountFence(text, pos) ? [BEANCOUNT_LANGUAGE_DATA] : [];
+	return posInBeancountFence(source, pos) ? [BEANCOUNT_LANGUAGE_DATA] : [];
 }
 
 /**
@@ -242,7 +245,7 @@ export function fenceLanguageExtension(): Extension {
 	return [
 		Prec.high(keymap.of([{ key: 'Mod-/', run: commentRun }])),
 		Prec.high(
-			EditorState.languageData.of((state, pos) => fenceLanguageData(state.doc.toString(), pos))
+			EditorState.languageData.of((state, pos) => fenceLanguageData(state.doc, pos))
 		),
 		foldService.of((state, lineStart, lineEnd) => {
 			if (!REGION_START.test(state.doc.sliceString(lineStart, lineEnd))) return null;
