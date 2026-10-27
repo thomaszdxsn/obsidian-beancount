@@ -118,8 +118,11 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 /** Delay before on-save alignment, so a burst of edits aligns once. */
 const ALIGN_DEBOUNCE_MS = 500;
 
-const MISSING_BEAN_CHECK_NOTICE =
-	'bean-check not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.';
+const MISSING_BEAN_CHECK_REASON =
+	'not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.';
+const MISSING_BEAN_CHECK_NOTICE = `bean-check ${MISSING_BEAN_CHECK_REASON}`;
+const TEMP_LEDGER_NOTICE = 'bean-check could not write the temporary ledger';
+const TEMP_LEDGER_REASON = 'could not write the temporary ledger';
 
 const MISSING_FAVA_NOTICE =
 	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
@@ -438,7 +441,12 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * old per-file targets would never be replaced by a later run.
 	 */
 	private problemsEntryLedger = '';
-	/** Notice texts shown this session: autosave must not stack them. */
+	/** bean-check path the notice dedupe was last reset under. */
+	private problemsBeanCheckPath = '';
+	/**
+	 * Notice texts shown since the last quiet run (or a settings reset).
+	 * Autosave must not stack the same toast; a later clean run may show it again.
+	 */
 	private readonly noticesShown = new Set<string>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
 	private readonly balanceInlays = new BalanceInlayController(this);
@@ -481,6 +489,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		this.settings = mergeSettings(stored);
 		this.problemsEntryLedger = this.settings.entryLedger;
+		this.problemsBeanCheckPath = this.settings.beanCheckPath;
 		this.usage = CompletionUsage.parse(stored, Date.now, () => {
 			void this.writePluginData();
 		});
@@ -658,11 +667,22 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	async saveSettings(): Promise<void> {
 		const entryLedger = this.settings.entryLedger;
 		const entryChanged = entryLedger !== this.problemsEntryLedger;
+		const beanCheckPath = this.settings.beanCheckPath;
+		const beanCheckChanged = beanCheckPath !== this.problemsBeanCheckPath;
 		await this.writePluginData();
+		if (beanCheckChanged) {
+			this.problemsBeanCheckPath = beanCheckPath;
+			this.noticesShown.clear();
+		}
 		if (entryChanged) {
 			this.problemsEntryLedger = entryLedger;
+			this.noticesShown.clear();
 			this.problems.clear();
 			this.lastValidatedMtime.clear();
+			// Stored Problems are gone; underlines those targets painted must
+			// go with them. Flag markers are not bean-check rows — leave them.
+			// Do not schedule a run: typing in the setting is not a save.
+			this.dropOwnedBeanCheckMarkers();
 			// A ledger run that started under the previous entry ledger must
 			// not republish those rows when it finishes. Markdown fences are
 			// their own target either way, so an in-flight note may still report.
@@ -1019,6 +1039,26 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (seq !== undefined) this.validateSeq.set(path, seq + 1);
 	}
 
+	/**
+	 * Strip bean-check underlines from open editors this plugin marked, leaving
+	 * flag markers. Used when stored Problems are dropped for a new entry ledger.
+	 */
+	private dropOwnedBeanCheckMarkers(): void {
+		const owned = [...this.markOwners.keys()];
+		this.markOwners.clear();
+		const filesByPath = new Map<string, TFile>();
+		for (const entry of this.app.vault.getFiles()) {
+			if (!filesByPath.has(entry.path)) filesByPath.set(entry.path, entry);
+		}
+		for (const path of owned) {
+			const vaultFile = filesByPath.get(path);
+			if (!vaultFile) continue;
+			for (const editor of openEditorsFor(this.app, vaultFile)) {
+				setEditorLineDiagnostics(editor, flagsFor(path, editor.getValue()));
+			}
+		}
+	}
+
 
 	private scheduleAlign(file: TFile): void {
 		window.clearTimeout(this.alignTimers.get(file.path));
@@ -1078,7 +1118,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 				fences = extractBeancountFences(text);
 				if (fences.length === 0) {
-					this.markErrors(target, [], root);
+					if (!this.markErrors(target, [], root)) this.noticesShown.clear();
 					return;
 				}
 			}
@@ -1087,14 +1127,18 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			// it must not name some other program to execute on the ledger.
 			const command = this.settings.beanCheckPath.trim() || 'bean-check';
 			if (!isBeanCheckBinary(command)) {
-				this.notify(MISSING_BEAN_CHECK_NOTICE);
+				this.recordRunFailure(target, MISSING_BEAN_CHECK_NOTICE, MISSING_BEAN_CHECK_REASON);
 				return;
 			}
 			const entry = this.settings.entryLedger.trim();
 			// Newlines/quotes in the setting would break out of the generated
 			// `include "..."` line; reject them the same way as a path escape.
 			if (entry && !isSafeIncludePath(entry)) {
-				this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+				this.recordRunFailure(
+					target,
+					`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`,
+					`entry ledger must be a vault file, not "${clipText(entry)}"`,
+				);
 				return;
 			}
 			const confined = resolve(root, entry || file.path);
@@ -1103,7 +1147,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			// at some other file entirely.
 			const rel = relative(root, confined);
 			if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-				this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`);
+				this.recordRunFailure(
+					target,
+					`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`,
+					`entry ledger must be a vault file, not "${clipText(entry || file.path)}"`,
+				);
 				return;
 			}
 
@@ -1113,7 +1161,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 					const real = realpathSync(confined).replace(/\\/g, '/');
 					const realRel = relative(root, real);
 					if (realRel === '' || realRel === '..' || realRel.startsWith('..' + sep) || isAbsolute(realRel)) {
-						this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+						this.recordRunFailure(
+							target,
+							`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`,
+							`entry ledger must be a vault file, not "${clipText(entry)}"`,
+						);
 						return;
 					}
 					includePath = real;
@@ -1127,19 +1179,25 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			let hostLine: ((tempLine: number) => number | undefined) | undefined;
 			try {
 				if (markdown && fences) {
-					const ledger = buildFenceLedger(fences, includePath);
-					const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
-					cleanup = () => rmSync(dir, { recursive: true, force: true });
-					const temp = join(dir, 'fences.bean');
-					writeFileSync(temp, ledger.text);
-					checkPath = realpathSync(temp);
-					hostLine = (line) => ledger.hostLine(line);
+					try {
+						const ledger = buildFenceLedger(fences, includePath);
+						const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
+						cleanup = () => rmSync(dir, { recursive: true, force: true });
+						const temp = join(dir, 'fences.bean');
+						writeFileSync(temp, ledger.text);
+						checkPath = realpathSync(temp);
+						hostLine = (line) => ledger.hostLine(line);
+					} catch {
+						if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
+						this.recordRunFailure(target, TEMP_LEDGER_NOTICE, TEMP_LEDGER_REASON);
+						return;
+					}
 				}
 
 				const run = await this.beanCheckRunner(command, [checkPath]);
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 				if (run.missing) {
-					this.notify(MISSING_BEAN_CHECK_NOTICE);
+					this.recordRunFailure(target, MISSING_BEAN_CHECK_NOTICE, MISSING_BEAN_CHECK_REASON);
 					return;
 				}
 				let errors = parseBeanCheckErrors(run.stderr);
@@ -1147,7 +1205,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				// a hang cut short) — say so and keep the marks that are already up,
 				// instead of clearing them for "clean".
 				if (errors.length === 0 && (run.stderr.trim() !== '' || run.failure)) {
-					this.notify(`bean-check ${run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`}`);
+					const reason = run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`;
+					this.recordRunFailure(target, `bean-check ${reason}`, reason);
 					return;
 				}
 				if (hostLine) {
@@ -1160,7 +1219,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 						return [{ ...error, file: root + file.path, line }];
 					});
 				}
-				this.markErrors(target, errors, root);
+				if (!this.markErrors(target, errors, root)) this.noticesShown.clear();
 			} finally {
 				cleanup?.();
 			}
@@ -1178,8 +1237,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * in scope — its own save is the newest word on it, whoever marked it
 	 * before. A file another target marked is left for that target's next run.
 	 */
-	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): void {
-		if (!this.validateLive) return;
+	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): boolean {
+		if (!this.validateLive) return false;
 		const vaultFiles = this.app.vault.getFiles();
 		const filesByPath = new Map<string, TFile>();
 		for (const entry of vaultFiles) {
@@ -1265,11 +1324,22 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				mergeDiagnostics(beanDiagnosticsOn(editor), flags)
 			);
 		}
+		return unmapped.length > 0;
 	}
 
 	/**
-	 * Show a notice once per session per text: with autosave, the same
-	 * problem re-arms every few seconds and must not stack toasts.
+	 * Keep existing markers, but surface a persistent Problems line and a
+	 * (deduped) notice so a failed run is not silent after the first toast.
+	 */
+	private recordRunFailure(target: string, notice: string, reason: string): void {
+		if (!this.validateLive) return;
+		this.problems.fail(target, reason);
+		this.notify(notice);
+	}
+
+	/**
+	 * Show a notice once per quiet-run window per text: with autosave, the
+	 * same problem re-arms every few seconds and must not stack toasts.
 	 */
 	private notify(text: string): void {
 		if (!this.validateLive) return;

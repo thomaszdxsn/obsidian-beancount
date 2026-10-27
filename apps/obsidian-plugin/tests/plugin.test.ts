@@ -1,6 +1,8 @@
 import type { App, PluginManifest } from 'obsidian';
 import { Plugin } from 'obsidian';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BeanCheckRun, LineDiagnostic } from '../bean-check';
@@ -23,6 +25,8 @@ import { FLAG_OKAY_TITLE, FLAGGED_MESSAGE, PAD_TRANSACTION_TITLE, openAccountTit
 import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
+import { VALIDATION_FAILURE_PREFIX } from '../problems';
+import { BeancountProblemsView, VIEW_TYPE_PROBLEMS } from '../problems-view';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
 
@@ -125,6 +129,23 @@ function published(editor: FakeEditor): LineDiagnostic[] {
 	const last = editor.cm.dispatched[editor.cm.dispatched.length - 1];
 	const effect = last?.effects[0] as { value?: unknown; is(spec: unknown): boolean } | undefined;
 	return effect?.is(setLineDiagnostics) ? (effect.value as LineDiagnostic[]) : [];
+}
+
+async function problemTexts(plugin: BeancountPlugin & RecordingPlugin): Promise<string[]> {
+	const creator = plugin.registrations.views.find((entry) => entry.type === VIEW_TYPE_PROBLEMS);
+	const created = creator?.creator({ app: plugin.app });
+	if (!(created instanceof BeancountProblemsView)) throw new Error('missing problems view');
+	await created.onOpen();
+	const el: unknown = created.contentEl;
+	if (!el || typeof el !== 'object' || !('children' in el) || !Array.isArray(el.children)) {
+		throw new Error('problems view has no mount');
+	}
+	return el.children.map((child) => {
+		if (!child || typeof child !== 'object' || !('text' in child) || typeof child.text !== 'string') {
+			throw new Error('problems row has no text');
+		}
+		return child.text;
+	});
 }
 
 function clickDiagnostic(
@@ -1820,7 +1841,7 @@ describe('BeancountPlugin', () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '2026-10-01 * "Broken"\n');
 		const editor = createEditor(['2026-10-01 * "Broken"']);
-		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
 		beanCheckResult = { stderr: '', missing: true };
 
 		await vault.emit('modify', file);
@@ -1833,6 +1854,9 @@ describe('BeancountPlugin', () => {
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain('pip install beancount');
 		expect(editor.cm.dispatched).toEqual([]);
+		expect(await problemTexts(plugin)).toContain(
+			`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
+		);
 	});
 
 	it('announces reports no editor can place', async () => {
@@ -1982,7 +2006,7 @@ describe('BeancountPlugin', () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
 		const editor = createEditor(['2026-10-01 * "A"']);
-		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
 		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
 
 		await vault.emit('modify', file);
@@ -2000,6 +2024,107 @@ describe('BeancountPlugin', () => {
 
 		expect(notices).toEqual(['bean-check failed: Traceback (most recent call last):']);
 		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
+		expect(await problemTexts(plugin)).toEqual(
+			expect.arrayContaining([
+				'ledger.bean:1  oops',
+				`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}failed: Traceback (most recent call last):`,
+			]),
+		);
+
+		beanCheckResult = { stderr: '', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(published(editor)).toEqual([]);
+		expect(await problemTexts(plugin)).toEqual(['No problems.']);
+	});
+
+	it('keeps marks when bean-check times out and lists the failure', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+
+		beanCheckResult = { stderr: '', missing: false, failure: 'timed out' };
+		await vault.emit('modify', file);
+		await delay(600);
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(notices).toEqual(['bean-check timed out']);
+		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
+		expect(await problemTexts(plugin)).toContain(`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}timed out`);
+	});
+
+	it('notices a missing bean-check again after a quiet run', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		beanCheckResult = { stderr: '', missing: true };
+
+		await vault.emit('modify', file);
+		await delay(600);
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+
+		beanCheckResult = { stderr: '', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(await problemTexts(plugin)).toEqual(['No problems.']);
+
+		beanCheckResult = { stderr: '', missing: true };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(2);
+		expect(await problemTexts(plugin)).toContain(
+			`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
+		);
+	});
+
+	it('notices a missing bean-check again after the bean-check path changes', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		beanCheckResult = { stderr: '', missing: true };
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+
+		plugin.settings.beanCheckPath = '/opt/bean-check';
+		await plugin.saveSettings();
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(2);
+	});
+
+	it('notices when the temporary fence ledger cannot be written', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const { plugin } = await loadPlugin(vault);
+		const dir = mkdtempSync(join(tmpdir(), 'bean-tmp-'));
+		const blocked = join(dir, 'not-a-dir');
+		writeFileSync(blocked, 'x');
+		const previous = process.env.TMPDIR;
+		process.env.TMPDIR = blocked;
+		try {
+			await vault.emit('modify', file);
+			await delay(600);
+
+			expect(beanCheckRuns).toEqual([]);
+			expect(notices).toEqual(['bean-check could not write the temporary ledger']);
+			expect(await problemTexts(plugin)).toContain(
+				`note.md:0  ${VALIDATION_FAILURE_PREFIX}could not write the temporary ledger`,
+			);
+		} finally {
+			if (previous === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = previous;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it('refuses a bean-check path that is not the validator', async () => {

@@ -11,7 +11,14 @@ import { describe, expect, it } from 'vitest';
 import type { BeanCheckRun, LineDiagnostic } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import BeancountPlugin from '../main';
-import { fileMtime, openValidationTarget, ProblemStore, problemRowText, toProblemRows } from '../problems';
+import {
+	fileMtime,
+	openValidationTarget,
+	ProblemStore,
+	problemRowText,
+	toProblemRows,
+	VALIDATION_FAILURE_PREFIX,
+} from '../problems';
 import { BeancountProblemsView, drawProblems, revealProblem, revealProblemsView, VIEW_TYPE_PROBLEMS } from '../problems-view';
 import type { ProblemsMount } from '../problems-view';
 import { createEditor, FakeVault } from './fakes';
@@ -165,6 +172,39 @@ describe('ProblemStore', () => {
 		expect(store.count()).toBe(1);
 		store.replace('main.bean', []);
 		expect(store.count()).toBe(0);
+	});
+
+	it('lists a run failure beside existing rows until the next report', () => {
+		const store = new ProblemStore();
+		store.replace('ledger.bean', [row('ledger.bean', 1, 'does not balance', 'ledger.bean')]);
+		store.fail('ledger.bean', 'timed out');
+		expect(store.rowsFor('ledger.bean')).toEqual([row('ledger.bean', 1, 'does not balance', 'ledger.bean')]);
+		expect(store.groups()[0].rows.map((entry) => entry.message)).toEqual([
+			`${VALIDATION_FAILURE_PREFIX}timed out`,
+			'does not balance',
+		]);
+		store.fail('ledger.bean', 'timed out');
+		store.replace('ledger.bean', [row('ledger.bean', 1, 'does not balance', 'ledger.bean')]);
+		expect(store.groups()[0].rows.map((entry) => entry.message)).toEqual(['does not balance']);
+		store.fail('note.md', 'could not write the temporary ledger');
+		expect(store.count()).toBe(2);
+		store.replace('note.md', []);
+		expect(store.count()).toBe(1);
+	});
+
+	it('does not notify when recording the same failure twice', () => {
+		const store = new ProblemStore();
+		let calls = 0;
+		store.subscribe(() => {
+			calls += 1;
+		});
+		store.fail('ledger.bean', 'not found');
+		store.fail('ledger.bean', 'not found');
+		expect(calls).toBe(1);
+		store.replace('ledger.bean', []);
+		expect(calls).toBe(2);
+		store.replace('ledger.bean', []);
+		expect(calls).toBe(2);
 	});
 
 	it('does not notify when clearing a target that was already empty', () => {
@@ -813,6 +853,8 @@ describe('stored markers and stale targets', () => {
 		plugin.settings.entryLedger = 'main.bean';
 		await plugin.saveSettings();
 		expect(mountChildren(view).map((child) => child.text)).toEqual(['No problems.']);
+		expect(published(editor)).toEqual([]);
+		expect(runs).toHaveLength(1);
 
 		plugin.settings.entryLedger = '';
 		await plugin.saveSettings();
