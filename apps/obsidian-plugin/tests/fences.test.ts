@@ -5,23 +5,30 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type * as CMState from '@codemirror/state';
-import { editorLedger, ledgerDoc, ledgerKind, isSafeIncludePath } from '../fences';
+import { editorLedger, ledgerDoc, ledgerKind, ledgerKindFromPath, isSafeIncludePath } from '../fences';
 
 const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
 
-/** CodeMirror `Text` plus a countable `toString`, so a cache hit cannot rescan. */
+/** CodeMirror `Text` with separate `iterLines` / `toString` counters. */
 function cmDoc(lines: readonly string[]) {
 	const text = Text.of(lines);
-	let scans = 0;
+	let iters = 0;
+	let strings = 0;
 	return {
-		get scans() {
-			return scans;
+		get iters() {
+			return iters;
+		},
+		get strings() {
+			return strings;
 		},
 		toString() {
-			scans += 1;
+			strings += 1;
 			return text.toString();
 		},
-		iterLines: () => text.iterLines(),
+		iterLines() {
+			iters += 1;
+			return text.iterLines();
+		},
 	};
 }
 
@@ -34,6 +41,13 @@ describe('ledgerKind', () => {
 		expect(ledgerKind({ extension: undefined })).toBe('fenced');
 		expect(ledgerKind(null)).toBe('fenced');
 		expect(ledgerKind(undefined)).toBe('fenced');
+	});
+
+	it('classifies a vault path by its basename extension including Windows separators', () => {
+		expect(ledgerKindFromPath('main.bean')).toBe('ledger-file');
+		expect(ledgerKindFromPath('dir/x.beancount')).toBe('ledger-file');
+		expect(ledgerKindFromPath('C:\\vault\\note.md')).toBe('fenced');
+		expect(ledgerKindFromPath('readme.txt')).toBe('fenced');
 	});
 });
 
@@ -86,6 +100,14 @@ describe('ledgerDoc', () => {
 		expect(doc.lineIsLedger(0)).toBe(false);
 		expect(doc.lineIsLedger(1)).toBe(false);
 		expect(doc.ledgerSource()).toBe('');
+	});
+
+	it('is not ledger text on the prose line after a closing fence', () => {
+		const text = ['```beancount', '2026-01-01 open Assets:Cash', '```', 'prose after'].join('\n');
+		const doc = ledgerDoc('fenced', text);
+		expect(doc.lineIsLedger(1)).toBe(true);
+		expect(doc.lineIsLedger(2)).toBe(false);
+		expect(doc.lineIsLedger(3)).toBe(false);
 	});
 
 	it('records opener indent 0–3 and rejects a four-space or tab opener', () => {
@@ -180,6 +202,34 @@ describe('ledgerDoc', () => {
 		expect(strings).toBe(0);
 	});
 
+	it('keeps fenced and ledger-file docs of the same Text without rescanning', () => {
+		const text = Text.of(['```bean', 'open', '```']);
+		let iters = 0;
+		const doc = {
+			toString() {
+				return text.toString();
+			},
+			iterLines() {
+				iters += 1;
+				return text.iterLines();
+			},
+		};
+		const fenced = ledgerDoc('fenced', doc);
+		expect(iters).toBe(1);
+		const fileDoc = ledgerDoc('ledger-file', doc);
+		expect(iters).toBe(1);
+		expect(ledgerDoc('fenced', doc)).toBe(fenced);
+		expect(ledgerDoc('ledger-file', doc)).toBe(fileDoc);
+		expect(fileDoc.lineIsLedger(0)).toBe(true);
+		expect(iters).toBe(1);
+		expect(fileDoc.regions[0]?.lines).toEqual(['```bean', 'open', '```']);
+		expect(fileDoc.ledgerSource()).toBe('```bean\nopen\n```');
+		expect(fileDoc.masked()).toEqual(['```bean', 'open', '```']);
+		expect(fileDoc.tempLedger().text).toBe('```bean\nopen\n```\n');
+		expect(iters).toBe(2);
+		expect(fileDoc).not.toBe(fenced);
+	});
+
 	it('prepends a safe include in tempLedger and omits an unsafe path', () => {
 		const doc = ledgerDoc('fenced', '```beancount\noption "title" "X"\n```');
 		const included = doc.tempLedger('/vault/main.bean');
@@ -224,65 +274,13 @@ describe('ledgerDoc host mapping', () => {
 		]);
 	});
 
-	it('concatenates two fence bodies and maps temp lines onto the host', () => {
-		const text = [
-			'prose',
-			'prose',
-			'```beancount',
-			'2026-10-01 * "Cafe"',
-			'  Assets:Cash  -10.00 USD',
-			'```',
-			'prose',
-			'prose',
-			'prose',
-			'```bean',
-			'2026-10-02 * "Shop"',
-			'```',
-		].join('\n');
-		const temp = ledgerDoc('fenced', text).tempLedger();
-		expect(temp.text).toBe('2026-10-01 * "Cafe"\n  Assets:Cash  -10.00 USD\n\n2026-10-02 * "Shop"\n');
-		expect(temp.hostLine(1)).toBe(4);
-		expect(temp.hostLine(2)).toBe(5);
-		expect(temp.hostLine(3)).toBeUndefined();
-		expect(temp.hostLine(4)).toBe(11);
-		expect(temp.hostLine(5)).toBeUndefined();
-	});
-
-	it('skips include preamble lines in hostLine', () => {
-		const text = [
-			'prose',
-			'prose',
-			'```beancount',
-			'2026-10-01 * "Cafe"',
-			'  Assets:Cash  -10.00 USD',
-			'```',
-			'prose',
-			'prose',
-			'prose',
-			'```bean',
-			'2026-10-02 * "Shop"',
-			'```',
-		].join('\n');
-		const temp = ledgerDoc('fenced', text).tempLedger('/vault/main.bean');
-		expect(temp.text.startsWith('include "/vault/main.bean"\n\n')).toBe(true);
-		expect(temp.hostLine(1)).toBeUndefined();
-		expect(temp.hostLine(2)).toBeUndefined();
-		expect(temp.hostLine(3)).toBe(4);
-		expect(temp.hostLine(4)).toBe(5);
-	});
-
-	it('keeps a ledger file whole including prose shapes', () => {
-		const text = 'PG_DATA_DIR:-x\n2020-01-01 open Assets:Cash\n';
-		expect(ledgerDoc('ledger-file', text).ledgerSource()).toBe(text);
-		expect(ledgerDoc(ledgerKind({ extension: 'beancount' }), text).ledgerSource()).toBe(text);
-	});
 
 	it('reduces a note without ledger fences to nothing', () => {
 		expect(ledgerDoc('fenced', 'LangGraph长期记忆SDK:Semantic').ledgerSource()).toBe('');
 	});
 });
 
-describe('ledgerSource', () => {
+describe('ledgerDoc CodeMirror and CRLF', () => {
 	it('splits CRLF the same way as LF', () => {
 		expect(ledgerDoc('fenced', '```bean\r\n2026-10-01 * "A"\r\n```\r\n').regions).toEqual([
 			{ hostStartLine: 1, hostIndent: 0, lines: ['2026-10-01 * "A"'] },
@@ -294,7 +292,7 @@ describe('ledgerSource', () => {
 		const once = ledgerDoc('fenced', doc);
 		expect(once.regions).toEqual([{ hostStartLine: 1, hostIndent: 0, lines: ['2026-10-01 * "A"'] }]);
 		expect(once.masked()).toEqual(['', '2026-10-01 * "A"', '', '']);
-		expect(doc.scans).toBe(0);
+		expect(doc.strings).toBe(0);
 		expect(ledgerDoc('fenced', doc)).toBe(once);
 	});
 

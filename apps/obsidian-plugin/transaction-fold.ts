@@ -150,9 +150,7 @@ export function transactionFoldInState(state: EditorState, lineStart: number): {
 	// Cheap reject before the fence scan: most lines are no header.
 	if (!MAYBE_HEADER.test(line.text)) return null;
 	if (file && isLedgerFile(file)) return transactionFoldAt(doc, line.number);
-	const region = ledgerDoc('fenced', doc).regions.find(
-		(entry) => line.number - 1 >= entry.hostStartLine && line.number - 1 < entry.hostStartLine + entry.lines.length
-	);
+	const region = ledgerDoc('fenced', doc).regionAt(line.number - 1);
 	return region ? transactionFoldAt(doc, line.number, { first: region.hostStartLine + 1, lines: region.lines }) : null;
 }
 

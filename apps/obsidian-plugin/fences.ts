@@ -61,12 +61,16 @@ function fencesOfLines(lines: readonly string[]): LedgerRegion[] {
 }
 
 /** An editor document: its text, and its lines when it can iterate them (CodeMirror's `Text`). */
-interface FenceDoc {
+export interface FenceDoc {
 	toString(): string;
 	iterLines?(): { next(): { done?: boolean }; value: string };
+	line?(n: number): { from: number; to: number; text: string };
+	lineAt?(pos: number): { number: number; from: number; to: number; text: string };
+	readonly length?: number;
+	sliceString?(from: number, to?: number): string;
 }
 
-const ledgerByDoc = new WeakMap<object, { kind: LedgerKind; doc: LedgerDoc }>();
+const ledgerByDoc = new WeakMap<object, Partial<Record<LedgerKind, LedgerDoc>>>();
 
 /** `splitLines(doc.toString())`, read from the document's own lines when it has them. */
 function docLines(doc: FenceDoc): string[] {
@@ -111,6 +115,14 @@ export function ledgerKind(file: { extension?: string } | null | undefined): Led
 	return file && isLedgerFile(file) ? 'ledger-file' : 'fenced';
 }
 
+/** Ledger kind of a vault path's basename extension, including Windows separators. */
+export function ledgerKindFromPath(path: string): LedgerKind {
+	const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+	const base = path.slice(slash + 1);
+	const dot = base.lastIndexOf('.');
+	return ledgerKind({ extension: dot >= 0 ? base.slice(dot + 1) : undefined });
+}
+
 /** One contiguous stretch of ledger text in the host buffer. */
 export interface LedgerRegion {
 	/** Host line, 0-based, of the first body line; 0 for a ledger file. */
@@ -133,19 +145,18 @@ export interface LedgerDoc {
 	readonly kind: LedgerKind;
 	readonly regions: readonly LedgerRegion[];
 	lineIsLedger(hostLine0: number): boolean;
+	regionAt(hostLine0: number): LedgerRegion | undefined;
 	containsPos(pos: number): boolean;
 	masked(): readonly string[] | null;
 	ledgerSource(): string;
 	tempLedger(includePath?: string): TempLedger;
 }
 
-function regionContainsLine(regions: readonly LedgerRegion[], lineIndex: number): boolean {
+function regionAtLine(kind: LedgerKind, regions: readonly LedgerRegion[], hostLine0: number): LedgerRegion | undefined {
+	if (kind === 'ledger-file') return regions[0];
 	for (const region of regions) {
-		if (lineIndex >= region.hostStartLine && lineIndex < region.hostStartLine + region.lines.length) {
-			return true;
-		}
+		if (hostLine0 >= region.hostStartLine && hostLine0 < region.hostStartLine + region.lines.length) return region;
 	}
-	return false;
 }
 
 function lineIndexAt(lines: readonly string[], pos: number): number {
@@ -202,13 +213,15 @@ function createLedgerDoc(kind: LedgerKind, hostLines: readonly string[]): Ledger
 			: fencesOfLines(hostLines);
 	let mask: readonly string[] | null | undefined;
 	let length: number | undefined;
+	const regionAt = (hostLine0: number): LedgerRegion | undefined => regionAtLine(kind, regions, hostLine0);
 	const lineIsLedger = (hostLine0: number): boolean =>
-		kind === 'ledger-file' || regionContainsLine(regions, hostLine0);
+		kind === 'ledger-file' || regionAt(hostLine0) !== undefined;
 
 	return {
 		kind,
 		regions,
 		lineIsLedger,
+		regionAt,
 		containsPos(pos: number): boolean {
 			if (pos < 0) return false;
 			if (kind === 'ledger-file') return true;
@@ -260,6 +273,9 @@ function lazyLedgerFileDoc(source: FenceDoc): LedgerDoc {
 		lineIsLedger() {
 			return true;
 		},
+		regionAt(hostLine0: number) {
+			return materialize().regionAt(hostLine0);
+		},
 		containsPos(pos: number) {
 			return pos >= 0;
 		},
@@ -282,15 +298,17 @@ function lazyLedgerFileDoc(source: FenceDoc): LedgerDoc {
  */
 export function ledgerDoc(kind: LedgerKind, source: string | FenceDoc): LedgerDoc {
 	if (typeof source === 'string') return createLedgerDoc(kind, splitLines(source));
-	let entry = ledgerByDoc.get(source);
-	if (entry === undefined || entry.kind !== kind) {
-		entry = {
-			kind,
-			doc: kind === 'ledger-file' ? lazyLedgerFileDoc(source) : createLedgerDoc(kind, docLines(source)),
-		};
-		ledgerByDoc.set(source, entry);
+	let slots = ledgerByDoc.get(source);
+	if (slots === undefined) {
+		slots = {};
+		ledgerByDoc.set(source, slots);
 	}
-	return entry.doc;
+	let doc = slots[kind];
+	if (doc === undefined) {
+		doc = kind === 'ledger-file' ? lazyLedgerFileDoc(source) : createLedgerDoc(kind, docLines(source));
+		slots[kind] = doc;
+	}
+	return doc;
 }
 
 /** What `editorLedger` reads from an Obsidian `Editor`. */

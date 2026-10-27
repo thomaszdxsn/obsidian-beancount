@@ -19,9 +19,11 @@ UI/UX fixes from the architecture review (#75).
   re-aligned on save.
 - On untitled buffers and `.txt` files, folding, inlay hints, include
   links and flag markers apply only inside `beancount`/`bean` fence
-  bodies, matching completion. A buffer without those fences is not
-  treated as a ledger. **Show account balances** still only uses a
-  `.bean` / `.beancount` file or a markdown note.
+  bodies, matching completion. Include paths are underlined there, but
+  clicking one still needs a file path to resolve against, so untitled
+  buffers show the link and do not open it. A buffer without those
+  fences is not treated as a ledger. **Show account balances** still
+  only uses a `.bean` / `.beancount` file or a markdown note.
 - **Start Fava** opens the browser once Fava answers on its port instead of
   right after launching it, and says why when Fava exits (quoting the last
   line it printed) or does not answer within 30 seconds. A Fava that stops

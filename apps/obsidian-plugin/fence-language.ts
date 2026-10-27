@@ -32,6 +32,7 @@ import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { BEANCOUNT_LANGUAGE_DATA } from './beancount-mode';
 import { ledgerDoc } from './fences';
+import type { FenceDoc } from './fences';
 
 /** Indent, one or more `;`, optional space, then `#region` / `#endregion`. */
 const REGION_START = /^[ \t]*;+[ \t]*#region\b/;
@@ -53,19 +54,6 @@ export interface CommentChange {
 export interface CommentPlan {
 	changes: CommentChange[];
 	carets: number[];
-}
-
-/** 0-based body line range of one fence; `endLine` is exclusive. */
-interface FenceBodyLines {
-	startLine: number;
-	endLine: number;
-}
-
-function fenceBodies(source: string | { toString(): string; iterLines?(): { next(): { done?: boolean }; value: string } }): FenceBodyLines[] {
-	return ledgerDoc('fenced', source).regions.map((region) => ({
-		startLine: region.hostStartLine,
-		endLine: region.hostStartLine + region.lines.length,
-	}));
 }
 
 function lineStartsOf(text: string): number[] {
@@ -93,8 +81,76 @@ function lineTo(text: string, starts: number[], index: number): number {
 	return text.length;
 }
 
-function bodyContaining(bodies: readonly FenceBodyLines[], line: number): FenceBodyLines | undefined {
-	return bodies.find((body) => line >= body.startLine && line < body.endLine);
+function hasLines(
+	source: string | FenceDoc
+): source is FenceDoc & {
+	line: NonNullable<FenceDoc['line']>;
+	lineAt: NonNullable<FenceDoc['lineAt']>;
+} {
+	return typeof source !== 'string' && typeof source.line === 'function' && typeof source.lineAt === 'function';
+}
+
+interface HostLines {
+	indexAt(pos: number): number;
+	text(index0: number): string;
+	from(index0: number): number;
+	to(index0: number): number;
+	length: number;
+	char(pos: number): string;
+	slice(from: number, to: number): string;
+}
+
+function hostOf(source: string | FenceDoc): HostLines {
+	if (hasLines(source)) {
+		const doc = source;
+		const length = typeof doc.length === 'number' ? doc.length : 0;
+		return {
+			length,
+			indexAt(pos) {
+				const clamped = pos < 0 ? 0 : pos > length ? length : pos;
+				return doc.lineAt(clamped).number - 1;
+			},
+			text(index0) {
+				return doc.line(index0 + 1).text;
+			},
+			from(index0) {
+				return doc.line(index0 + 1).from;
+			},
+			to(index0) {
+				return doc.line(index0 + 1).to;
+			},
+			char(pos) {
+				return doc.sliceString ? doc.sliceString(pos, pos + 1) : '';
+			},
+			slice(from, to) {
+				return doc.sliceString ? doc.sliceString(from, to) : '';
+			},
+		};
+	}
+	const text = typeof source === 'string' ? source : source.toString();
+	const starts = lineStartsOf(text);
+	return {
+		length: text.length,
+		indexAt(pos) {
+			const clamped = pos < 0 ? 0 : pos > text.length ? text.length : pos;
+			return lineIndexOf(starts, clamped);
+		},
+		text(index0) {
+			return lineContent(text, starts, index0);
+		},
+		from(index0) {
+			return starts[index0];
+		},
+		to(index0) {
+			return lineTo(text, starts, index0);
+		},
+		char(pos) {
+			return text[pos] ?? '';
+		},
+		slice(from, to) {
+			return text.slice(from, to);
+		},
+	};
 }
 
 function mapPos(pos: number, changes: readonly CommentChange[]): number {
@@ -110,10 +166,7 @@ function mapPos(pos: number, changes: readonly CommentChange[]): number {
  * Whether `pos` sits on a `beancount`/`bean` fence body line — not the
  * opening or closing marker, and not prose or a different language.
  */
-export function posInBeancountFence(
-	source: string | { toString(): string; iterLines?(): { next(): { done?: boolean }; value: string } },
-	pos: number
-): boolean {
+export function posInBeancountFence(source: string | FenceDoc, pos: number): boolean {
 	if (pos < 0) return false;
 	return ledgerDoc('fenced', source).containsPos(pos);
 }
@@ -123,7 +176,7 @@ export function posInBeancountFence(
  * nothing outside so markdown's own comments/brackets stay in charge.
  */
 export function fenceLanguageData(
-	source: string | { toString(): string; iterLines?(): { next(): { done?: boolean }; value: string } },
+	source: string | FenceDoc,
 	pos: number
 ): readonly [typeof BEANCOUNT_LANGUAGE_DATA] | readonly [] {
 	return posInBeancountFence(source, pos) ? [BEANCOUNT_LANGUAGE_DATA] : [];
@@ -135,34 +188,32 @@ export function fenceLanguageData(
  * line already starts with `;`, the `;` and one following space come off;
  * otherwise `; ` is inserted after each line's indent.
  */
-export function fenceCommentPlan(text: string, ranges: readonly Caret[]): CommentPlan | null {
+export function fenceCommentPlan(source: string | FenceDoc, ranges: readonly Caret[]): CommentPlan | null {
 	if (ranges.length === 0) return null;
-	const starts = lineStartsOf(text);
-	const bodies = fenceBodies(text);
-	const lineOf = (pos: number): number =>
-		lineIndexOf(starts, pos > text.length ? text.length : pos < 0 ? 0 : pos);
+	const host = hostOf(source);
+	const ledger = ledgerDoc('fenced', source);
+	const lineOf = (pos: number): number => host.indexAt(pos);
 
 	const lineSet = new Set<number>();
 	for (const range of ranges) {
 		const from = Math.min(range.anchor, range.head);
 		const to = Math.max(range.anchor, range.head);
 		const fromLine = lineOf(from);
-		const last =
-			from !== to && to > 0 && text[to - 1] === '\n' ? lineOf(to - 1) : lineOf(to);
+		const last = from !== to && to > 0 && host.char(to - 1) === '\n' ? lineOf(to - 1) : lineOf(to);
 		for (let line = fromLine; line <= last; line += 1) {
-			if (!bodyContaining(bodies, line)) return null;
+			if (!ledger.lineIsLedger(line)) return null;
 			lineSet.add(line);
 		}
 	}
 
 	const lines = [...lineSet].sort((a, b) => a - b);
-	const contents = lines.map((line) => lineContent(text, starts, line));
+	const contents = lines.map((line) => host.text(line));
 	const uncomment = contents.every((content) => /^[ \t]*;/.test(content));
 	const changes: CommentChange[] = [];
 	for (let i = 0; i < lines.length; i += 1) {
 		const line = lines[i];
 		const content = contents[i];
-		const from = starts[line];
+		const from = host.from(line);
 		if (uncomment) {
 			const match = /^([ \t]*); ?/.exec(content);
 			if (!match) continue;
@@ -187,20 +238,21 @@ export function fenceCommentPlan(text: string, ranges: readonly Caret[]): Commen
  * A start with no end folds through the last body line of its fence.
  */
 export function regionFoldAt(
-	text: string,
+	source: string | FenceDoc,
 	lineStart: number,
 	lineEnd: number
 ): { from: number; to: number } | null {
-	if (!REGION_START.test(text.slice(lineStart, lineEnd))) return null;
-	const starts = lineStartsOf(text);
-	const line = lineIndexOf(starts, lineStart);
-	const body = bodyContaining(fenceBodies(text), line);
-	if (!body) return null;
+	const host = hostOf(source);
+	if (!REGION_START.test(host.slice(lineStart, lineEnd))) return null;
+	const line = host.indexAt(lineStart);
+	const region = ledgerDoc('fenced', source).regionAt(line);
+	if (!region) return null;
+	const bodyEnd = region.hostStartLine + region.lines.length;
 
 	let depth = 1;
 	let endLine = -1;
-	for (let i = line + 1; i < body.endLine; i += 1) {
-		const content = lineContent(text, starts, i);
+	for (let i = line + 1; i < bodyEnd; i += 1) {
+		const content = host.text(i);
 		if (REGION_START.test(content)) {
 			depth += 1;
 			continue;
@@ -214,17 +266,17 @@ export function regionFoldAt(
 		}
 	}
 
-	const lastHidden = endLine === -1 ? body.endLine - 1 : endLine - 1;
+	const lastHidden = endLine === -1 ? bodyEnd - 1 : endLine - 1;
 	if (lastHidden <= line) return null;
-	const from = lineTo(text, starts, line);
-	const to = lineTo(text, starts, lastHidden);
+	const from = host.to(line);
+	const to = host.to(lastHidden);
 	if (to <= from) return null;
 	return { from, to };
 }
 
 function commentRun(view: EditorView): boolean {
 	const plan = fenceCommentPlan(
-		view.state.doc.toString(),
+		view.state.doc,
 		view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }))
 	);
 	if (plan === null) return false;
@@ -244,12 +296,10 @@ function commentRun(view: EditorView): boolean {
 export function fenceLanguageExtension(): Extension {
 	return [
 		Prec.high(keymap.of([{ key: 'Mod-/', run: commentRun }])),
-		Prec.high(
-			EditorState.languageData.of((state, pos) => fenceLanguageData(state.doc, pos))
-		),
+		Prec.high(EditorState.languageData.of((state, pos) => fenceLanguageData(state.doc, pos))),
 		foldService.of((state, lineStart, lineEnd) => {
 			if (!REGION_START.test(state.doc.sliceString(lineStart, lineEnd))) return null;
-			return regionFoldAt(state.doc.toString(), lineStart, lineEnd);
+			return regionFoldAt(state.doc, lineStart, lineEnd);
 		}),
 	];
 }

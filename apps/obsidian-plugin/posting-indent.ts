@@ -128,11 +128,11 @@ export function postingIndentExtension(suggests: readonly SuggestState[]): Exten
 		if (suggests.some((suggest) => suggest.context !== null)) return false;
 		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
 		const file = view.state.field(editorInfoField, false)?.file;
-		const ld = ledgerDoc(ledgerKind(file), view.state.doc);
-		if (!carets.every((caret) => ld.lineIsLedger(view.state.doc.lineAt(Math.min(caret.anchor, caret.head)).number - 1))) {
+		const ledger = ledgerDoc(ledgerKind(file), view.state.doc);
+		if (!carets.every((caret) => ledger.lineIsLedger(view.state.doc.lineAt(Math.min(caret.anchor, caret.head)).number - 1))) {
 			return false;
 		}
-		const plan = postingIndentPlan(view.state.doc.toString(), carets, (lineIndex) => ld.lineIsLedger(lineIndex));
+		const plan = postingIndentPlan(view.state.doc.toString(), carets, (lineIndex) => ledger.lineIsLedger(lineIndex));
 		if (plan === null) return false;
 		view.dispatch({
 			changes: plan.changes,

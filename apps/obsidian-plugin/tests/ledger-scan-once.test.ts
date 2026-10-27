@@ -14,6 +14,7 @@ import { transactionFoldInState } from '../transaction-fold';
 import { includeLinksExtension } from '../include-links';
 import { FlagWarningController, DEFAULT_FLAG_WARNINGS } from '../flag-warnings';
 import { BalanceInlayController } from '../inlay-hints';
+import { fenceCommentPlan, regionFoldAt } from '../fence-language';
 
 vi.mock('@codemirror/view', async (original) => {
 	const mock = await original<Record<string, unknown>>();
@@ -25,10 +26,12 @@ const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof C
 
 const LINES = [
 	'```beancount',
+	';#region',
 	'2026-01-02 * "Store"',
 	'  Assets:Cash  1 USD',
 	'  Income:Job',
 	'include "a.bean"',
+	';#endregion',
 	'```',
 ];
 
@@ -55,6 +58,9 @@ function countedDoc(lines: readonly string[]) {
 		lineAt(pos: number) {
 			return text.lineAt(pos);
 		},
+		sliceString(from: number, to?: number) {
+			return text.sliceString(from, to);
+		},
 		toString() {
 			strings += 1;
 			return text.toString();
@@ -67,7 +73,7 @@ function countedDoc(lines: readonly string[]) {
 }
 
 describe('ledger scan once', () => {
-	it('scans fence bodies once across ledgerDoc, fold, include, flag and inlay', () => {
+	it('scans fence bodies once across ledgerDoc, fold, include, flag, inlay, region fold and comment', () => {
 		const doc = countedDoc(LINES);
 		const file = { path: 'note.md', extension: 'md' };
 		const field = () => ({ file });
@@ -75,7 +81,7 @@ describe('ledger scan once', () => {
 		ledgerDoc('fenced', doc);
 
 		const foldState = { doc, field } as unknown as EditorState;
-		transactionFoldInState(foldState, doc.line(2).from);
+		transactionFoldInState(foldState, doc.line(3).from);
 
 		const includeView = {
 			state: { doc, field },
@@ -98,6 +104,11 @@ describe('ledger scan once', () => {
 		};
 		const inlays = new BalanceInlayController({ settings: { inlayHints: true, entryLedger: '' } });
 		new (inlays.extension as unknown as MockViewPlugin<{ decorations: unknown }>).cls(inlayView as never);
+
+		const regionLine = doc.line(2);
+		regionFoldAt(doc, regionLine.from, regionLine.to);
+		const cash = doc.line(4);
+		fenceCommentPlan(doc, [{ anchor: cash.from, head: cash.to }]);
 
 		expect(doc.strings).toBe(0);
 		expect(doc.iters).toBe(1);

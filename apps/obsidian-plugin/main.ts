@@ -33,7 +33,7 @@ import {
 import {
 	FLAGGED_MESSAGE,
 	flagDiagnostics,
-	flagDiagnosticsFromFences,
+	flagDiagnosticsFromRegions,
 	flagOkayEdit,
 	insertOpenDirective,
 	mergeDiagnostics,
@@ -63,7 +63,7 @@ import {
 import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { isLedgerFile, isSafeIncludePath, ledgerDoc } from './fences';
+import { isLedgerFile, isSafeIncludePath, ledgerDoc, ledgerKind } from './fences';
 import type { LedgerDoc } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
@@ -182,13 +182,9 @@ function openEditorFiles(app: App): Array<{ file: TFile; editor: Editor }> {
 	return found;
 }
 
-function flagsFor(path: string, text: string): LineDiagnostic[] {
-	const base = path.slice(path.lastIndexOf('/') + 1);
-	const dot = base.lastIndexOf('.');
-	const extension = dot >= 0 ? base.slice(dot + 1) : '';
-	if (isLedgerFile({ extension })) return flagDiagnostics(text);
-	const regions = ledgerDoc('fenced', text).regions;
-	return flagDiagnosticsFromFences(regions.map((region) => ({ startLine: region.hostStartLine, lines: region.lines })));
+function flagsFor(file: { extension?: string }, text: string): LineDiagnostic[] {
+	if (ledgerKind(file) === 'ledger-file') return flagDiagnostics(text);
+	return flagDiagnosticsFromRegions(ledgerDoc('fenced', text).regions);
 }
 
 function beanDiagnosticsOn(editor: Editor): LineDiagnostic[] {
@@ -1052,7 +1048,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		for (const editor of openEditorsFor(this.app, file)) {
 			setEditorLineDiagnostics(
 				editor,
-				mergeDiagnostics(bean, flagsFor(file.path, editor.getValue())),
+				mergeDiagnostics(bean, flagsFor(file, editor.getValue())),
 			);
 		}
 	}
@@ -1090,7 +1086,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			if (!vaultFile) continue;
 			let leftFlags = false;
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
-				const flags = flagsFor(path, editor.getValue());
+				const flags = flagsFor(vaultFile, editor.getValue());
 				if (flags.length > 0) leftFlags = true;
 				setEditorLineDiagnostics(editor, flags);
 			}
@@ -1337,7 +1333,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
 				setEditorLineDiagnostics(
 					editor,
-					mergeDiagnostics(toLineDiagnostics(errorsByPath.get(path) ?? []), flagsFor(path, editor.getValue()))
+					mergeDiagnostics(toLineDiagnostics(errorsByPath.get(path) ?? []), flagsFor(vaultFile, editor.getValue()))
 				);
 			}
 		}
@@ -1345,7 +1341,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// ledger is never `target`, so it would otherwise stay unmarked.
 		for (const { file, editor } of openEditorFiles(this.app)) {
 			if (published.has(file.path)) continue;
-			const flags = flagsFor(file.path, editor.getValue());
+			const flags = flagsFor(file, editor.getValue());
 			if (flags.length === 0) {
 				if (!this.extraFlagged.has(file.path)) continue;
 				this.extraFlagged.delete(file.path);

@@ -21,7 +21,7 @@
 import type { Plugin, TAbstractFile, TFile } from 'obsidian';
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
-import { ledgerDoc, ledgerKind } from './fences';
+import { ledgerDoc, ledgerKind, ledgerKindFromPath } from './fences';
 
 export { MAX_SUGGESTIONS } from './completion-rank';
 
@@ -46,12 +46,6 @@ export function isTextFile(file: VaultEntry): file is TFile {
 	return typeof file.extension === 'string' && TEXT_EXTENSIONS[file.extension] === true;
 }
 
-/** File extension of a vault path, or undefined when the basename has no dot. */
-function extensionOf(path: string): string | undefined {
-	const base = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
-	const dot = base.lastIndexOf('.');
-	return dot >= 0 ? base.slice(dot + 1) : undefined;
-}
 
 /** Per-file cache `registerVaultIndex` keeps in sync with vault events. */
 export interface VaultCache {
@@ -201,7 +195,7 @@ export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultCac
 			// destination (`.txt` → `.md`, or a file edited to string-less
 			// prose) needs a first read; and a note ↔ ledger rename
 			// (`x.md` → `x.bean`) changes what is ledger text (`ledgerSource`).
-			const kindChanged = ledgerKind({ extension: extensionOf(oldPath) }) !== ledgerKind(file);
+			const kindChanged = ledgerKindFromPath(oldPath) !== ledgerKind(file);
 			if (dropped.length > 0 || !moved || kindChanged) refresh(file);
 		} else {
 			for (const index of indexes) index.removeFile(file.path);
