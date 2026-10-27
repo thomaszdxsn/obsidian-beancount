@@ -5,6 +5,7 @@
  * replacements.
  */
 import { setTimeout as delay } from 'node:timers/promises';
+import type { Clock } from '../clock';
 
 export interface FakeFile {
 	path: string;
@@ -285,4 +286,48 @@ function positionAt(offset: number, lines: readonly string[]): FakePosition {
 	}
 	const last = lines.length - 1;
 	return { line: last, ch: lines[last].length };
+}
+
+/** Manual clock: `tick` advances `now` and runs due callbacks in expiry order. */
+export class FakeClock implements Clock {
+	private current = 0;
+	private nextId = 1;
+	private readonly timers = new Map<number, { at: number; fn: () => void }>();
+
+	now(): number {
+		return this.current;
+	}
+
+	setTimeout(fn: () => void, ms: number): number {
+		const id = this.nextId;
+		this.nextId += 1;
+		this.timers.set(id, { at: this.current + ms, fn });
+		return id;
+	}
+
+	clearTimeout(id: number): void {
+		this.timers.delete(id);
+	}
+
+	tick(ms: number): void {
+		const until = this.current + ms;
+		while (true) {
+			let nextId: number | undefined;
+			let nextAt = until + 1;
+			for (const [id, timer] of this.timers) {
+				if (timer.at > until) continue;
+				if (timer.at < nextAt || (timer.at === nextAt && (nextId === undefined || id < nextId))) {
+					nextId = id;
+					nextAt = timer.at;
+				}
+			}
+			if (nextId === undefined) break;
+			const timer = this.timers.get(nextId);
+			this.timers.delete(nextId);
+			if (!timer) break;
+			this.current = timer.at;
+			timer.fn();
+		}
+		this.current = until;
+	}
 }
