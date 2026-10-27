@@ -1,24 +1,26 @@
 /**
- * Editor markers for bean-check complaints: a wavy underline carrying the
- * message as its tooltip on the offending line, plus a dot in a dedicated
- * gutter — the two places the editor already teaches "this line has a
- * problem".
+ * Editor markers: bean-check complaints in one CodeMirror field, Flag as okay
+ * markers in another. A wavy underline carries the tooltip; a gutter dot
+ * marks any line either field names. Same line, bean-check text wins.
  *
- * The diagnostics live in a CodeMirror state field, so a validation run
- * publishes them with one effect and every later edit carries them along like
- * the rest of the document state. A line the document no longer has (it
- * shrank since the run) marks nothing; the next run's report replaces the
- * field wholesale.
+ * Bean-check publishes with one effect; edits carry those markers along.
+ * Flag markers follow the document (`!` lines in ledger regions).
  */
 import { StateEffect, StateField } from '@codemirror/state';
-import type { Extension, Range, Transaction } from '@codemirror/state';
+import type { EditorState, Extension, Range, Transaction } from '@codemirror/state';
 import { Decoration, GutterMarker, gutter, ViewPlugin } from '@codemirror/view';
 import type { BlockInfo, DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
+import { editorInfoField } from 'obsidian';
 import type { Editor } from 'obsidian';
 import type { LineDiagnostic } from './bean-check';
+import { flagDiagnostics, flagDiagnosticsFromRegions, mergeDiagnostics } from './code-actions';
+import { ledgerDoc, ledgerKind } from './fences';
 
-/** Publishes one file's diagnostics; an empty list clears the markers. */
-export const setLineDiagnostics = StateEffect.define<readonly LineDiagnostic[]>();
+/** Publishes bean-check diagnostics; an empty list clears that field. */
+export const setBeanDiagnostics = StateEffect.define<readonly LineDiagnostic[]>();
+
+/** Publishes Flag as okay diagnostics; an empty list clears that field. */
+export const setFlagOkayDiagnostics = StateEffect.define<readonly LineDiagnostic[]>();
 
 /** The line a marker rides to through an edit; `null` when the edit consumed its line. */
 function movedLine(line: number, tr: Transaction): number | null {
@@ -30,21 +32,114 @@ function movedLine(line: number, tr: Transaction): number | null {
 	return tr.state.doc.lineAt(from).number - 1;
 }
 
-export const lineDiagnostics = StateField.define<readonly LineDiagnostic[]>({
+function mapDiagnostics(value: readonly LineDiagnostic[], tr: Transaction): readonly LineDiagnostic[] {
+	if (!tr.docChanged || value.length === 0) return value;
+	const mapped: LineDiagnostic[] = [];
+	for (const diagnostic of value) {
+		const line = movedLine(diagnostic.line, tr);
+		if (line !== null) mapped.push({ line, message: diagnostic.message });
+	}
+	return mapped;
+}
+
+export const beanDiagnostics = StateField.define<readonly LineDiagnostic[]>({
 	create: () => [],
 	update(value, tr) {
-		// A run's report replaces the value wholesale; edits carry each
-		// marker along to the line it now sits on.
 		for (const effect of tr.effects) {
-			if (effect.is(setLineDiagnostics)) return effect.value;
+			if (effect.is(setBeanDiagnostics)) return effect.value;
 		}
-		if (!tr.docChanged || value.length === 0) return value;
-		const mapped: LineDiagnostic[] = [];
-		for (const diagnostic of value) {
-			const line = movedLine(diagnostic.line, tr);
-			if (line !== null) mapped.push({ line, message: diagnostic.message });
+		return mapDiagnostics(value, tr);
+	},
+});
+
+function flagsFromState(state: EditorState): readonly LineDiagnostic[] {
+	const file = state.field(editorInfoField, false)?.file;
+	if (ledgerKind(file) === 'ledger-file') return flagDiagnostics(state.doc.toString());
+	return flagDiagnosticsFromRegions(ledgerDoc('fenced', state.doc).regions);
+}
+
+function touchedLineRange(tr: Transaction): { from: number; toExclusive: number } | null {
+	const changes = tr.changes;
+	if (!changes || typeof changes.iterChangedRanges !== 'function') return null;
+	let from = Number.POSITIVE_INFINITY;
+	let toExclusive = 0;
+	changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+		const start = tr.state.doc.lineAt(fromB).number - 1;
+		const endPos = Math.max(fromB, toB - (toB > fromB ? 1 : 0));
+		const end = tr.state.doc.lineAt(endPos).number;
+		from = Math.min(from, start);
+		toExclusive = Math.max(toExclusive, end);
+	});
+	if (from === Number.POSITIVE_INFINITY) return { from: 0, toExclusive: 0 };
+	return { from, toExclusive };
+}
+
+function fenceMarkerLines(regions: readonly { hostStartLine: number; lines: readonly string[] }[]): number[] {
+	const lines: number[] = [];
+	for (const region of regions) {
+		if (region.hostStartLine > 0) lines.push(region.hostStartLine - 1);
+		lines.push(region.hostStartLine + region.lines.length);
+	}
+	return lines;
+}
+
+function rangeHitsLine(lines: readonly number[], range: { from: number; toExclusive: number }): boolean {
+	return lines.some((line) => line >= range.from && line < range.toExclusive);
+}
+
+function flagsFromTouchedLines(tr: Transaction, mapped: readonly LineDiagnostic[]): readonly LineDiagnostic[] {
+	const range = touchedLineRange(tr);
+	if (range === null) return flagsFromState(tr.state);
+	const file = tr.state.field(editorInfoField, false)?.file;
+	const kept = mapped.filter((diagnostic) => diagnostic.line < range.from || diagnostic.line >= range.toExclusive);
+	if (ledgerKind(file) === 'ledger-file') {
+		const lines: string[] = [];
+		for (let line = range.from; line < range.toExclusive; line += 1) {
+			lines.push(tr.state.doc.line(line + 1).text);
 		}
-		return mapped;
+		const added = flagDiagnostics(lines.join('\n')).map((diagnostic) => ({
+			line: diagnostic.line + range.from,
+			message: diagnostic.message,
+		}));
+		return [...kept, ...added].sort((a, b) => a.line - b.line);
+	}
+	const before = ledgerDoc('fenced', tr.startState.doc).regions;
+	const after = ledgerDoc('fenced', tr.state.doc).regions;
+	if (rangeHitsLine(fenceMarkerLines(before), range) || rangeHitsLine(fenceMarkerLines(after), range)) {
+		return flagsFromState(tr.state);
+	}
+	const added: LineDiagnostic[] = [];
+	for (const region of after) {
+		const regionEnd = region.hostStartLine + region.lines.length;
+		const from = Math.max(range.from, region.hostStartLine);
+		const to = Math.min(range.toExclusive, regionEnd);
+		if (from >= to) continue;
+		const slice = region.lines.slice(from - region.hostStartLine, to - region.hostStartLine);
+		for (const diagnostic of flagDiagnostics(slice.join('\n'))) {
+			added.push({ line: diagnostic.line + from, message: diagnostic.message });
+		}
+	}
+	return [...kept, ...added].sort((a, b) => a.line - b.line);
+}
+
+export function updateFlagOkayDiagnostics(
+	value: readonly LineDiagnostic[],
+	tr: Transaction,
+): readonly LineDiagnostic[] {
+	if (!tr.docChanged) return value;
+	if (!tr.changes || typeof tr.changes.iterChangedRanges !== 'function') {
+		return flagsFromState(tr.state);
+	}
+	return flagsFromTouchedLines(tr, mapDiagnostics(value, tr));
+}
+
+export const flagOkayDiagnostics = StateField.define<readonly LineDiagnostic[]>({
+	create: (state) => (state === undefined ? [] : flagsFromState(state)),
+	update(value, tr) {
+		for (const effect of tr.effects) {
+			if (effect.is(setFlagOkayDiagnostics)) return effect.value;
+		}
+		return updateFlagOkayDiagnostics(value, tr);
 	},
 });
 
@@ -67,7 +162,7 @@ export interface DiagnosticsDoc {
 /** The line decoration at every marked line's start, and the underline of its text. */
 export function diagnosticDecorations(
 	doc: DiagnosticsDoc,
-	diagnostics: readonly LineDiagnostic[]
+	diagnostics: readonly LineDiagnostic[],
 ): Array<Range<Decoration>> {
 	const ranges: Array<Range<Decoration>> = [];
 	for (const diagnostic of diagnostics) {
@@ -86,7 +181,16 @@ export function diagnosticDecorations(
 	return ranges;
 }
 
-/** The live decorations for the field's diagnostics, rebuilt whenever they move. */
+function fieldOf(state: { field(field: unknown): unknown }, field: unknown): readonly LineDiagnostic[] {
+	const value = state.field(field);
+	return Array.isArray(value) ? (value as readonly LineDiagnostic[]) : [];
+}
+
+function mergedDiagnostics(state: { field(field: unknown): unknown }): readonly LineDiagnostic[] {
+	return mergeDiagnostics(fieldOf(state, beanDiagnostics), fieldOf(state, flagOkayDiagnostics));
+}
+
+/** The live decorations for both fields, rebuilt whenever either moves. */
 export class DiagnosticsPlugin {
 	decorations: DecorationSet;
 
@@ -95,15 +199,19 @@ export class DiagnosticsPlugin {
 	}
 
 	update(update: ViewUpdate): void {
-		// Edits move lines around, and a run replaces the field wholesale.
-		const previous = update.startState.field(lineDiagnostics);
-		if (update.docChanged || previous !== update.state.field(lineDiagnostics)) {
+		const previous = update.startState;
+		const next = update.state;
+		if (
+			update.docChanged ||
+			previous.field(beanDiagnostics) !== next.field(beanDiagnostics) ||
+			previous.field(flagOkayDiagnostics) !== next.field(flagOkayDiagnostics)
+		) {
 			this.decorations = this.build(update.view);
 		}
 	}
 
 	private build(view: EditorView): DecorationSet {
-		const ranges = diagnosticDecorations(view.state.doc, view.state.field(lineDiagnostics));
+		const ranges = diagnosticDecorations(view.state.doc, mergedDiagnostics(view.state));
 		// `sort` because a run's diagnostics may reach the builder in any order.
 		return Decoration.set(ranges, true);
 	}
@@ -120,6 +228,13 @@ class ErrorGutterMarker extends GutterMarker {
 
 const GUTTER_DOT = new ErrorGutterMarker();
 
+function lineIsMarked(state: { field(field: unknown): unknown }, line0: number): boolean {
+	return (
+		fieldOf(state, beanDiagnostics).some((diagnostic) => diagnostic.line === line0) ||
+		fieldOf(state, flagOkayDiagnostics).some((diagnostic) => diagnostic.line === line0)
+	);
+}
+
 /** Click on a gutter dot: the host shows the quick-fix menu for that line. */
 export interface DiagnosticClickHost {
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean;
@@ -130,13 +245,13 @@ export function createDiagnosticsGutter(host?: DiagnosticClickHost) {
 		class: ERROR_GUTTER_CLASS,
 		lineMarker(view: EditorView, block: BlockInfo) {
 			const line = view.state.doc.lineAt(block.from);
-			const marked = view.state.field(lineDiagnostics).some((diagnostic) => diagnostic.line === line.number - 1);
-			return marked ? GUTTER_DOT : null;
+			return lineIsMarked(view.state, line.number - 1) ? GUTTER_DOT : null;
 		},
-		// Markers read the diagnostics field, which a run replaces without
-		// touching the document — the gutter must redraw on that too.
+		// Markers read both fields, which a run can replace without touching
+		// the document — the gutter must redraw on that too.
 		lineMarkerChange: (update) =>
-			update.startState.field(lineDiagnostics) !== update.state.field(lineDiagnostics),
+			update.startState.field(beanDiagnostics) !== update.state.field(beanDiagnostics) ||
+			update.startState.field(flagOkayDiagnostics) !== update.state.field(flagOkayDiagnostics),
 		domEventHandlers: host
 			? {
 					mousedown(view: EditorView, block: BlockInfo, event: Event) {
@@ -151,18 +266,30 @@ export function createDiagnosticsGutter(host?: DiagnosticClickHost) {
 export const diagnosticsGutter = createDiagnosticsGutter();
 
 export function createDiagnosticsExtension(host?: DiagnosticClickHost): Extension {
-	return [lineDiagnostics, diagnosticsView, host ? createDiagnosticsGutter(host) : diagnosticsGutter];
+	return [
+		beanDiagnostics,
+		flagOkayDiagnostics,
+		diagnosticsView,
+		host ? createDiagnosticsGutter(host) : diagnosticsGutter,
+	];
 }
 
 export const diagnosticsExtension: Extension = createDiagnosticsExtension();
 
-/**
- * Publish `diagnostics` to the CodeMirror view behind `editor` (empty: clear).
- * Obsidian's `Editor` wraps an `EditorView` as `cm` without declaring it —
- * the same kind of narrow host cast `main` needs for the CM5 mode registry.
- */
-export function setEditorLineDiagnostics(editor: Editor, diagnostics: readonly LineDiagnostic[]): void {
+function publishDiagnostics(
+	editor: Editor,
+	effect: { of(value: readonly LineDiagnostic[]): StateEffect<readonly LineDiagnostic[]> },
+	diagnostics: readonly LineDiagnostic[],
+): void {
 	const view = (editor as Editor & { cm?: EditorView }).cm;
 	if (!view) return;
-	view.dispatch({ effects: [setLineDiagnostics.of(diagnostics)] });
+	view.dispatch({ effects: [effect.of(diagnostics)] });
+}
+
+/**
+ * Publish bean-check `diagnostics` to the CodeMirror view behind `editor`
+ * (empty: clear that field). Flag markers live in their own field.
+ */
+export function setEditorBeanDiagnostics(editor: Editor, diagnostics: readonly LineDiagnostic[]): void {
+	publishDiagnostics(editor, setBeanDiagnostics, diagnostics);
 }

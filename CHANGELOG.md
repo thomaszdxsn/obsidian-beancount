@@ -6,6 +6,8 @@ UI/UX fixes from the architecture review (#75).
 
 ### Changed
 
+- **Flag as okay** markers follow the document as you type: adding or
+  removing `!` updates that underline without waiting for bean-check.
 - **Align decimal points**, **Align amounts on save** and **Format ledger**
   put decimal points on the **Separator column** (default 50), like typing
   `.` and the dotted ruler, instead of the tightest column of each
@@ -70,6 +72,7 @@ UI/UX fixes from the architecture review (#75).
 - Ledger regions (`ledgerDoc` / `editorLedger`) answer where ledger text
   is; editor features no longer scan fences or inspect the file extension
   to decide line-level context (#69).
+- Ledger validation owns bean-check debounce, Problems writes, and bean-check markers (#68).
 
 ## 0.2.2
 

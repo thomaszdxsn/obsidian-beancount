@@ -15,7 +15,7 @@ import BeancountPlugin from '../main';
 import type { LineDiagnostic } from '../bean-check';
 import { matchesVaultFile, parseBeanCheckErrors, runBeanCheck, toLineDiagnostics } from '../bean-check';
 import { clipText, isBeanCheckBinary } from '../bean-check';
-import { setLineDiagnostics } from '../diagnostics';
+import { setBeanDiagnostics } from '../diagnostics';
 import { createEditor, FakeVault } from './fakes';
 
 /** stderr of a real `bean-check`, whatever status it exits with. */
@@ -233,7 +233,7 @@ describe('save-time validation end to end', () => {
 				value: unknown;
 				is(spec: unknown): boolean;
 			}>;
-			expect(spec.is(setLineDiagnostics)).toBe(true);
+			expect(spec.is(setBeanDiagnostics)).toBe(true);
 			// bean-check's print order varies between processes (its account
 			// set iteration is hash-randomised), so compare line by line with
 			// the line's messages sorted.
@@ -276,7 +276,7 @@ describe('save-time validation end to end', () => {
 				value: unknown;
 				is(spec: unknown): boolean;
 			}>;
-			expect(spec.is(setLineDiagnostics)).toBe(true);
+			expect(spec.is(setBeanDiagnostics)).toBe(true);
 			const shown = spec.value as LineDiagnostic[];
 			expect(shown).toHaveLength(1);
 			// Opening fence is line 0; the transaction header is the first body line.
