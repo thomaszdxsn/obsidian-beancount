@@ -43,7 +43,7 @@ import {
 	quickFixesForLine,
 } from './code-actions';
 import type { QuickFix, TextEdit } from './code-actions';
-import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
+import { beanDiagnostics, createDiagnosticsExtension, flagOkayDiagnostics, setEditorLineDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
 import {
 	captureFavaStderr,
@@ -189,7 +189,7 @@ function flagsFor(file: { extension?: string }, text: string): LineDiagnostic[] 
 
 function beanDiagnosticsOn(editor: Editor): LineDiagnostic[] {
 	const view = (editor as Editor & { cm?: EditorView }).cm;
-	const field = view?.state?.field?.(lineDiagnostics);
+	const field = view?.state?.field?.(beanDiagnostics);
 	if (!field) return [];
 	return field.filter((diagnostic) => diagnostic.message !== FLAGGED_MESSAGE);
 }
@@ -878,7 +878,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
 		const located = this.editorFileForView(view);
 		if (!located) return false;
-		const diagnostic = view.state.field(lineDiagnostics).find((entry) => entry.line === line);
+		const diagnostic =
+			view.state.field(beanDiagnostics).find((entry) => entry.line === line) ??
+			view.state.field(flagOkayDiagnostics).find((entry) => entry.line === line);
 		if (!diagnostic) return false;
 		const { editor, file } = located;
 		const lines = editor.getValue().split('\n');

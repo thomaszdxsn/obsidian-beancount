@@ -1,13 +1,13 @@
 /**
- * The diagnostics extension draws bean-check's per-line complaints: a line
- * marker, an underline whose tooltip is the message, and a gutter dot. The
- * CodeMirror pieces are the test double; the behaviour under test is which
- * ranges get which message.
+ * Bean-check and Flag as okay markers live in separate CodeMirror fields.
+ * Decorations merge them (bean tooltip wins on the same line); the gutter
+ * dots the union.
  */
 import { describe, expect, it } from 'vitest';
 import type { Editor } from 'obsidian';
 import type { LineDiagnostic } from '../bean-check';
 import {
+	beanDiagnostics,
 	createDiagnosticsExtension,
 	diagnosticDecorations,
 	diagnosticsExtension,
@@ -18,9 +18,11 @@ import {
 	ERROR_LINE_CLASS,
 	ERROR_UNDERLINE_CLASS,
 	diagnosticsView,
-	lineDiagnostics,
-	setEditorLineDiagnostics,
-	setLineDiagnostics,
+	flagOkayDiagnostics,
+	setBeanDiagnostics,
+	setEditorBeanDiagnostics,
+	setEditorFlagOkayDiagnostics,
+	setFlagOkayDiagnostics,
 } from '../diagnostics';
 import type {
 	MockDecorationRange,
@@ -57,35 +59,55 @@ interface FakeDiagnosticView {
 	};
 }
 
-/** A view whose diagnostics field holds `diagnostics`. */
-function fakeView(text: string, diagnostics: readonly LineDiagnostic[]): FakeDiagnosticView {
+/** A view whose bean and flag fields hold the given diagnostics. */
+function fakeView(
+	text: string,
+	bean: readonly LineDiagnostic[],
+	flags: readonly LineDiagnostic[] = [],
+): FakeDiagnosticView {
 	const doc = fakeDoc(text);
 	return {
 		state: {
 			doc,
-			field: (field: unknown) => (field === lineDiagnostics ? diagnostics : []),
+			field: (field: unknown) => {
+				if (field === beanDiagnostics) return bean;
+				if (field === flagOkayDiagnostics) return flags;
+				return [];
+			},
 		},
 	};
 }
 
-describe('lineDiagnostics', () => {
+function gutterOf(extension: unknown): MockGutterConfig {
+	const members = extension as unknown[];
+	const found = members.find((member) => member && typeof member === 'object' && 'lineMarker' in member);
+	if (!found) throw new Error('missing diagnostics gutter');
+	return found as MockGutterConfig;
+}
+
+describe('beanDiagnostics', () => {
 	it('starts empty and is replaced wholesale by a set effect', () => {
-		// The field's create/update are CodeMirror-internal; tests drive the mock shape.
-		const field = lineDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const field = beanDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
 		expect(field.create()).toEqual([]);
 
 		const next = [{ line: 2, message: 'nope' }];
-		const updated = field.update([], { effects: [setLineDiagnostics.of(next)] });
+		const updated = field.update([], { effects: [setBeanDiagnostics.of(next)] });
 		expect(updated).toBe(next);
-		// Anything else — including another field's effect — leaves it.
 		expect(field.update(next, { effects: [{ is: () => false, value: [] }] })).toBe(next);
 	});
 
+	it('ignores a flag-field effect', () => {
+		const field = beanDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const bean = [{ line: 0, message: 'unknown account' }];
+		expect(field.update(bean, { effects: [setFlagOkayDiagnostics.of([{ line: 1, message: 'flagged' }])] })).toBe(
+			bean,
+		);
+	});
+
 	it('carries markers along edits and drops the ones whose line is consumed', () => {
-		const field = lineDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const field = beanDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
 		const marked = [{ line: 1, message: 'bad' }];
 
-		// A line inserted above moves the marker to line 2.
 		const inserted = field.update(marked, {
 			effects: [],
 			docChanged: true,
@@ -95,7 +117,6 @@ describe('lineDiagnostics', () => {
 		});
 		expect(inserted).toEqual([{ line: 2, message: 'bad' }]);
 
-		// The marked line itself is consumed: the marker goes with it.
 		const consumed = field.update([{ line: 0, message: 'gone' }], {
 			effects: [],
 			docChanged: true,
@@ -105,7 +126,6 @@ describe('lineDiagnostics', () => {
 		});
 		expect(consumed).toEqual([]);
 
-		// A line the document never had (`<load>` reports it as 0) drops.
 		expect(
 			field.update([{ line: -1, message: 'load' }], {
 				effects: [],
@@ -113,36 +133,50 @@ describe('lineDiagnostics', () => {
 				startState: { doc: fakeDoc('one') },
 				state: { doc: fakeDoc('one\ntwo') },
 				changes: { mapPos: (pos: number) => pos },
-			})
+			}),
 		).toEqual([]);
 
-		// A run's report replaces everything, edit or not.
 		const next = [{ line: 0, message: 'new' }];
 		expect(
 			field.update(marked, {
-				effects: [setLineDiagnostics.of(next)],
+				effects: [setBeanDiagnostics.of(next)],
 				docChanged: true,
 				startState: { doc: fakeDoc('one\ntwo') },
 				state: { doc: fakeDoc('new\none\ntwo') },
 				changes: { mapPos: (pos: number) => pos + 4 },
-			})
+			}),
 		).toBe(next);
 	});
 
-	it('ships the field, the view plugin and the gutter in one extension', () => {
-		// Wiring test: the extension must carry the very field the effect
-		// publishes to and the gutter reads — otherwise markers never show.
+	it('ships both fields, the view plugin and the gutter in one extension', () => {
 		const members = diagnosticsExtension as unknown as unknown[];
-		expect(members).toContain(lineDiagnostics);
+		expect(members).toContain(beanDiagnostics);
+		expect(members).toContain(flagOkayDiagnostics);
 		expect(members).toContain(diagnosticsView);
 		expect(members).toContain(diagnosticsGutter);
 
-		const field = lineDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const field = beanDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
 		const diagnostics = [{ line: 0, message: 'x' }];
-		const value = field.update(field.create(), { effects: [setLineDiagnostics.of(diagnostics)] });
+		const value = field.update(field.create(), { effects: [setBeanDiagnostics.of(diagnostics)] });
 		const gutterConfig = diagnosticsGutter as unknown as MockGutterConfig;
 		const view = fakeView('one', value);
 		expect(gutterConfig.lineMarker?.(view, { from: 0, to: 3 }, [])).not.toBeNull();
+	});
+});
+
+describe('flagOkayDiagnostics', () => {
+	it('starts empty and is replaced wholesale by a set effect', () => {
+		const field = flagOkayDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		expect(field.create()).toEqual([]);
+
+		const next = [{ line: 0, message: 'Transaction is flagged incomplete' }];
+		expect(field.update([], { effects: [setFlagOkayDiagnostics.of(next)] })).toBe(next);
+	});
+
+	it('ignores a bean-field effect', () => {
+		const field = flagOkayDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const flags = [{ line: 0, message: 'Transaction is flagged incomplete' }];
+		expect(field.update(flags, { effects: [setBeanDiagnostics.of([{ line: 2, message: 'oops' }])] })).toBe(flags);
 	});
 });
 
@@ -157,7 +191,6 @@ describe('diagnosticDecorations', () => {
 		]) as unknown as MockDecorationRange[];
 
 		const underlines = ranges.filter((range) => range.value.kind === 'mark');
-		// Ranges keep the diagnostics' order; the plugin's `Decoration.set(…, true)` sorts.
 		expect(underlines.map((range) => [range.from, range.to, range.value.spec])).toEqual([
 			[
 				first.length + 1,
@@ -167,7 +200,7 @@ describe('diagnosticDecorations', () => {
 			[0, first.length, { class: ERROR_UNDERLINE_CLASS, attributes: { title: 'first\nsecond' } }],
 		]);
 		expect(
-			ranges.filter((range) => range.value.kind === 'line').map((range) => range.value.spec)
+			ranges.filter((range) => range.value.kind === 'line').map((range) => range.value.spec),
 		).toEqual([{ class: ERROR_LINE_CLASS }, { class: ERROR_LINE_CLASS }]);
 	});
 
@@ -185,22 +218,25 @@ describe('diagnosticDecorations', () => {
 });
 
 describe('diagnostics gutter', () => {
-	it('dots exactly the marked lines', () => {
+	it('dots the union of bean and flag lines', () => {
 		const gutterConfig = diagnosticsGutter as unknown as MockGutterConfig;
 		expect(gutterConfig.class).toBe(ERROR_GUTTER_CLASS);
-		const view = fakeView('one\ntwo\n', [{ line: 1, message: 'bad' }]);
+		const view = fakeView(
+			'one\ntwo\n',
+			[{ line: 1, message: 'bad' }],
+			[{ line: 0, message: 'Transaction is flagged incomplete' }],
+		);
 
-		const marked = gutterConfig.lineMarker?.(view, { from: 4, to: 7 }, []);
-		const clear = gutterConfig.lineMarker?.(view, { from: 0, to: 3 }, []);
+		expect(gutterConfig.lineMarker?.(view, { from: 4, to: 7 }, [])?.elementClass).toBe(ERROR_GUTTER_MARKER_CLASS);
+		expect(gutterConfig.lineMarker?.(view, { from: 0, to: 3 }, [])?.elementClass).toBe(ERROR_GUTTER_MARKER_CLASS);
+		const neither = fakeView('one\ntwo\n', [], []);
+		expect(gutterConfig.lineMarker?.(neither, { from: 0, to: 3 }, [])).toBeNull();
 
-		expect(marked?.elementClass).toBe(ERROR_GUTTER_MARKER_CLASS);
-		expect(clear).toBeNull();
-		// A run replaces the field without editing: the gutter must redraw.
-		const clean = fakeView('one\ntwo\n', []);
-		expect(
-			gutterConfig.lineMarkerChange?.({ startState: clean.state, state: view.state })
-		).toBe(true);
+		const clean = fakeView('one\ntwo\n', [], []);
+		expect(gutterConfig.lineMarkerChange?.({ startState: clean.state, state: view.state })).toBe(true);
 		expect(gutterConfig.lineMarkerChange?.({ startState: view.state, state: view.state })).toBe(false);
+		const flagOnly = fakeView('one\ntwo\n', [], [{ line: 0, message: 'Transaction is flagged incomplete' }]);
+		expect(gutterConfig.lineMarkerChange?.({ startState: neither.state, state: flagOnly.state })).toBe(true);
 	});
 });
 
@@ -212,18 +248,16 @@ describe('createDiagnosticsExtension', () => {
 				clicks.push({ line });
 				return true;
 			},
-		}) as unknown as unknown[];
-		const gutterConfig = extension[2] as MockGutterConfig;
+		});
+		const gutterConfig = gutterOf(extension);
 		const view = fakeView('one\ntwo\n', [{ line: 1, message: 'bad' }]);
-		expect(
-			gutterConfig.domEventHandlers?.mousedown?.(view, { from: 4, to: 7 }, {} as Event)
-		).toBe(true);
+		expect(gutterConfig.domEventHandlers?.mousedown?.(view, { from: 4, to: 7 }, {} as Event)).toBe(true);
 		expect(clicks).toEqual([{ line: 1 }]);
 	});
 });
 
 describe('DiagnosticsPlugin', () => {
-	it('rebuilds when the diagnostics move and sorts ranges by position', () => {
+	it('rebuilds when either field moves and prefers bean tooltip on the same line', () => {
 		const diagnostics = [{ line: 1, message: 'later' }];
 		const view = fakeView('one\ntwo', diagnostics);
 		const plugin = new DiagnosticsPlugin(view as never);
@@ -233,39 +267,70 @@ describe('DiagnosticsPlugin', () => {
 		const decorations = registered.spec.decorations(plugin) as Array<{ from: number }>;
 		expect(decorations.map((range) => range.from)).toEqual([4, 4]);
 
-		const next = fakeView('one\ntwo', [
-			{ line: 1, message: 'later' },
-			{ line: 0, message: 'sooner' },
-		]);
+		const next = fakeView(
+			'one\ntwo',
+			[{ line: 1, message: 'later' }, { line: 0, message: 'sooner' }],
+			[{ line: 0, message: 'Transaction is flagged incomplete' }],
+		);
 		plugin.update({
 			docChanged: true,
 			view: next,
 			startState: view.state,
 			state: next.state,
 		} as never);
-		const rebuilt = registered.spec.decorations(plugin) as Array<{ from: number }>;
-		// Line 0's decorations sort before line 1's, whatever order the run reported.
+		const rebuilt = registered.spec.decorations(plugin) as Array<{ from: number; value: { spec?: { attributes?: { title?: string } } } }>;
 		expect(rebuilt.map((range) => range.from)).toEqual([0, 0, 4, 4]);
+		const titles = rebuilt
+			.map((range) => range.value.spec?.attributes?.title)
+			.filter((title): title is string => typeof title === 'string');
+		expect(titles).toContain('sooner');
+		expect(titles).not.toContain('Transaction is flagged incomplete');
 
-		// Nothing moved and the field is the same value: the set stays put.
 		const kept = registered.spec.decorations(plugin);
 		plugin.update({ docChanged: false, view: next, startState: next.state, state: next.state } as never);
 		expect(registered.spec.decorations(plugin)).toBe(kept);
 	});
+
+	it('keeps flag decorations when bean diagnostics are cleared', () => {
+		const start = fakeView('one\ntwo', [{ line: 1, message: 'oops' }], [
+			{ line: 0, message: 'Transaction is flagged incomplete' },
+		]);
+		const plugin = new DiagnosticsPlugin(start as never);
+		const registered = diagnosticsView as unknown as MockViewPlugin<DiagnosticsPlugin>;
+		const cleared = fakeView('one\ntwo', [], [{ line: 0, message: 'Transaction is flagged incomplete' }]);
+		plugin.update({
+			docChanged: false,
+			view: cleared,
+			startState: start.state,
+			state: cleared.state,
+		} as never);
+		const decorations = registered.spec.decorations(plugin) as Array<{ from: number }>;
+		expect(decorations.map((range) => range.from)).toEqual([0, 0]);
+	});
 });
 
-describe('setEditorLineDiagnostics', () => {
-	it('publishes the diagnostics to the editor view, and tolerates an editor without one', () => {
+describe('setEditorBeanDiagnostics', () => {
+	it('publishes bean diagnostics without touching the flag effect', () => {
 		const editor = createEditor(['line']);
 		const diagnostics = [{ line: 0, message: 'bad' }];
 
-		setEditorLineDiagnostics(editor as unknown as Editor, diagnostics);
+		setEditorBeanDiagnostics(editor as unknown as Editor, diagnostics);
 
 		const [effect] = editor.cm.dispatched[0].effects as Array<{ value: unknown; is(spec: unknown): boolean }>;
-		expect(effect.is(setLineDiagnostics)).toBe(true);
+		expect(effect.is(setBeanDiagnostics)).toBe(true);
+		expect(effect.is(setFlagOkayDiagnostics)).toBe(false);
 		expect(effect.value).toBe(diagnostics);
 
 		const bare = { ...editor, cm: undefined };
-		expect(() => setEditorLineDiagnostics(bare as unknown as Editor, [])).not.toThrow();
+		expect(() => setEditorBeanDiagnostics(bare as unknown as Editor, [])).not.toThrow();
+	});
+
+	it('publishes flag diagnostics on their own effect', () => {
+		const editor = createEditor(['line']);
+		const flags = [{ line: 0, message: 'Transaction is flagged incomplete' }];
+		setEditorFlagOkayDiagnostics(editor as unknown as Editor, flags);
+		const [effect] = editor.cm.dispatched[0].effects as Array<{ value: unknown; is(spec: unknown): boolean }>;
+		expect(effect.is(setFlagOkayDiagnostics)).toBe(true);
+		expect(effect.value).toBe(flags);
 	});
 });

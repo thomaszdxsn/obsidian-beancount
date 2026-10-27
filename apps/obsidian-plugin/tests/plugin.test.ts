@@ -155,7 +155,7 @@ function clickDiagnostic(
 	diagnostics: LineDiagnostic[]
 ): boolean {
 	const extension = (plugin as unknown as RecordingPlugin).registrations.editorExtensions[2] as unknown[];
-	const gutter = extension[2] as MockGutterConfig;
+	const gutter = extension.find((member) => member && typeof member === 'object' && 'lineMarker' in member) as MockGutterConfig;
 	const from = editor.lines.slice(0, line).reduce((sum, text) => sum + text.length + 1, 0);
 	Object.assign(editor.cm, {
 		state: {
