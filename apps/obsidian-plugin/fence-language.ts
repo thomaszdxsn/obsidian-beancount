@@ -31,7 +31,7 @@ import type { Extension } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { BEANCOUNT_LANGUAGE_DATA } from './beancount-mode';
-import { extractBeancountFences } from './fences';
+import { ledgerDoc } from './fences';
 
 /** Indent, one or more `;`, optional space, then `#region` / `#endregion`. */
 const REGION_START = /^[ \t]*;+[ \t]*#region\b/;
@@ -62,9 +62,9 @@ interface FenceBodyLines {
 }
 
 function fenceBodies(text: string): FenceBodyLines[] {
-	return extractBeancountFences(text).map((fence) => ({
-		startLine: fence.startLine,
-		endLine: fence.startLine + fence.lines.length,
+	return ledgerDoc('fenced', text).regions.map((region) => ({
+		startLine: region.hostStartLine,
+		endLine: region.hostStartLine + region.lines.length,
 	}));
 }
 
@@ -112,10 +112,7 @@ function mapPos(pos: number, changes: readonly CommentChange[]): number {
  */
 export function posInBeancountFence(text: string, pos: number): boolean {
 	if (pos < 0) return false;
-	const clamped = pos > text.length ? text.length : pos;
-	const starts = lineStartsOf(text);
-	const line = lineIndexOf(starts, clamped);
-	return bodyContaining(fenceBodies(text), line) !== undefined;
+	return ledgerDoc('fenced', text).containsPos(pos);
 }
 
 /**

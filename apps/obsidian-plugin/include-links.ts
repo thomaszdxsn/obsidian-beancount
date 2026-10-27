@@ -24,7 +24,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { Notice, Platform, editorInfoField } from 'obsidian';
 import type { App, PaneType } from 'obsidian';
-import { docFences, extractBeancountFences, isLedgerFile } from './fences';
+import { isLedgerFile, ledgerDoc } from './fences';
 
 /** The CSS contract with `styles.css`: link color, underline on hover. */
 export const INCLUDE_LINK_CLASS = 'beancount-include-link';
@@ -218,22 +218,20 @@ function editorFileKey(state: EditorView['state']): string {
 }
 
 /**
- * 0-based lines that are ledger text. A ledger file is entirely ledger; a
- * markdown note contributes only fence bodies. Anything else (and a note
- * with no fence) has no include links. `null` means every line.
+ * 0-based lines that are ledger text. A ledger file is entirely ledger; any
+ * other buffer contributes only fence bodies. A buffer with no region has
+ * no include links. `null` means every line.
  */
 function ledgerLines(
 	text: string,
 	file: { path: string; extension: string } | null | undefined
 ): Set<number> | null | 'none' {
-	if (!file) return 'none';
-	if (isLedgerFile(file)) return null;
-	if (file.extension !== 'md') return 'none';
-	const fences = extractBeancountFences(text);
-	if (fences.length === 0) return 'none';
+	if (file && isLedgerFile(file)) return null;
+	const regions = ledgerDoc('fenced', text).regions;
+	if (regions.length === 0) return 'none';
 	const lines = new Set<number>();
-	for (const fence of fences) {
-		for (let i = 0; i < fence.lines.length; i += 1) lines.add(fence.startLine + i);
+	for (const region of regions) {
+		for (let i = 0; i < region.lines.length; i += 1) lines.add(region.hostStartLine + i);
 	}
 	return lines;
 }
@@ -332,30 +330,23 @@ function visibleLineSpans(view: EditorView): Array<{ fromLine: number; toLine: n
 
 /**
  * Marks for this view. A ledger file walks only the viewport and never
- * allocates `doc.toString()` — that string was unused, and a full scan on
- * every keystroke in every editor is the cost this avoids. A markdown note
- * walks only its fence bodies, found once per document (`docFences`).
+ * allocates `doc.toString()`. A fenced buffer walks only its fence bodies,
+ * found once per document (`ledgerDoc`).
  */
 function includeMarks(view: EditorView): Array<{ from: number; to: number }> {
 	const file = editorFile(view.state);
-	if (!file) return [];
 	const doc = view.state.doc;
-	if (isLedgerFile(file)) return collectIncludeMarks(doc, visibleLineSpans(view));
-	if (file.extension !== 'md' || !docHasFence(doc)) return [];
-	// Only a line holding `include` can be one; the rest skip `doc.line`.
-	// A fence body line is the host line less some leading spaces.
+	if (file && isLedgerFile(file)) return collectIncludeMarks(doc, visibleLineSpans(view));
+	if (!docHasFence(doc)) return [];
 	const candidates: Array<{ fromLine: number; toLine: number }> = [];
-	for (const fence of docFences(doc).fences) {
-		for (let i = 0; i < fence.lines.length; i += 1) {
-			if (fence.lines[i].includes('include')) candidates.push({ fromLine: fence.startLine + i, toLine: fence.startLine + i });
+	for (const region of ledgerDoc('fenced', doc).regions) {
+		for (let i = 0; i < region.lines.length; i += 1) {
+			if (region.lines[i].includes('include')) {
+				candidates.push({ fromLine: region.hostStartLine + i, toLine: region.hostStartLine + i });
+			}
 		}
 	}
 	return collectIncludeMarks(doc, candidates);
-}
-
-/** Body lines of a note's ledger fences: disjoint, in document order. */
-function fenceSpans(doc: LinkDoc): Array<{ fromLine: number; toLine: number }> {
-	return docFences(doc).fences.map((fence) => ({ fromLine: fence.startLine, toLine: fence.startLine + fence.lines.length - 1 }));
 }
 
 function includeDecorations(view: EditorView): DecorationSet {
@@ -371,12 +362,12 @@ function includeDecorations(view: EditorView): DecorationSet {
 /**
  * Whether 0-based `lineIndex` is ledger text. A ledger file is, and that
  * does not read the document — Mod-click must not allocate the whole file
- * to answer it. A note is only when the line sits in a beancount fence.
+ * to answer it. A fenced buffer is only when the line sits in a fence body.
  */
 function lineInLedger(doc: LinkDoc, lineIndex: number, file: { path: string; extension: string }): boolean {
 	if (isLedgerFile(file)) return true;
-	if (file.extension !== 'md' || !docHasFence(doc)) return false;
-	return fenceSpans(doc).some((span) => lineIndex >= span.fromLine && lineIndex <= span.toLine);
+	if (!docHasFence(doc)) return false;
+	return ledgerDoc('fenced', doc).lineIsLedger(lineIndex);
 }
 
 /**

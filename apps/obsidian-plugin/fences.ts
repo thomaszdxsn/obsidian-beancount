@@ -9,30 +9,11 @@
  */
 import type { TFile } from 'obsidian';
 
-/** One fenced ledger in a markdown document. */
-export interface BeancountFence {
-	/** 0-based line of the first body line in the host document. */
-	startLine: number;
-	/** Fence body lines, excluding the opening and closing markers. */
-	lines: readonly string[];
-}
-
 /**
  * Every opening fence, including non-ledger languages. Walking those bodies
  * too prevents a literal ```bean example inside another fence becoming a ledger.
  */
 const OPEN_FENCE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/;
-
-/** A temp ledger built from one note's fences, ready to hand bean-check. */
-export interface FenceLedger {
-	/** The file bean-check should parse, ending in a newline when non-empty. */
-	text: string;
-	/**
-	 * The 1-based host line for a 1-based temp-file line, or `undefined` for
-	 * preamble / separator lines that are not fence body.
-	 */
-	hostLine(tempLine: number): number | undefined;
-}
 
 /**
  * `text.split(/\r?\n/)`; text without `\r` takes the much faster plain
@@ -40,14 +21,6 @@ export interface FenceLedger {
  */
 export function splitLines(text: string): string[] {
 	return text.includes('\r') ? text.split(/\r?\n/) : text.split('\n');
-}
-
-/**
- * Every `beancount`/`bean` fence in `text`, in document order. An unclosed
- * fence takes the rest of the file as its body.
- */
-export function extractBeancountFences(text: string): BeancountFence[] {
-	return fencesOfLines(splitLines(text));
 }
 
 /** Whether `line` can be a fence marker: ` or ~ after at most three spaces. */
@@ -58,8 +31,8 @@ function mayBeFence(line: string): boolean {
 	return c === 0x60 || c === 0x7e;
 }
 
-function fencesOfLines(lines: readonly string[]): BeancountFence[] {
-	const fences: BeancountFence[] = [];
+function fencesOfLines(lines: readonly string[]): LedgerRegion[] {
+	const fences: LedgerRegion[] = [];
 	let i = 0;
 	while (i < lines.length) {
 		const open = mayBeFence(lines[i]) ? OPEN_FENCE.exec(lines[i]) : null;
@@ -81,20 +54,10 @@ function fencesOfLines(lines: readonly string[]): BeancountFence[] {
 			while (start < indent && line[start] === ' ') start += 1;
 			if (ledger) body.push(line.slice(start));
 		}
-		if (ledger) fences.push({ startLine: i + 1, lines: body });
+		if (ledger) fences.push({ hostStartLine: i + 1, lines: body, hostIndent: indent });
 		i = j + 1;
 	}
 	return fences;
-}
-
-/** A note's ledger fences and its lines with everything but fence bodies blanked. */
-export interface DocFences {
-	fences: readonly BeancountFence[];
-	/**
-	 * Host lines with fence bodies in place and every other line blank, so
-	 * ledger scans see fence text at host line numbers; null without a fence.
-	 */
-	masked: readonly string[] | null;
 }
 
 /** An editor document: its text, and its lines when it can iterate them (CodeMirror's `Text`). */
@@ -103,33 +66,7 @@ interface FenceDoc {
 	iterLines?(): { next(): { done?: boolean }; value: string };
 }
 
-const fencesByDoc = new WeakMap<object, DocFences>();
-
-/**
- * `extractBeancountFences(doc.toString())` and its mask, once per document.
- * Editor documents are immutable, so the inlay hints, flag warnings and
- * include links of one note share a single scan per edit. A CodeMirror
- * document is read line by line: no joined copy, and its line strings stay
- * the same objects from edit to edit, which keeps the per-line caches of
- * the hint scans cheap.
- */
-export function docFences(doc: FenceDoc): DocFences {
-	let entry = fencesByDoc.get(doc);
-	if (entry === undefined) {
-		const lines = docLines(doc);
-		const fences = fencesOfLines(lines);
-		let masked: string[] | null = null;
-		if (fences.length > 0) {
-			masked = new Array<string>(lines.length).fill('');
-			for (const fence of fences) {
-				for (let i = 0; i < fence.lines.length; i += 1) masked[fence.startLine + i] = fence.lines[i];
-			}
-		}
-		entry = { fences, masked };
-		fencesByDoc.set(doc, entry);
-	}
-	return entry;
-}
+const ledgerByDoc = new WeakMap<object, { kind: LedgerKind; doc: LedgerDoc }>();
 
 /** `splitLines(doc.toString())`, read from the document's own lines when it has them. */
 function docLines(doc: FenceDoc): string[] {
@@ -149,19 +86,6 @@ function isClosingFence(line: string, marker: string, minLen: number): boolean {
 	return close !== null && close[2][0] === marker && close[2].length >= minLen;
 }
 
-/**
- * The ledger text of a vault file: a markdown note contributes only its
- * `beancount`/`bean` fence bodies, a `.bean`/`.beancount` file all of it.
- * Prose shapes (`#project`, `^block-id`, `- 10 GB`, `PG_DATA_DIR:-x`) would
- * otherwise pass for ledger tokens.
- */
-export function ledgerSource(path: string, content: string): string {
-	if (!path.endsWith('.md')) return content;
-	return extractBeancountFences(content)
-		.map((fence) => fence.lines.join('\n'))
-		.join('\n');
-}
-
 /** File extensions bean-check parses: the ledger files validation checks. */
 const LEDGER_EXTENSIONS: Record<string, true> = { beancount: true, bean: true };
 
@@ -176,68 +100,69 @@ export function isLedgerFile(file: { extension?: string }): file is TFile {
 	return typeof file.extension === 'string' && LEDGER_EXTENSIONS[file.extension] === true;
 }
 
-function fenceContainsLine(fences: readonly BeancountFence[], lineIndex: number): boolean {
-	for (const fence of fences) {
-		if (lineIndex >= fence.startLine && lineIndex < fence.startLine + fence.lines.length) return true;
+/** Buffer classification: a ledger file throughout, or fenced everywhere else. */
+export type LedgerKind = 'ledger-file' | 'fenced';
+
+/**
+ * Ledger kind of a buffer: `bean` / `beancount` is a ledger file; a note,
+ * another extension, a folder, or no file is fenced.
+ */
+export function ledgerKind(file: { extension?: string } | null | undefined): LedgerKind {
+	return file && isLedgerFile(file) ? 'ledger-file' : 'fenced';
+}
+
+/** One contiguous stretch of ledger text in the host buffer. */
+export interface LedgerRegion {
+	/** Host line, 0-based, of the first body line; 0 for a ledger file. */
+	hostStartLine: number;
+	/** Body lines with the opener's 0–3 spaces stripped; the whole buffer for a ledger file. */
+	lines: readonly string[];
+	/** Opener indent in spaces; 0 for a ledger file. */
+	hostIndent: number;
+}
+
+/** Text + 1-based host mapping for bean-check / balance reports. */
+export interface TempLedger {
+	text: string;
+	/** 1-based temp → 1-based host; include preamble and inter-fence blanks are undefined. */
+	hostLine(tempLine1: number): number | undefined;
+}
+
+/** A buffer's ledger regions and the queries every feature asks. */
+export interface LedgerDoc {
+	readonly kind: LedgerKind;
+	readonly regions: readonly LedgerRegion[];
+	lineIsLedger(hostLine0: number): boolean;
+	containsPos(pos: number): boolean;
+	masked(): readonly string[] | null;
+	ledgerSource(): string;
+	tempLedger(includePath?: string): TempLedger;
+}
+
+function regionContainsLine(regions: readonly LedgerRegion[], lineIndex: number): boolean {
+	for (const region of regions) {
+		if (lineIndex >= region.hostStartLine && lineIndex < region.hostStartLine + region.lines.length) {
+			return true;
+		}
 	}
 	return false;
 }
 
-/**
- * Which lines of a buffer are ledger text: `undefined` for a ledger file,
- * where every line is and nothing needs scanning; otherwise a test against
- * the fence bodies `fences()` returns (only called for non-ledger files).
- */
-export function ledgerLinesOf(
-	file: { extension?: string } | null | undefined,
-	fences: () => readonly BeancountFence[]
-): ((lineIndex: number) => boolean) | undefined {
-	if (file && isLedgerFile(file)) return undefined;
-	const bodies = fences();
-	return (lineIndex) => fenceContainsLine(bodies, lineIndex);
+function lineIndexAt(lines: readonly string[], pos: number): number {
+	let offset = 0;
+	for (let i = 0; i < lines.length; i += 1) {
+		const end = offset + lines[i].length;
+		if (i + 1 < lines.length) {
+			if (pos <= end) return i;
+			offset = end + 1;
+		} else {
+			return i;
+		}
+	}
+	return 0;
 }
 
-/** What `editorLineIsLedger` reads from an Obsidian `Editor`. */
-interface LedgerEditor {
-	getValue(): string;
-	/** The live CodeMirror view Obsidian puts on its editors; not in the public typings. */
-	cm?: { state?: { doc?: FenceDoc } };
-}
-
-/**
- * Ledger-text check for an Obsidian `Editor`: the file, plus the fences of
- * the buffer when the file is not a ledger. The live CodeMirror document is
- * scanned through `docFences`, cached per document version that a note's
- * flag markers and inlay hints already scan, so a capitalized word typed in
- * a long note costs no extra pass. Callers run their cheap per-line trigger
- * shape first.
- */
-export function editorLineIsLedger(
-	editor: LedgerEditor,
-	lineIndex: number,
-	file: { extension?: string } | null | undefined
-): boolean {
-	if (file && isLedgerFile(file)) return true;
-	const doc = editor.cm?.state?.doc;
-	const fences = doc ? docFences(doc).fences : extractBeancountFences(editor.getValue());
-	return fenceContainsLine(fences, lineIndex);
-}
-
-/**
- * Whether `path` can be interpolated into one `include "..."` line: no CR/LF,
- * NUL, or quotes that would break out of the string.
- */
-export function isSafeIncludePath(path: string): boolean {
-	return path.length > 0 && !/[\r\n\0"]/.test(path);
-}
-
-/**
- * Concatenate `fences` into one ledger. When `includePath` is set, an
- * `include` of that file (forward-slash path) is prepended so the fences are
- * checked against the entry ledger's opens and accounts. An unsafe path is
- * omitted rather than written into the temp file.
- */
-export function buildFenceLedger(fences: readonly BeancountFence[], includePath?: string): FenceLedger {
+function tempLedgerOf(regions: readonly LedgerRegion[], includePath?: string): TempLedger {
 	const hostByTemp = new Map<number, number>();
 	const chunks: string[] = [];
 	let tempLine = 1;
@@ -250,15 +175,15 @@ export function buildFenceLedger(fences: readonly BeancountFence[], includePath?
 		}
 	}
 
-	for (let i = 0; i < fences.length; i += 1) {
+	for (let i = 0; i < regions.length; i += 1) {
 		if (i > 0) {
 			chunks.push('');
 			tempLine += 1;
 		}
-		const fence = fences[i];
-		for (let j = 0; j < fence.lines.length; j += 1) {
-			chunks.push(fence.lines[j]);
-			hostByTemp.set(tempLine, fence.startLine + j + 1);
+		const region = regions[i];
+		for (let j = 0; j < region.lines.length; j += 1) {
+			chunks.push(region.lines[j]);
+			hostByTemp.set(tempLine, region.hostStartLine + j + 1);
 			tempLine += 1;
 		}
 	}
@@ -268,4 +193,89 @@ export function buildFenceLedger(fences: readonly BeancountFence[], includePath?
 		text: body === '' ? '' : body + '\n',
 		hostLine: (line) => hostByTemp.get(line),
 	};
+}
+
+function createLedgerDoc(kind: LedgerKind, hostLines: readonly string[]): LedgerDoc {
+	const regions: readonly LedgerRegion[] =
+		kind === 'ledger-file'
+			? [{ hostStartLine: 0, hostIndent: 0, lines: hostLines }]
+			: fencesOfLines(hostLines);
+	const source = hostLines.join('\n');
+	let mask: readonly string[] | null | undefined;
+	const lineIsLedger = (hostLine0: number): boolean =>
+		kind === 'ledger-file' || regionContainsLine(regions, hostLine0);
+
+	return {
+		kind,
+		regions,
+		lineIsLedger,
+		containsPos(pos: number): boolean {
+			if (pos < 0) return false;
+			const clamped = pos > source.length ? source.length : pos;
+			return lineIsLedger(lineIndexAt(hostLines, clamped));
+		},
+		masked(): readonly string[] | null {
+			if (mask !== undefined) return mask;
+			if (regions.length === 0) {
+				mask = null;
+				return mask;
+			}
+			const next = new Array<string>(hostLines.length).fill('');
+			for (const region of regions) {
+				for (let i = 0; i < region.lines.length; i += 1) {
+					next[region.hostStartLine + i] = region.lines[i];
+				}
+			}
+			mask = next;
+			return mask;
+		},
+		ledgerSource(): string {
+			return regions.map((region) => region.lines.join('\n')).join('\n');
+		},
+		tempLedger(includePath?: string): TempLedger {
+			return tempLedgerOf(regions, includePath);
+		},
+	};
+}
+
+/**
+ * Regions and queries for a buffer. A CodeMirror `Text` is scanned once and
+ * reused; a vault string is not cached.
+ */
+export function ledgerDoc(kind: LedgerKind, source: string | FenceDoc): LedgerDoc {
+	if (typeof source === 'string') return createLedgerDoc(kind, splitLines(source));
+	let entry = ledgerByDoc.get(source);
+	if (entry === undefined || entry.kind !== kind) {
+		entry = { kind, doc: createLedgerDoc(kind, docLines(source)) };
+		ledgerByDoc.set(source, entry);
+	}
+	return entry.doc;
+}
+
+/** What `editorLedger` reads from an Obsidian `Editor`. */
+interface LedgerEditor {
+	getValue(): string;
+	/** The live CodeMirror view Obsidian puts on its editors; not in the public typings. */
+	cm?: { state?: { doc?: FenceDoc } };
+}
+
+/**
+ * The live editor buffer as a `LedgerDoc`: a ledger file is one region;
+ * otherwise fenced, preferring the CodeMirror document for the WeakMap.
+ */
+export function editorLedger(
+	editor: LedgerEditor,
+	file: { extension?: string } | null | undefined
+): LedgerDoc {
+	const kind = ledgerKind(file);
+	const doc = editor.cm?.state?.doc;
+	return doc ? ledgerDoc(kind, doc) : ledgerDoc(kind, editor.getValue());
+}
+
+/**
+ * Whether `path` can be interpolated into one `include "..."` line: no CR/LF,
+ * NUL, or quotes that would break out of the string.
+ */
+export function isSafeIncludePath(path: string): boolean {
+	return path.length > 0 && !/[\r\n\0"]/.test(path);
 }

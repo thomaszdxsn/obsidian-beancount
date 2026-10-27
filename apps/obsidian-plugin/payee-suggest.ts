@@ -23,7 +23,7 @@
  * through later edits; undo/redo or a change outside its stops ends it.
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { editorLineIsLedger } from './fences';
+import { editorLedger } from './fences';
 import { PAYEE_PREFIX_RE } from './payee-index';
 import { buildPayeeAutofill } from './payee-template';
 import type { TemplatePosting } from './payee-template';
@@ -148,7 +148,7 @@ export class PayeeSuggest extends IndexSuggest {
 		if (after !== '' && after !== '"') return null;
 		const match = PAYEE_PREFIX_RE.exec(line.slice(0, cursor.ch));
 		if (!match) return null;
-		if (!editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (!editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return this.triggerInfo(cursor, match[1]);
 	}
 

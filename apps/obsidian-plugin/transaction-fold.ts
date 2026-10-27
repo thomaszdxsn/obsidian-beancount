@@ -24,7 +24,7 @@ import { foldService } from '@codemirror/language';
 import type { EditorState, Extension, Text } from '@codemirror/state';
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import { editorInfoField } from 'obsidian';
-import { extractBeancountFences, isLedgerFile } from './fences';
+import { isLedgerFile, ledgerDoc } from './fences';
 
 /** A transaction header at column 0: a date, then `txn` or a flag, space optional as in the grammar. */
 const DATED_HEADER = /^\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
@@ -139,38 +139,21 @@ export function transactionFoldAt(
 	return { from: doc.line(lineNumber).to, to: doc.line(lineNumber + hidden).to };
 }
 
-/** A note's ledger fence bodies, computed once per doc. */
-const fenceBodiesCache = new WeakMap<Text, FoldBody[]>();
-
-function fenceBodies(doc: Text): FoldBody[] {
-	let bodies = fenceBodiesCache.get(doc);
-	if (!bodies) {
-		bodies = extractBeancountFences(doc.toString()).map((fence) => ({
-			first: fence.startLine + 1,
-			lines: fence.lines,
-		}));
-		fenceBodiesCache.set(doc, bodies);
-	}
-	return bodies;
-}
-
 /**
  * The fold for the line starting at `lineStart`: whole document in a ledger
- * file, fence bodies only in a markdown note, nothing elsewhere.
+ * file, fence bodies in any other buffer.
  */
 export function transactionFoldInState(state: EditorState, lineStart: number): { from: number; to: number } | null {
 	const file = state.field(editorInfoField, false)?.file;
-	if (!file) return null;
 	const doc = state.doc;
 	const line = doc.lineAt(lineStart);
 	// Cheap reject before the fence scan: most lines are no header.
 	if (!MAYBE_HEADER.test(line.text)) return null;
-	// `isLedgerFile` narrows a `TFile` to `never` on its false branch; read the extension first.
-	const { extension } = file;
-	if (isLedgerFile(file)) return transactionFoldAt(doc, line.number);
-	if (extension !== 'md') return null;
-	const body = fenceBodies(doc).find((b) => line.number >= b.first && line.number < b.first + b.lines.length);
-	return body ? transactionFoldAt(doc, line.number, body) : null;
+	if (file && isLedgerFile(file)) return transactionFoldAt(doc, line.number);
+	const region = ledgerDoc('fenced', doc).regions.find(
+		(entry) => line.number - 1 >= entry.hostStartLine && line.number - 1 < entry.hostStartLine + entry.lines.length
+	);
+	return region ? transactionFoldAt(doc, line.number, { first: region.hostStartLine + 1, lines: region.lines }) : null;
 }
 
 export function transactionFoldExtension(): Extension {

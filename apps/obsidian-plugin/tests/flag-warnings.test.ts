@@ -207,7 +207,12 @@ describe('FlagWarningController', () => {
 		]);
 
 		const unattached = editor(controller, '2026-10-01 ! "Alone"', null);
-		expect(unattached.classes()).toEqual([WARNING_LINE_CLASS, WARNING_UNDERLINE_CLASS]);
+		expect(unattached.classes()).toEqual([]);
+		const fencedUntitled = editor(controller, '```beancount\n2026-10-01 ! "Alone"\n```', null);
+		expect(fencedUntitled.classes()).toEqual([WARNING_LINE_CLASS, WARNING_UNDERLINE_CLASS]);
+		const fencedTxt = editor(controller, '```beancount\n2026-10-01 ! "Alone"\n```', 'txt');
+		expect(fencedTxt.classes()).toEqual([WARNING_LINE_CLASS, WARNING_UNDERLINE_CLASS]);
+		expect(editor(controller, '2026-10-01 ! "Alone"', 'txt').classes()).toEqual([]);
 	});
 
 	it('does not dispatch a refresh into an editor that has been destroyed', () => {

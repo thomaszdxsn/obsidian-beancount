@@ -16,7 +16,7 @@ import type { EditorView } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { alignmentTarget, blockRangeInLedger, computeAlignment, isAmountDotInsert } from './align';
 import type { LineEdit } from './align';
-import { docFences, ledgerLinesOf } from './fences';
+import { ledgerDoc, ledgerKind } from './fences';
 
 /** A caret as whole-text offsets; `head` is the active end. */
 export interface Caret {
@@ -167,16 +167,15 @@ export function instantAlignmentExtension(host: InstantAlignmentHost): Extension
 		if (!host.settings.instantAlignment) return false;
 		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
 		const file = view.state.field(editorInfoField, false)?.file;
-		// A ledger file needs no fence scan: every line is ledger text.
-		const ledgerLine = ledgerLinesOf(file, () => docFences(view.state.doc).fences);
-		if (ledgerLine && !carets.every((caret) => ledgerLine(view.state.doc.lineAt(caret.head).number - 1))) {
+		const ld = ledgerDoc(ledgerKind(file), view.state.doc);
+		if (!carets.every((caret) => ld.lineIsLedger(view.state.doc.lineAt(caret.head).number - 1))) {
 			return false;
 		}
 		const plan = instantAlignmentPlan(
 			view.state.doc.toString(),
 			carets,
 			host.settings.separatorColumn,
-			ledgerLine
+			(lineIndex) => ld.lineIsLedger(lineIndex)
 		);
 		if (plan === null) return false;
 		view.dispatch({

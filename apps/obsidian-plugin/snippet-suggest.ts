@@ -14,7 +14,7 @@ import { keymap, ViewPlugin } from '@codemirror/view';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { editorLineIsLedger } from './fences';
+import { editorLedger } from './fences';
 import { expandSnippet, matchSnippets, SNIPPETS } from './snippets';
 import type { Expansion, Snippet } from './snippets';
 
@@ -113,7 +113,7 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 		// Directives live at column 0 of the ledger (or fence) line.
 		if (query.includes(' ') || query.includes('\t')) return null;
 		if (!SNIPPETS.some((snippet) => snippet.prefix.startsWith(query))) return null;
-		if (!editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (!editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return {
 			start: { line: cursor.line, ch: 0 },
 			end: cursor,

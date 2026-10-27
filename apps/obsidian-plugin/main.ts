@@ -63,8 +63,8 @@ import {
 import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { buildFenceLedger, extractBeancountFences, isLedgerFile, isSafeIncludePath } from './fences';
-import type { BeancountFence } from './fences';
+import { isLedgerFile, isSafeIncludePath, ledgerDoc } from './fences';
+import type { LedgerDoc } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
@@ -183,7 +183,12 @@ function openEditorFiles(app: App): Array<{ file: TFile; editor: Editor }> {
 }
 
 function flagsFor(path: string, text: string): LineDiagnostic[] {
-	return path.endsWith('.md') ? flagDiagnosticsFromFences(extractBeancountFences(text)) : flagDiagnostics(text);
+	const base = path.slice(path.lastIndexOf('/') + 1);
+	const dot = base.lastIndexOf('.');
+	const extension = dot >= 0 ? base.slice(dot + 1) : '';
+	if (isLedgerFile({ extension })) return flagDiagnostics(text);
+	const regions = ledgerDoc('fenced', text).regions;
+	return flagDiagnosticsFromFences(regions.map((region) => ({ startLine: region.hostStartLine, lines: region.lines })));
 }
 
 function beanDiagnosticsOn(editor: Editor): LineDiagnostic[] {
@@ -881,7 +886,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!diagnostic) return false;
 		const { editor, file } = located;
 		const lines = editor.getValue().split('\n');
-		const openFile = this.openFiles.bestFile() ?? (file.extension === 'md' ? null : file.path);
+		const openFile = this.openFiles.bestFile() ?? (isLedgerFile(file) ? file.path : null);
 		const fixes = quickFixesForLine({
 			lines,
 			line,
@@ -1147,12 +1152,12 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			const seq = (this.validateSeq.get(target) ?? 0) + 1;
 			this.validateSeq.set(target, seq);
 
-			let fences: BeancountFence[] | undefined;
+			let note: LedgerDoc | undefined;
 			if (markdown) {
 				const text = await this.app.vault.read(file);
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
-				fences = extractBeancountFences(text);
-				if (fences.length === 0) {
+				note = ledgerDoc('fenced', text);
+				if (note.regions.length === 0) {
 					if (!this.markErrors(target, [], root)) this.noticesShown.delete(target);
 					return;
 				}
@@ -1213,9 +1218,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			let cleanup: (() => void) | undefined;
 			let hostLine: ((tempLine: number) => number | undefined) | undefined;
 			try {
-				if (markdown && fences) {
+				if (markdown && note) {
 					try {
-						const ledger = buildFenceLedger(fences, includePath);
+						const ledger = note.tempLedger(includePath);
 						const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
 						cleanup = () => rmSync(dir, { recursive: true, force: true });
 						const temp = join(dir, 'fences.bean');

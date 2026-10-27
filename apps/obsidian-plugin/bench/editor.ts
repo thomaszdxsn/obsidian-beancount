@@ -31,7 +31,7 @@ import { AccountIndex } from '../account-index';
 import { VaultIndex } from '../vault-index';
 import { extractPayees } from '../payee-index';
 import { extractCommodities, extractLinks, extractNarrations, extractTags } from '../token-index';
-import { ledgerSource } from '../fences';
+import { ledgerDoc as regionsOf, ledgerKind } from '../fences';
 import { OpenFileIndex, PairingIndex } from '../code-actions';
 import { PayeeTemplateIndex } from '../payee-template';
 import type { App } from 'obsidian';
@@ -204,7 +204,7 @@ function saveWorkload(): [() => unknown, () => unknown] {
 	const caches = [accounts, payees, commodities, tags, links, narrations, new PairingIndex(), new OpenFileIndex(), new PayeeTemplateIndex()];
 	const run = () => {
 		// What `registerVaultIndex` does per read: ledger text once, then every cache.
-		const text = ledgerSource(ledgerFile.path, ledger);
+		const text = regionsOf(ledgerKind(ledgerFile), ledger).ledgerSource();
 		for (const cache of caches) cache.setFileContent(ledgerFile.path, text);
 		return [accounts.match('Ex'), payees.match('W'), commodities.match('U')];
 	};

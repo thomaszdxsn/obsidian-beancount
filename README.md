@@ -159,7 +159,9 @@ Source mode for them — Live Preview can still render embeds and checkboxes.
 - **Format ledger** normalizes indentation and spacing and aligns every
   transaction on the separator column, in one undo step. A syntax error stops
   it and names the line.
-- Transactions fold to their header line.
+- Transactions fold to their header line, including beancount fences in
+  untitled buffers and `.txt` files; **Show account balances** still only
+  uses a ledger file or a markdown note.
 
 **Checking**
 

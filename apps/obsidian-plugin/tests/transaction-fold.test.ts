@@ -179,9 +179,16 @@ describe('transactionFoldInState', () => {
 		expect(range && note.slice(range.from, range.to)).toBe('\n    Assets:Cash  1 USD\n    Income:Job');
 	});
 
-	it('folds nothing in other files or an editor without a file', () => {
+	it('folds fence bodies in .txt and untitled buffers, not unfenced ledger text', () => {
 		expect(transactionFoldInState(stateFor(LEDGER, { path: 'a.txt', extension: 'txt' }), lineStart(LEDGER, 3))).toBeNull();
 		expect(transactionFoldInState(stateFor(LEDGER, null), lineStart(LEDGER, 3))).toBeNull();
+		const fenced = `\`\`\`beancount\n${LEDGER}\n\`\`\``;
+		const header = lineStart(fenced, 4);
+		const hidden = '\n  memo: "receipt"';
+		const txt = transactionFoldInState(stateFor(fenced, { path: 'a.txt', extension: 'txt' }), header);
+		expect(txt && fenced.slice(txt.from, txt.to)).toContain(hidden);
+		const untitled = transactionFoldInState(stateFor(fenced, null), header);
+		expect(untitled && fenced.slice(untitled.from, untitled.to)).toContain(hidden);
 	});
 
 	it('offers no fold from a posting line of a ledger file', () => {

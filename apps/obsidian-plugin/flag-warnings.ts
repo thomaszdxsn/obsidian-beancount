@@ -10,7 +10,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS } from './diagnostics';
-import { docFences, isLedgerFile } from './fences';
+import { isLedgerFile, ledgerDoc } from './fences';
 
 /** The CSS contract between these markers and `styles.css`. */
 export const WARNING_LINE_CLASS = 'cm-beancount-warning-line';
@@ -111,20 +111,19 @@ function editorFileKey(state: EditorState): string {
 }
 
 /**
- * The document's lines the flags are read from: all of a ledger (or an
- * editor without a file), only fence bodies of a note; null when a note has
- * no fence. Read line by line, without joining the document into one string.
+ * The document's lines the flags are read from: all of a ledger file, only
+ * fence bodies otherwise; null when a fenced buffer has no region.
  */
 function scanLines(view: EditorView): readonly string[] | null {
 	const info = view.state.field(editorInfoField, false) as EditorFileInfo | undefined;
 	const file = info?.file;
 	const doc = view.state.doc;
-	if (!file || isLedgerFile(file)) {
+	if (file && isLedgerFile(file)) {
 		const lines: string[] = [];
 		for (const iter = doc.iterLines(); !iter.next().done; ) lines.push(iter.value);
 		return lines;
 	}
-	return docFences(doc).masked;
+	return ledgerDoc('fenced', doc).masked();
 }
 
 /** The line decoration and wavy underline for each flagged transaction. */
