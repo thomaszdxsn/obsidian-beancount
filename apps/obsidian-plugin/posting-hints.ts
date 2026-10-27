@@ -34,7 +34,7 @@
 import { displayWidth } from './align';
 import { add, toQty } from './balance-hints';
 import type { Qty } from './balance-hints';
-import { classifyLine, commodityOf, parsePostingLine, stripComment } from './scan';
+import { classifyLine, commodityOf, META_RE, parsePostingLine, stripComment } from './scan';
 
 export type PostingHintKind = 'inferred' | 'unbalanced';
 
@@ -122,7 +122,7 @@ function classifyPosting(line: string): Classified {
 	const parsed = parsePostingLine(raw);
 	if (parsed === null) {
 		const trimmed = raw.trim();
-		if (trimmed === '' || trimmed.startsWith(';') || /^[a-z][A-Za-z0-9\-_]+:/.test(trimmed)) return { kind: 'skip' };
+		if (trimmed === '' || trimmed.startsWith(';') || META_RE.test(trimmed)) return { kind: 'skip' };
 		return { kind: 'complex' };
 	}
 	if (parsed.hasCost || parsed.hasPrice) return { kind: 'complex' };

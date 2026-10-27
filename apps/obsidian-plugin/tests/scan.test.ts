@@ -3,16 +3,23 @@
  * public `scan.ts` seams only.
  */
 import { describe, expect, it } from 'vitest';
+import { generateLedger } from '../bench/common';
 import {
 	canonicalTxnFlag,
 	classifyLine,
+	COMMODITY_EXACT,
+	commodityEndAt,
+	commodityOf,
 	endsInString,
 	entryAt,
 	entryExtent,
 	headerPayee,
 	inStringOrComment,
+	isSpace,
 	parseHeaderLine,
 	parsePostingLine,
+	parseTxnFlag,
+	postingAmountCols,
 	scanLedger,
 	stripComment,
 	unescapeQuoted,
@@ -143,6 +150,12 @@ describe('classifyLine', () => {
 		['   ', 'blank'],
 		['  invoice: "9"', 'metadata'],
 		['  Expenses:Food  1.00 USD', 'posting'],
+		['  Assets:Cash.Old  10 USD', 'other'],
+		['  Assets:Cash,Old  10 USD', 'other'],
+		['  Assets:Cash"Old  10 USD', 'other'],
+		['  Assets:Cash(Old  10 USD', 'other'],
+		['  Expenses:餐饮，午饭  10 CNY', 'other'],
+		['  Expenses:餐饮：午饭  10 CNY', 'other'],
 		['include "other.bean"', 'other'],
 	] as const)('%j → %s', (line, kind) => {
 		expect(classifyLine(line)).toBe(kind);
@@ -182,6 +195,18 @@ describe('parsePostingLine', () => {
 		expect(parsePostingLine('  invoice: "9"')).toBeNull();
 		expect(parsePostingLine('  ; note')).toBeNull();
 		expect(parsePostingLine('2026-01-01 * "x"')).toBeNull();
+	});
+
+	it('rejects an account followed by ASCII or CJK punctuation instead of a gap', () => {
+		expect(parsePostingLine('  Assets:Cash.Old  10 USD')).toBeNull();
+		expect(parsePostingLine('  Assets:Cash,Old  10 USD')).toBeNull();
+		expect(parsePostingLine('  Assets:Cash"Old  10 USD')).toBeNull();
+		expect(parsePostingLine('  Assets:Cash(Old  10 USD')).toBeNull();
+		expect(parsePostingLine('  Expenses:餐饮，午饭  10 CNY')).toBeNull();
+		expect(parsePostingLine('  Expenses:餐饮：午饭  10 CNY')).toBeNull();
+		expect(postingAmountCols('  Assets:Cash.Old  10 USD')).toBeNull();
+		expect(parsePostingLine('  Assets:Cash  10 USD')?.account.text).toBe('Assets:Cash');
+		expect(parsePostingLine('  Assets:Cash; leftover')?.account.text).toBe('Assets:Cash');
 	});
 });
 
@@ -271,3 +296,73 @@ describe('parseHeaderLine', () => {
 		expect(slice('2026-01-01 open Assets:Cash USD', open?.keywordSpan)).toBe('open');
 	});
 });
+
+describe('scanner helper equivalence', () => {
+	const edges = [
+		'  Expenses:餐饮:午餐  12.00 CNY @ 0.14 USD',
+		'  Expenses:卡片・ローン  1 JPY',
+		'  Assets:Cash.Old  10 USD',
+		'  Assets:Cash,Old  10 USD',
+		'  Expenses:餐饮，午饭  10 CNY',
+		'  Assets:Cash  10 USD\r',
+		'2026-01-01 * "Cafe" "Lunch"\r',
+		'2026-01-01! "x"',
+		'2026-10-01txn "x"',
+		'2026-01-01 open Assets:Cash',
+		'  ! Assets:Cash * 10 USD',
+		'  Assets:Broker:AAPL  10 AAPL {150.00 USD}',
+		'  Assets:Cash  10 "HOOL LAND"',
+		'  Assets:Cash  10 USD ; leftover',
+		'  Assets:Cash',
+	];
+
+	function snapCols(line: string) {
+		const cols = postingAmountCols(line);
+		return cols === null ? null : { gapStart: cols.gapStart, numberFrom: cols.numberFrom, numberTo: cols.numberTo };
+	}
+
+	function assertPostingCols(line: string) {
+		const parsed = parsePostingLine(line);
+		const cols = snapCols(line);
+		if (parsed === null || parsed.number === undefined) {
+			expect(cols).toBeNull();
+			return;
+		}
+		expect(cols).toEqual({
+			gapStart: parsed.gapStart,
+			numberFrom: parsed.number.from,
+			numberTo: parsed.number.to,
+		});
+	}
+
+	function assertTxnFlag(line: string) {
+		const header = parseHeaderLine(line);
+		const flag = parseTxnFlag(line);
+		if (header?.kind === 'txn-header') expect(flag).toBe(header.flag);
+		else expect(flag).toBeUndefined();
+	}
+
+	function assertCommodity(line: string) {
+		const parsed = parsePostingLine(line);
+		if (parsed?.commodity === undefined) return;
+		const from = parsed.commodity.from;
+		const to = parsed.commodity.to;
+		const token = line.replace(/\r$/, '').slice(from, to);
+		expect(commodityEndAt(line.replace(/\r$/, ''), from)).toBe(to);
+		expect(COMMODITY_EXACT.test(token)).toBe(true);
+		expect(commodityOf(token)).not.toBeNull();
+		if (to < line.replace(/\r$/, '').length) {
+			expect(isSpace(line.replace(/\r$/, '').charCodeAt(to))).toBe(true);
+		}
+	}
+
+	it('agrees on generateLedger(200) plus punctuation, CJK, CR, cost, price and flag edges', () => {
+		const lines = [...generateLedger(200).split('\n'), ...edges];
+		for (const line of lines) {
+			assertPostingCols(line);
+			assertTxnFlag(line);
+			assertCommodity(line);
+		}
+	});
+});
+

@@ -17,8 +17,8 @@ const NAME_END = String.raw`(?<=[\p{L}\p{N}\p{M}_])`;
 export const ACCOUNT_SHAPE = String.raw`[A-Z]${SEGMENT}*(?::${SEGMENT}+)+${NAME_END}`;
 
 const ACCOUNT_UNI_EXACT = new RegExp(`^${ACCOUNT_SHAPE}$`, 'u');
-const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
-const COMMODITY_EXACT = /^(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")$/;
+export const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
+export const COMMODITY_EXACT = /^(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")$/;
 
 const DATED_KEYWORDS: Record<string, true> = {
 	open: true,
@@ -110,12 +110,12 @@ function isRareSpace(c: number): boolean {
 	);
 }
 
-function isSpace(c: number): boolean {
+export function isSpace(c: number): boolean {
 	if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) return true;
 	return c >= 0xa0 && isRareSpace(c);
 }
 
-function skipSpace(line: string, at: number): number {
+export function skipSpace(line: string, at: number): number {
 	const n = line.length;
 	while (at < n) {
 		const c = line.charCodeAt(at);
@@ -268,43 +268,8 @@ function txnHeader(line: string, date: string, flag: string, flagFrom: number, r
 	return { kind: 'txn-header', date, flag, flagSpan, payee: first.span, narration: second.span };
 }
 
-/** Flag token of a txn-header, or undefined. Skips payee/narration. */
-export function parseTxnFlag(line: string): string | undefined {
-	if (line.length < 10) return undefined;
-	const y0 = line.charCodeAt(0);
-	if (y0 < 0x30 || y0 > 0x39) return undefined;
-	const sep = line.charCodeAt(4);
-	if (sep !== 0x2d && sep !== 0x2f) return undefined;
-	if (
-		line.charCodeAt(1) < 0x30 ||
-		line.charCodeAt(1) > 0x39 ||
-		line.charCodeAt(2) < 0x30 ||
-		line.charCodeAt(2) > 0x39 ||
-		line.charCodeAt(3) < 0x30 ||
-		line.charCodeAt(3) > 0x39 ||
-		line.charCodeAt(5) < 0x30 ||
-		line.charCodeAt(5) > 0x39 ||
-		line.charCodeAt(6) < 0x30 ||
-		line.charCodeAt(6) > 0x39 ||
-		line.charCodeAt(7) !== sep ||
-		line.charCodeAt(8) < 0x30 ||
-		line.charCodeAt(8) > 0x39 ||
-		line.charCodeAt(9) < 0x30 ||
-		line.charCodeAt(9) > 0x39
-	) {
-		return undefined;
-	}
-	const afterDate = skipBlank(line, 10);
-	if (afterDate >= line.length) return undefined;
-	if (line.startsWith('txn', afterDate) && !isIdentContinue(line.charCodeAt(afterDate + 3))) return 'txn';
-	const flagCode = line.charCodeAt(afterDate);
-	if (isFlagChar(flagCode) && !isIdentContinue(line.charCodeAt(afterDate + 1))) return line.charAt(afterDate);
-	return undefined;
-}
-
-
-/** Parse a column-0 dated header. Does not scan the rest of the file. */
-export function parseHeaderLine(line: string): ScannedHeader | null {
+/** YYYY-MM-DD or YYYY/MM/DD at column 0, plus the first non-blank after it. */
+function datedPrefix(line: string): { text: string; date: string; afterDate: number } | null {
 	const text = stripCR(line);
 	if (text.length < 10) return null;
 	const y0 = text.charCodeAt(0);
@@ -312,37 +277,57 @@ export function parseHeaderLine(line: string): ScannedHeader | null {
 	const sep = text.charCodeAt(4);
 	if (sep !== 0x2d && sep !== 0x2f) return null;
 	if (
-		!(
-			text.charCodeAt(1) >= 0x30 &&
-			text.charCodeAt(1) <= 0x39 &&
-			text.charCodeAt(2) >= 0x30 &&
-			text.charCodeAt(2) <= 0x39 &&
-			text.charCodeAt(3) >= 0x30 &&
-			text.charCodeAt(3) <= 0x39 &&
-			text.charCodeAt(5) >= 0x30 &&
-			text.charCodeAt(5) <= 0x39 &&
-			text.charCodeAt(6) >= 0x30 &&
-			text.charCodeAt(6) <= 0x39 &&
-			text.charCodeAt(7) === sep &&
-			text.charCodeAt(8) >= 0x30 &&
-			text.charCodeAt(8) <= 0x39 &&
-			text.charCodeAt(9) >= 0x30 &&
-			text.charCodeAt(9) <= 0x39
-		)
+		text.charCodeAt(1) < 0x30 ||
+		text.charCodeAt(1) > 0x39 ||
+		text.charCodeAt(2) < 0x30 ||
+		text.charCodeAt(2) > 0x39 ||
+		text.charCodeAt(3) < 0x30 ||
+		text.charCodeAt(3) > 0x39 ||
+		text.charCodeAt(5) < 0x30 ||
+		text.charCodeAt(5) > 0x39 ||
+		text.charCodeAt(6) < 0x30 ||
+		text.charCodeAt(6) > 0x39 ||
+		text.charCodeAt(7) !== sep ||
+		text.charCodeAt(8) < 0x30 ||
+		text.charCodeAt(8) > 0x39 ||
+		text.charCodeAt(9) < 0x30 ||
+		text.charCodeAt(9) > 0x39
 	) {
 		return null;
 	}
-	const date = text.slice(0, 10);
-	const afterDate = skipBlank(text, 10);
-	if (afterDate >= text.length) return null;
+	return { text, date: text.slice(0, 10), afterDate: skipBlank(text, 10) };
+}
+
+function txnFlagAt(
+	text: string,
+	afterDate: number
+): { flag: string; flagFrom: number; restAt: number } | undefined {
+	if (afterDate >= text.length) return undefined;
 	if (text.startsWith('txn', afterDate) && !isIdentContinue(text.charCodeAt(afterDate + 3))) {
-		return txnHeader(text, date, 'txn', afterDate, afterDate + 3);
+		return { flag: 'txn', flagFrom: afterDate, restAt: afterDate + 3 };
 	}
 	const flagCode = text.charCodeAt(afterDate);
 	if (isFlagChar(flagCode) && !isIdentContinue(text.charCodeAt(afterDate + 1))) {
-		return txnHeader(text, date, text.charAt(afterDate), afterDate, afterDate + 1);
+		return { flag: text.charAt(afterDate), flagFrom: afterDate, restAt: afterDate + 1 };
 	}
-	if (afterDate === 10) return null;
+	return undefined;
+}
+
+/** Flag token of a txn-header, or undefined. Skips payee/narration. */
+export function parseTxnFlag(line: string): string | undefined {
+	const head = datedPrefix(line);
+	if (head === null) return undefined;
+	return txnFlagAt(head.text, head.afterDate)?.flag;
+}
+
+/** Parse a column-0 dated header. Does not scan the rest of the file. */
+export function parseHeaderLine(line: string): ScannedHeader | null {
+	const head = datedPrefix(line);
+	if (head === null) return null;
+	const { text, date, afterDate } = head;
+	const flag = txnFlagAt(text, afterDate);
+	if (flag !== undefined) return txnHeader(text, date, flag.flag, flag.flagFrom, flag.restAt);
+	if (afterDate === 10 || afterDate >= text.length) return null;
 	let keyEnd = afterDate;
 	while (keyEnd < text.length && isKeywordChar(text.charCodeAt(keyEnd))) keyEnd += 1;
 	if (keyEnd === afterDate) return null;
@@ -417,6 +402,10 @@ function accountEndAt(text: string, at: number): number {
 		break;
 	}
 	if (colons === 0 || segLen === 0 || !isNameEndAscii(text.charCodeAt(i - 1))) return -1;
+	if (i < n) {
+		const stop = text.charCodeAt(i);
+		if (!isSpace(stop) && stop !== 0x3b) return -1;
+	}
 	return i;
 }
 
@@ -452,7 +441,7 @@ function numberEndAt(text: string, at: number): number {
 	return i;
 }
 
-function commodityEndAt(text: string, at: number): number {
+export function commodityEndAt(text: string, at: number): number {
 	const n = text.length;
 	if (at >= n) return -1;
 	if (text.charCodeAt(at) === 0x22) {
@@ -494,7 +483,6 @@ function commodityEndAt(text: string, at: number): number {
 	if (i < n && !isSpace(text.charCodeAt(i))) return -1;
 	return i;
 }
-
 
 function amountTailOk(line: string, at: number): boolean {
 	const next = skipSpace(line, at);
@@ -553,7 +541,6 @@ export function postingAmountCols(line: string): { gapStart: number; numberFrom:
 	amountCols.numberTo = numTo;
 	return amountCols;
 }
-
 
 /**
  * An indented posting: optional leading flag, ACCOUNT_SHAPE, optional trailing
@@ -615,7 +602,6 @@ export function parsePostingLine(line: string): ScannedPosting | null {
 		...annotationsFrom(line, after),
 	};
 }
-
 
 function indentedKind(line: string): LineKind {
 	if (isCommentLine(line)) return 'comment';

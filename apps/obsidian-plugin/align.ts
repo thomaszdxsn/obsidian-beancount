@@ -37,37 +37,10 @@
  */
 
 import { ledgerDoc } from './fences';
-import { endsInString, postingAmountCols } from './scan';
+import { endsInString, postingAmountCols, skipSpace } from './scan';
 
 /** Minimum whitespace between the account (and its flag) and the amount. */
 const MIN_GAP = 1;
-
-/**
- * JS `\s` (WhiteSpace and LineTerminator), as one UTF-16 code unit: what
- * separates the tokens of a posting line.
- */
-function isSpace(c: number): boolean {
-	if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) return true;
-	if (c < 0xa0) return false;
-	return (
-		c === 0xa0 ||
-		c === 0x1680 ||
-		(c >= 0x2000 && c <= 0x200a) ||
-		c === 0x2028 ||
-		c === 0x2029 ||
-		c === 0x202f ||
-		c === 0x205f ||
-		c === 0x3000 ||
-		c === 0xfeff
-	);
-}
-
-/** Offset past the `\s` run at `at`. */
-function skipSpace(line: string, at: number): number {
-	while (at < line.length && isSpace(line.charCodeAt(at))) at += 1;
-	return at;
-}
-
 
 /** The whitespace rewrite that moves one amount's decimal point. */
 export interface LineEdit {
