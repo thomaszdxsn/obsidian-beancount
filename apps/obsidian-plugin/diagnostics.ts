@@ -212,9 +212,9 @@ export function createDiagnosticsExtension(host?: DiagnosticClickHost): Extensio
 
 export const diagnosticsExtension: Extension = createDiagnosticsExtension();
 
-function dispatchDiagnostics(
+function publishDiagnostics(
 	editor: Editor,
-	effect: typeof setBeanDiagnostics | typeof setFlagOkayDiagnostics,
+	effect: { of(value: readonly LineDiagnostic[]): StateEffect<readonly LineDiagnostic[]> },
 	diagnostics: readonly LineDiagnostic[],
 ): void {
 	const view = (editor as Editor & { cm?: EditorView }).cm;
@@ -227,14 +227,10 @@ function dispatchDiagnostics(
  * (empty: clear that field). Flag markers live in their own field.
  */
 export function setEditorBeanDiagnostics(editor: Editor, diagnostics: readonly LineDiagnostic[]): void {
-	dispatchDiagnostics(editor, setBeanDiagnostics, diagnostics);
+	publishDiagnostics(editor, setBeanDiagnostics, diagnostics);
 }
 
 /** Publish Flag as okay diagnostics; tests and the document-driven field use this. */
 export function setEditorFlagOkayDiagnostics(editor: Editor, diagnostics: readonly LineDiagnostic[]): void {
-	dispatchDiagnostics(editor, setFlagOkayDiagnostics, diagnostics);
+	publishDiagnostics(editor, setFlagOkayDiagnostics, diagnostics);
 }
-
-export const setLineDiagnostics = setBeanDiagnostics;
-export const lineDiagnostics = beanDiagnostics;
-export const setEditorLineDiagnostics = setEditorBeanDiagnostics;

@@ -15,7 +15,6 @@
  * a failure line for the target until a later run reports.
  */
 import type { BeanCheckError } from './bean-check';
-import { isLedgerFile, ledgerDoc } from './fences';
 
 /** One bean-check complaint, ready to render. `line` is 1-based, as printed. */
 export interface ProblemRow {
@@ -65,46 +64,6 @@ export function fileMtime(file: { stat?: { mtime?: number } } | null | undefined
 	return typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : undefined;
 }
 
-/** What an open needs in order to decide whether bean-check should run. */
-export interface OpenValidationInput {
-	path: string;
-	extension: string;
-	/** Markdown body, read only to detect beancount fences. Ignored for ledgers. */
-	text: string;
-	/** Configured entry ledger; blank means a ledger file is its own target. */
-	entryLedger: string;
-	/** mtime of the run target. Undefined when that file has no stat. */
-	targetMtime: number | undefined;
-	/** mtime recorded when that target last reported. Undefined if it never has. */
-	lastValidatedMtime: number | undefined;
-}
-
-/**
- * The bean-check target an open should schedule, or null when it should not.
- *
- * Ledger files always qualify. A markdown note qualifies only when it holds
- * a beancount fence — prose must not start a run. The target is the entry
- * ledger for a ledger file (same as a save) and the note itself for fences.
- * A target already validated at this mtime is a tab switch, not a change:
- * scheduling it would re-run bean-check for nothing. A missing mtime cannot
- * prove that, so it still schedules.
- */
-export function openValidationTarget(input: OpenValidationInput): string | null {
-	const file = { path: input.path, extension: input.extension };
-	const ledger = isLedgerFile(file);
-	if (!ledger && input.extension !== 'md') return null;
-	if (!ledger && ledgerDoc('fenced', input.text).regions.length === 0) return null;
-	const entry = input.entryLedger.trim();
-	const target = ledger ? entry || input.path : input.path;
-	if (
-		input.targetMtime !== undefined &&
-		input.lastValidatedMtime !== undefined &&
-		input.targetMtime === input.lastValidatedMtime
-	) {
-		return null;
-	}
-	return target;
-}
 
 /** Header text for `count` bean-check rows. Zero is the empty-state sentence. */
 export function problemCountLabel(count: number): string {

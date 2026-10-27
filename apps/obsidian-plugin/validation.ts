@@ -156,8 +156,8 @@ export class LedgerValidation {
 		this.tempFile = ports.tempFile;
 		this.markers = ports.markers;
 		this.notifier = ports.notifier;
-		this.entryLedger = settings.entryLedger;
-		this.beanCheckPath = settings.beanCheckPath;
+		this.entryLedger = () => settings.entryLedger();
+		this.beanCheckPath = () => settings.beanCheckPath();
 	}
 
 	handle(event: ValidationEvent): void {
@@ -319,7 +319,7 @@ export class LedgerValidation {
 					try {
 						const ledger = note.tempLedger(includePath);
 						const written = this.tempFile.write(ledger.text);
-						cleanup = written.dispose;
+						cleanup = () => written.dispose();
 						checkPath = written.checkPath;
 						hostLine = (line) => ledger.hostLine(line);
 					} catch {

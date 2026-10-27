@@ -70,6 +70,7 @@ UI/UX fixes from the architecture review (#75).
 - Ledger regions (`ledgerDoc` / `editorLedger`) answer where ledger text
   is; editor features no longer scan fences or inspect the file extension
   to decide line-level context (#69).
+- Ledger validation owns bean-check debounce, Problems writes, and bean-check markers (#68).
 
 ## 0.2.2
 
