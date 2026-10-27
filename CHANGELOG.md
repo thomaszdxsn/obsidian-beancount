@@ -2,8 +2,54 @@
 
 ## Unreleased
 
+UI/UX fixes from the architecture review (#75).
+
+### Changed
+
+- **Align decimal points**, **Align amounts on save** and **Format ledger**
+  put decimal points on the **Separator column** (default 50), like typing
+  `.` and the dotted ruler, instead of the tightest column of each
+  transaction; wide accounts still push past it. Before, saving with
+  **Align amounts on save** pulled amounts that typing `.` had just aligned
+  back to the left. Set the separator column to 1 for the tight layout.
+- Completion popups, Enter's posting indent, instant alignment,
+  **Align decimal points** and **Align amounts on save** act only on ledger
+  text: `.bean` / `.beancount` files and the beancount fences of notes. Text
+  outside fences is never changed, and a note without fences is not
+  re-aligned on save.
+- **Start Fava** opens the browser once Fava answers on its port instead of
+  right after launching it, and says why when Fava exits (quoting the last
+  line it printed) or does not answer within 30 seconds. A Fava that stops
+  later says so too.
+
 ### Fixed
 
+- Typing an ordinary capitalized word such as `The`, `I` or `Tea` in a
+  note's prose no longer opens account completion, where Enter would replace
+  the word with an account name. Account completion also stays quiet in `;`
+  comments and quoted strings, like tag, link and commodity completion.
+- Payee and narration completion, payee autofill templates, the balancing
+  posting quick fix and the file chosen for a new `open` directive ignore
+  text outside a note's fences, as account, commodity, tag and link
+  completion already did.
+- Quick fixes understand account names with non-ASCII segments such as
+  `Expenses:餐饮`: the file holding their `open` directives is found, the
+  balancing posting is inferred from their history, and **Open account**
+  adds the posting's commodity.
+- Transactions written without a space between date and flag
+  (`2026-10-01!`, `2026-10-01*`, `2026-10-01txn`) fold, get flag markers
+  and offer **Flag as okay**, like the spaced form.
+- When `bean-check` cannot run (not installed, a traceback, a timeout, too
+  much output, or a temporary fence ledger that cannot be written),
+  **Show problems** lists `bean-check could not run: …` for that ledger until
+  it reports again, and the Notice is shown again after a later clean run
+  instead of never for the rest of the session. A failing temp ledger no
+  longer fails silently.
+- Changing the entry ledger clears the underlines of the dropped report
+  together with the Problems list; flag markers stay.
+- **Start Fava** says when it reuses a Fava still bound to an older port,
+  and with no ledger to open it says to set **Entry ledger** or open a
+  `.bean` / `.beancount` file.
 - The plugin's `tsconfig.json` names `@types/node` explicitly, so the
   community review's type-checked lint resolves `fs`, `path`,
   `child_process` and `process` instead of treating them as `any`

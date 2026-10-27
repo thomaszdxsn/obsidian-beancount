@@ -139,11 +139,14 @@ Source mode for them — Live Preview can still render embeds and checkboxes.
 - Completion for accounts (still-open ones only, with open date and allowed
   currencies), payees, narrations (opt-in), commodities, `#tags` and `^links`,
   drawn from every ledger file and fence in the vault. Frequently and
-  recently picked items rank first.
+  recently picked items rank first. Completion opens only in ledger text —
+  `.bean` / `.beancount` files and beancount fences — so writing a note's
+  prose never pops it up.
 - Directive snippets at column 0: `txn`, `open`, `balance`, `pad`, and the
   rest of vscode-beancount's set. Tab walks the stops.
 - **Insert today's date** writes `YYYY-MM-DD` at the cursor.
-- Enter inside an entry indents the next posting by two spaces.
+- Enter inside an entry indents the next posting by two spaces (in ledger
+  files and fences only).
 - Optional pinyin-initial matching: `cy` finds `餐饮`.
 
 **Keeping it tidy**
@@ -151,9 +154,11 @@ Source mode for them — Live Preview can still render embeds and checkboxes.
 - Typing `.` in an amount aligns that transaction on the separator column
   (default 50, shown as a dotted ruler in ledger files).
 - **Align decimal points** aligns the current transaction or the selection;
-  **Align amounts on save** does every transaction in the file.
+  **Align amounts on save** does every transaction in the file. Both use the
+  separator column too, and in a note they only touch beancount fences.
 - **Format ledger** normalizes indentation and spacing and aligns every
-  transaction, in one undo step. A syntax error stops it and names the line.
+  transaction on the separator column, in one undo step. A syntax error stops
+  it and names the line.
 - Transactions fold to their header line.
 
 **Checking**
@@ -163,7 +168,9 @@ Source mode for them — Live Preview can still render embeds and checkboxes.
   fixes: mark a `!` transaction cleared, add the missing balancing posting,
   or add an `open` directive for an unknown account.
 - **Show problems** lists the latest report by file, including include-chain
-  files that are not open.
+  files that are not open. When `bean-check` cannot run (not installed,
+  crashed, timed out), it shows `bean-check could not run: …` for that ledger
+  until the next report.
 - Inline hints while typing, before any save: the amount Beancount will infer
   for the posting that omits it, `≠ 0` on transactions that do not balance,
   the difference on `balance` assertions, and markers on `!` transactions.
@@ -177,7 +184,7 @@ Source mode for them — Live Preview can still render embeds and checkboxes.
   `include`, with omitted amounts interpolated, `pad` applied, and
   Beancount's tolerance rules.
 - **Start Fava** runs [Fava](https://beancount.github.io/fava/) on the entry
-  ledger and opens it in your browser.
+  ledger and opens it in your browser once Fava answers.
 
 ![A ledger file with the outline sidebar (sections, dates, transactions) and the account balances table](https://raw.githubusercontent.com/thomaszdxsn/obsidian-beancount/main/docs/images/ledger-sidebars.webp)
 
@@ -191,13 +198,13 @@ use under Settings → Hotkeys.
 
 | Command | What it does |
 | --- | --- |
-| Align decimal points | Current transaction block, or the selection when there is one. |
+| Align decimal points | Current transaction block, or the selection when there is one, on the separator column. In a note, only lines inside beancount fences. |
 | Format ledger | Whole `.bean` / `.beancount` file, or each ```beancount / ```bean fence in any other buffer. A syntax error names the line and changes nothing. |
 | Insert today's date | `YYYY-MM-DD` at the cursor. |
 | Show outline | Sidebar of `*` sections, date groups, transactions, `open` / `close` / `balance`. |
 | Show problems | Sidebar of the latest `bean-check` report, grouped by file — including include-chain files that are not open and `<load>` errors. Clicking a vault row jumps to the line. |
 | Show account balances | Sidebar table of per-account unit balances, one line per currency. Uses the entry ledger when set, otherwise the active ledger or the active note's fences, and follows `include`. |
-| Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI. Repeating the command reuses the live process. |
+| Start Fava | Starts Fava (`-H 127.0.0.1 -p <favaPort>`) on the entry ledger or the active `.bean` file, then opens the UI once Fava answers. If Fava exits or does not answer within 30 seconds, a notice says why. Repeating the command reuses the live process and its port. |
 | Stop Fava | Kills the Fava process started by this plugin. |
 
 ## Settings
@@ -206,9 +213,9 @@ Settings → Beancount. Keys match the plugin's `data.json`.
 
 | Setting | Key | Default | Description |
 | --- | --- | --- | --- |
-| Align amounts on save | `alignOnSave` | off | Re-align posting amounts whenever a markdown or beancount file is saved (debounced). |
+| Align amounts on save | `alignOnSave` | off | Re-align posting amounts whenever a `.bean` / `.beancount` file, or a note with beancount fences, is saved (debounced). In notes only the fences change. |
 | Instant alignment | `instantAlignment` | on | Typing `.` in a posting amount aligns that transaction block and leaves the caret after the point. |
-| Separator column | `separatorColumn` | `50` | 1-based display column of the decimal point for instant alignment (wide accounts still push past it). |
+| Separator column | `separatorColumn` | `50` | 1-based display column of the decimal point for all alignment: typing `.`, **Align decimal points**, **Align amounts on save** and **Format ledger** (wide accounts still push past it; `1` aligns as tightly as possible). |
 | Show separator ruler | `showRuler` | on | Dotted vertical line at the separator column in `.bean` / `.beancount` files. |
 | Bean-check executable | `beanCheckPath` | empty | Path to `bean-check`; empty runs `bean-check` from `PATH`. Only a program named `bean-check` is accepted. |
 | Entry ledger | `entryLedger` | empty | Vault path of the ledger entry file (e.g. `main.bean`). |
@@ -244,8 +251,9 @@ are refused, so the setting cannot run some other program on your ledger.
 **Nothing is marked after saving.**
 Validation runs on save and on open, not on every keystroke. Check that the
 file ends in `.bean` / `.beancount`, or that the fence's info string is
-`beancount` or `bean`. If `bean-check` itself crashes, a Notice shows the
-first line of its output.
+`beancount` or `bean`. Open **Show problems**: when `bean-check` could not
+run (missing, crashed, timed out), it says why there, and a Notice shows the
+same reason.
 
 **Fences report unknown accounts that my main ledger opens.**
 Set **Entry ledger**; fences are then checked against it.
@@ -261,7 +269,9 @@ replace ledger text.
 
 **Fava does not start.**
 Install it (`pip install fava`), or set **Fava executable** as for
-bean-check. If the port is taken, change **Fava port**.
+bean-check. When Fava exits right away, the notice quotes the last line it
+printed. If the port is taken, change **Fava port** (on macOS, AirPlay
+Receiver uses port 5000).
 
 ## Privacy and permissions
 
@@ -276,6 +286,9 @@ Obsidian's vault API. All of it is listed here.
 - `fava -H 127.0.0.1 -p <port> <ledger>`, only when you run **Start Fava** or
   enable **Run Fava on activate**. Only a program named `fava` is accepted;
   it listens on localhost only, and the plugin stops it when it unloads.
+  Until Fava answers, the plugin requests `http://127.0.0.1:<port>/` (at most
+  30 seconds) so it opens the UI only once Fava is up; that request never
+  leaves your machine.
 - Programs are started directly, never through a shell, and the ledger path
   must resolve inside the vault.
 

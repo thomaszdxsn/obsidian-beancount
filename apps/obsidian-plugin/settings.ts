@@ -10,13 +10,14 @@ import type { FlagWarningLevel } from './flag-warnings';
 import { DEFAULT_FAVA_PORT, normalizeFavaPort } from './fava';
 
 export interface BeancountSettings {
-	/** Re-align posting amounts whenever a ledger file is saved. */
+	/** Re-align posting amounts whenever a ledger file, or a note's beancount fences, is saved. */
 	alignOnSave: boolean;
 	/** Align the current transaction block when `.` is typed in an amount. */
 	instantAlignment: boolean;
 	/**
-	 * 1-based display column of the decimal point for instant alignment.
-	 * Matches vscode-beancount `beancount.separatorColumn`.
+	 * 1-based display column of the decimal point for every alignment: typing
+	 * `.`, the command, align on save and Format ledger. Matches
+	 * vscode-beancount `beancount.separatorColumn`.
 	 */
 	separatorColumn: number;
 	/** Dotted vertical line at `separatorColumn` in `.bean` / `.beancount` files. */
@@ -138,7 +139,7 @@ const SETTING_GROUPS: ReadonlyArray<{ heading: string; items: readonly SettingSp
 				kind: 'toggle',
 				key: 'alignOnSave',
 				name: 'Align amounts on save',
-				desc: 'Re-align the decimal points of posting amounts whenever a Markdown or Beancount file is saved.',
+				desc: 'Re-align the decimal points of posting amounts whenever a .bean / .beancount file, or a note with ```beancount / ```bean fences, is saved. In notes only the fences change.',
 			},
 			{
 				kind: 'toggle',
@@ -150,7 +151,7 @@ const SETTING_GROUPS: ReadonlyArray<{ heading: string; items: readonly SettingSp
 				kind: 'int',
 				key: 'separatorColumn',
 				name: 'Separator column',
-				desc: '1-based column the decimal point jumps to during instant alignment. Wide accounts still push past it.',
+				desc: '1-based column for the decimal point when aligning: typing a decimal point, Align decimal points, Align amounts on save and Format ledger. Wide accounts still push past it; 1 aligns as tightly as possible.',
 				placeholder: '50',
 				accepts: (column) => column >= 1,
 			},
