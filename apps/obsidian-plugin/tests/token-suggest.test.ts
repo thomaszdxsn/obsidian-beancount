@@ -292,7 +292,7 @@ describe('NarrationSuggest', () => {
 		const suggest = setupNarrations(true);
 		await flush();
 		const { editor, cursor } = at('2026-09-30 * "Shell" "Fu');
-		expect(suggest.onTrigger(cursor, editor, null)).toEqual({
+		expect(suggest.onTrigger(cursor, editor, LEDGER_FILE)).toEqual({
 			start: { line: 0, ch: 22 },
 			end: { line: 0, ch: 24 },
 			query: 'Fu',
@@ -303,14 +303,33 @@ describe('NarrationSuggest', () => {
 		const suggest = setupNarrations(false);
 		await flush();
 		const { editor, cursor } = at('2026-09-30 * "Shell" "Fu');
+		expect(suggest.onTrigger(cursor, editor, LEDGER_FILE)).toBeNull();
+	});
+
+	it('stays quiet on markdown prose outside a fence', async () => {
+		const suggest = setupNarrations(true);
+		await flush();
+		const { editor, cursor } = at('2026-09-30 * "Shell" "Fu');
 		expect(suggest.onTrigger(cursor, editor, null)).toBeNull();
+		const note = { path: 'note.md', extension: 'md' } as TFile;
+		expect(suggest.onTrigger(cursor, editor, note)).toBeNull();
+	});
+
+	it('still triggers inside a bean fence', async () => {
+		const suggest = setupNarrations(true);
+		await flush();
+		const editor = createEditor(['```bean', '2026-09-30 * "Shell" "Fu', '```']);
+		const note = { path: 'note.md', extension: 'md' } as TFile;
+		expect(
+			suggest.onTrigger({ line: 1, ch: editor.lines[1].length }, editor as unknown as Editor, note)
+		).toMatchObject({ query: 'Fu' });
 	});
 
 	it('stays quiet in the payee field', async () => {
 		const suggest = setupNarrations(true);
 		await flush();
 		const { editor, cursor } = at('2026-09-30 * "Shel');
-		expect(suggest.onTrigger(cursor, editor, null)).toBeNull();
+		expect(suggest.onTrigger(cursor, editor, LEDGER_FILE)).toBeNull();
 	});
 
 	it('triggers before a typed closing quote', async () => {
@@ -318,7 +337,7 @@ describe('NarrationSuggest', () => {
 		await flush();
 		// CodeMirror auto-pairs quotes: `"Shell" "Fu|"` is the common state.
 		const { editor, cursor } = at('2026-09-30 * "Shell" "Fu"', 24);
-		expect(suggest.onTrigger(cursor, editor, null)).toEqual({
+		expect(suggest.onTrigger(cursor, editor, LEDGER_FILE)).toEqual({
 			start: { line: 0, ch: 22 },
 			end: { line: 0, ch: 24 },
 			query: 'Fu',
@@ -330,7 +349,7 @@ describe('NarrationSuggest', () => {
 		await flush();
 		// Any character but the closing quote after the cursor would be garbled.
 		const { editor, cursor } = at('2026-09-30 * "Shell" "Fue', 23);
-		expect(suggest.onTrigger(cursor, editor, null)).toBeNull();
+		expect(suggest.onTrigger(cursor, editor, LEDGER_FILE)).toBeNull();
 	});
 
 	it('picking does nothing when no context is active', async () => {

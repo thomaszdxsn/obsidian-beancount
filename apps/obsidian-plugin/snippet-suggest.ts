@@ -14,7 +14,7 @@ import { keymap, ViewPlugin } from '@codemirror/view';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { extractBeancountFences } from './fences';
+import { editorLineIsLedger } from './fences';
 import { expandSnippet, matchSnippets, SNIPPETS } from './snippets';
 import type { Expansion, Snippet } from './snippets';
 
@@ -105,7 +105,6 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 	}
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		if (!inSnippetContext(editor, cursor.line, file)) return null;
 		const line = editor.getLine(cursor.line);
 		const after = line.charAt(cursor.ch);
 		if (after !== '' && after !== ' ' && after !== '\t') return null;
@@ -114,6 +113,7 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 		// Directives live at column 0 of the ledger (or fence) line.
 		if (query.includes(' ') || query.includes('\t')) return null;
 		if (!SNIPPETS.some((snippet) => snippet.prefix.startsWith(query))) return null;
+		if (!editorLineIsLedger(editor, cursor.line, file)) return null;
 		return {
 			start: { line: cursor.line, ch: 0 },
 			end: cursor,
@@ -201,16 +201,6 @@ function sessionGuard(session: SnippetSession): Extension {
 				}
 			}
 		}
-	);
-}
-
-/** Ledger files, or the body of a `beancount`/`bean` fence in markdown. */
-function inSnippetContext(editor: Editor, line: number, file: TFile | null): boolean {
-	if (!file) return false;
-	if (file.extension === 'bean' || file.extension === 'beancount') return true;
-	if (file.extension !== 'md') return false;
-	return extractBeancountFences(editor.getValue()).some(
-		(fence) => line >= fence.startLine && line < fence.startLine + fence.lines.length
 	);
 }
 

@@ -15,6 +15,7 @@ import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { blockRangeAt, computeAlignment, isAmountDotInsert } from './align';
 import type { LineEdit } from './align';
+import { docLineIndex, stateLineIsLedger } from './fences';
 
 /** A caret as whole-text offsets; `head` is the active end. */
 export interface Caret {
@@ -71,10 +72,30 @@ function lineAt(lines: Lines, offset: number): number {
  * `.` once the key is claimed, so multi-cursor does not drop a prose
  * caret's insert; only the blocks that gained an amount decimal are aligned.
  */
+/**
+ * `blockRangeAt` clipped to the contiguous run of ledger lines around
+ * `line`, so a header above a fence opener cannot pull fence postings into
+ * its transaction and an entry that started outside cannot claim them.
+ */
+function blockRangeInLedger(
+	lines: readonly string[],
+	line: number,
+	ledgerLine: ((lineIndex: number) => boolean) | undefined
+): { from: number; to: number } {
+	if (ledgerLine === undefined) return blockRangeAt(lines, line);
+	let lo = line;
+	while (lo > 0 && ledgerLine(lo - 1)) lo -= 1;
+	let hi = line;
+	while (hi + 1 < lines.length && ledgerLine(hi + 1)) hi += 1;
+	const local = blockRangeAt(lines.slice(lo, hi + 1), line - lo);
+	return { from: lo + local.from, to: lo + local.to };
+}
+
 export function instantAlignmentPlan(
 	text: string,
 	carets: readonly Caret[],
-	separatorColumn: number
+	separatorColumn: number,
+	ledgerLine?: (lineIndex: number) => boolean
 ): InstantPlan | null {
 	if (carets.some((caret) => caret.anchor !== caret.head)) return null;
 
@@ -106,7 +127,7 @@ export function instantAlignmentPlan(
 	const edits: LineEdit[] = [];
 	for (const insert of inserts) {
 		if (!insert.amount) continue;
-		const range = blockRangeAt(working, insert.line);
+		const range = blockRangeInLedger(working, insert.line, ledgerLine);
 		const key = `${range.from}:${range.to}`;
 		if (claimed.has(key)) continue;
 		claimed.add(key);
@@ -162,10 +183,16 @@ export interface InstantAlignmentHost {
 export function instantAlignmentExtension(host: InstantAlignmentHost): Extension {
 	const run = (view: EditorView): boolean => {
 		if (!host.settings.instantAlignment) return false;
+		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
+		const ledgerLine = (lineIndex: number) => stateLineIsLedger(view.state, lineIndex);
+		if (!carets.every((caret) => ledgerLine(docLineIndex(view.state.doc, caret.head)))) {
+			return false;
+		}
 		const plan = instantAlignmentPlan(
 			view.state.doc.toString(),
-			view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head })),
-			host.settings.separatorColumn
+			carets,
+			host.settings.separatorColumn,
+			ledgerLine
 		);
 		if (plan === null) return false;
 		view.dispatch({

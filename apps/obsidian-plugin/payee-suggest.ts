@@ -23,6 +23,7 @@
  * through later edits; undo/redo or a change outside its stops ends it.
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
+import { editorLineIsLedger } from './fences';
 import { PAYEE_PREFIX_RE } from './payee-index';
 import { buildPayeeAutofill } from './payee-template';
 import type { TemplatePosting } from './payee-template';
@@ -137,7 +138,7 @@ export class PayeeSuggest extends IndexSuggest {
 		super(app, index);
 	}
 
-	onTrigger(cursor: EditorPosition, editor: Editor, _file: TFile | null): EditorSuggestTriggerInfo | null {
+	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		if (!this.enabled()) return null;
 		const line = editor.getLine(cursor.line);
 		// Mid-field edits (any character but the closing quote right after the
@@ -147,6 +148,7 @@ export class PayeeSuggest extends IndexSuggest {
 		if (after !== '' && after !== '"') return null;
 		const match = PAYEE_PREFIX_RE.exec(line.slice(0, cursor.ch));
 		if (!match) return null;
+		if (!editorLineIsLedger(editor, cursor.line, file)) return null;
 		return this.triggerInfo(cursor, match[1]);
 	}
 

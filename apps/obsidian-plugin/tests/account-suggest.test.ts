@@ -12,9 +12,39 @@ const manifest = { id: 'beancount-obsidian' } as PluginManifest;
 /** A vault with completable accounts, for trigger expectations. */
 const ACCOUNTS = { 'a.bean': 'Assets:Cash:Wallet Expenses:Food' };
 
-function trigger(suggest: AccountSuggest, line: string, ch = line.length) {
+/** A ledger file whose extension the context check accepts outright. */
+const LEDGER_FILE = { path: 'ledger.bean', extension: 'bean' } as TFile;
+const NOTE_FILE = { path: 'note.md', extension: 'md' } as TFile;
+
+const OPEN_ACCOUNTS = {
+	'a.bean': [
+		'2020-01-01 open Assets:Cash',
+		'2020-01-01 open Assets:Bank:Checking',
+		'2020-01-01 open Expenses:Transport:Taxi',
+		'2020-01-01 open Income:Salary',
+		'2020-01-01 open Liabilities:CreditCard',
+	].join('\n'),
+};
+
+function trigger(
+	suggest: AccountSuggest,
+	line: string,
+	ch = line.length,
+	file: TFile | null = LEDGER_FILE
+) {
 	const editor = createEditor([line]);
-	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, null);
+	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, file);
+}
+
+function triggerAt(
+	suggest: AccountSuggest,
+	lines: string[],
+	line: number,
+	ch: number,
+	file: TFile | null
+) {
+	const editor = createEditor(lines);
+	return suggest.onTrigger({ line, ch }, editor as unknown as Editor, file);
 }
 
 function contextFor(query: string): EditorSuggestContext {
@@ -116,6 +146,37 @@ describe('AccountSuggest.onTrigger', () => {
 		expect(trigger(suggest, '2026-09-30 * "As')).toBeNull();
 		// Cursor before the closing quote of an account-shaped payee.
 		expect(trigger(suggest, '2026-09-30 * "Expenses:Foo"', 26)).toBeNull();
+	});
+
+	it('stays quiet in comments and unclosed strings in a ledger file', async () => {
+		const { suggest } = setup(OPEN_ACCOUNTS);
+		await flush();
+		expect(trigger(suggest, '; Assets:Ca')).toBeNull();
+		expect(trigger(suggest, '  note: "Assets:Ca')).toBeNull();
+	});
+
+	it('stays quiet on capitalized prose in a markdown note outside fences', async () => {
+		const { suggest } = setup(OPEN_ACCOUNTS);
+		await flush();
+		expect(trigger(suggest, 'Meeting with The', undefined, NOTE_FILE)).toBeNull();
+		expect(trigger(suggest, 'I', undefined, NOTE_FILE)).toBeNull();
+		expect(trigger(suggest, 'Tea', undefined, NOTE_FILE)).toBeNull();
+		expect(trigger(suggest, 'I', undefined, null)).toBeNull();
+	});
+
+	it('still triggers inside beancount, bean, indented and unclosed fences', async () => {
+		const { suggest } = setup(OPEN_ACCOUNTS);
+		await flush();
+		expect(triggerAt(suggest, ['```beancount', '  Assets:Ca', '```'], 1, 11, NOTE_FILE)).toMatchObject({
+			query: 'Assets:Ca',
+		});
+		expect(triggerAt(suggest, ['```bean', 'I'], 1, 1, NOTE_FILE)).toMatchObject({ query: 'I' });
+		expect(triggerAt(suggest, ['   ```bean', '  Assets:Ca'], 1, 11, NOTE_FILE)).toMatchObject({
+			query: 'Assets:Ca',
+		});
+		expect(triggerAt(suggest, ['~~~bean', '  Assets:Ca'], 1, 11, NOTE_FILE)).toMatchObject({
+			query: 'Assets:Ca',
+		});
 	});
 
 	it('stays quiet in the narration field', async () => {

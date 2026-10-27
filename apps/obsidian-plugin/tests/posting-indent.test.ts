@@ -4,6 +4,16 @@ import { postingIndentExtension, postingIndentPlan, wantsIndent } from '../posti
 import type { MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 
+const BEAN_FILE = { path: 'ledger.bean', extension: 'bean' };
+const NOTE_FILE = { path: 'note.md', extension: 'md' };
+
+function attachFile(view: MockView, file: { path: string; extension: string }): MockView {
+	(view.state as { field?: (spec?: unknown, required?: boolean) => { file: typeof file } }).field = () => ({
+		file,
+	});
+	return view;
+}
+
 type Suggest = { context: unknown };
 type Run = (view: EditorView) => boolean;
 
@@ -47,6 +57,13 @@ describe('wantsIndent', () => {
 		expect(wantsIndent(['; note', '  Assets:Cash'], 1)).toBe(false);
 		expect(wantsIndent(['2026-10-01 * "Store"', '', '  Assets:Cash'], 2)).toBe(false);
 		expect(wantsIndent([], 0)).toBe(false);
+	});
+
+	it('does not look past a fence boundary when a ledger-line filter is given', () => {
+		const lines = ['2026-10-14 open questions', '   ```beancount', '  Assets:Cash', '```'];
+		const inFence = (i: number) => i === 2;
+		expect(wantsIndent(lines, 2, inFence)).toBe(false);
+		expect(wantsIndent(['```beancount', '2026-10-01 * "Store"', '```'], 1, (i) => i === 1)).toBe(true);
 	});
 });
 
@@ -171,7 +188,7 @@ describe('postingIndentExtension', () => {
 	});
 
 	it('dispatches the indent and claims the key inside an entry', () => {
-		const view = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		const view = attachFile(createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]), BEAN_FILE);
 		expect(runOf()(view as unknown as EditorView)).toBe(true);
 		expect(view.dispatched).toEqual([
 			{
@@ -182,7 +199,7 @@ describe('postingIndentExtension', () => {
 	});
 
 	it('hands the key back to the editor outside entries', () => {
-		const view = createView('prose', [{ anchor: 5, head: 5 }]);
+		const view = attachFile(createView('prose', [{ anchor: 5, head: 5 }]), BEAN_FILE);
 		expect(runOf()(view as unknown as EditorView)).toBe(false);
 		expect(view.dispatched).toEqual([]);
 	});
@@ -191,12 +208,51 @@ describe('postingIndentExtension', () => {
 		const suggest: Suggest = { context: null };
 		const run = runOf([suggest]);
 		suggest.context = {};
-		const open: MockView = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		const open: MockView = attachFile(
+			createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]),
+			BEAN_FILE
+		);
 		expect(run(open as unknown as EditorView)).toBe(false);
 		expect(open.dispatched).toEqual([]);
 		suggest.context = null;
-		const closed: MockView = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		const closed: MockView = attachFile(
+			createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]),
+			BEAN_FILE
+		);
 		expect(run(closed as unknown as EditorView)).toBe(true);
 		expect(closed.dispatched).toHaveLength(1);
+	});
+
+	it('hands Enter back in a markdown note outside fences', () => {
+		const text = '2026-10-14 open questions';
+		const view = attachFile(createView(text, [{ anchor: text.length, head: text.length }]), NOTE_FILE);
+		expect(runOf()(view as unknown as EditorView)).toBe(false);
+		expect(view.dispatched).toEqual([]);
+	});
+
+	it('indents inside a beancount fence and not from a header above the opener', () => {
+		const inside = ['# note', '```beancount', '2026-10-01 * "Store"', '```'].join('\n');
+		const caret = inside.indexOf('"Store"') + '"Store"'.length;
+		const view = attachFile(createView(inside, [{ anchor: caret, head: caret }]), NOTE_FILE);
+		expect(runOf()(view as unknown as EditorView)).toBe(true);
+		expect(view.dispatched[0].changes[0].insert).toBe('\n  ');
+
+		const crossed = ['2026-10-14 open questions', '   ```beancount', '  Assets:Cash', '```'].join('\n');
+		const body = crossed.indexOf('Assets:Cash') + 'Assets:Cash'.length;
+		const isolated = attachFile(createView(crossed, [{ anchor: body, head: body }]), NOTE_FILE);
+		expect(runOf()(isolated as unknown as EditorView)).toBe(false);
+	});
+
+	it('indents inside ~~~bean, indented, and unclosed fences', () => {
+		for (const lines of [
+			['prose', '~~~bean', '2026-10-01 * "Store"'],
+			['prose', '  ```bean', '2026-10-01 * "Store"'],
+			['prose', '```beancount', '2026-10-01 * "Store"'],
+		]) {
+			const text = lines.join('\n');
+			const caret = text.length;
+			const view = attachFile(createView(text, [{ anchor: caret, head: caret }]), NOTE_FILE);
+			expect(runOf()(view as unknown as EditorView)).toBe(true);
+		}
 	});
 });

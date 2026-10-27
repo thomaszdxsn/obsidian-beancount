@@ -19,6 +19,7 @@ import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { blockRangeAt } from './align';
 import { DATED_ENTRY_RE } from './beancount-mode';
+import { docLineIndex, stateLineIsLedger } from './fences';
 
 /** The text Enter inserts where an entry continues: newline plus its indent. */
 const ENTRY_INDENT = '\n  ';
@@ -50,11 +51,35 @@ export interface IndentPlan {
  * leave the entry instead of stacking empty postings — and loose indented
  * text outside any entry keeps the editor's own Enter behaviour.
  */
-export function wantsIndent(lines: readonly string[], line: number): boolean {
+/**
+ * `blockRangeAt` clipped to the contiguous run of ledger lines around
+ * `line`, so a header above a fence opener cannot pull a fence body into
+ * its entry and an entry that started outside cannot claim fence lines.
+ */
+function blockRangeInLedger(
+	lines: readonly string[],
+	line: number,
+	ledgerLine: ((lineIndex: number) => boolean) | undefined
+): { from: number; to: number } {
+	if (ledgerLine === undefined) return blockRangeAt(lines, line);
+	let lo = line;
+	while (lo > 0 && ledgerLine(lo - 1)) lo -= 1;
+	let hi = line;
+	while (hi + 1 < lines.length && ledgerLine(hi + 1)) hi += 1;
+	const local = blockRangeAt(lines.slice(lo, hi + 1), line - lo);
+	return { from: lo + local.from, to: lo + local.to };
+}
+
+export function wantsIndent(
+	lines: readonly string[],
+	line: number,
+	ledgerLine?: (lineIndex: number) => boolean
+): boolean {
+	if (ledgerLine !== undefined && !ledgerLine(line)) return false;
 	const text = lines[line] ?? '';
 	if (DATED_ENTRY_RE.test(text)) return true;
 	if (!/^[ \t]/.test(text) || text.trim() === '') return false;
-	const { from } = blockRangeAt(lines, line);
+	const { from } = blockRangeInLedger(lines, line, ledgerLine);
 	return DATED_ENTRY_RE.test(lines[from] ?? '');
 }
 
@@ -63,7 +88,11 @@ export function wantsIndent(lines: readonly string[], line: number): boolean {
  * where an indent belongs. Selections are replaced by the newline like the
  * editor's own Enter, and each caret lands after the indent it got.
  */
-export function postingIndentPlan(text: string, carets: readonly Caret[]): IndentPlan | null {
+export function postingIndentPlan(
+	text: string,
+	carets: readonly Caret[],
+	ledgerLine?: (lineIndex: number) => boolean
+): IndentPlan | null {
 	const lines = text.split('\n');
 	const lineAt = (at: number): number => {
 		let start = 0;
@@ -90,7 +119,7 @@ export function postingIndentPlan(text: string, carets: readonly Caret[]): Inden
 		// The line holding the start of the edit decides: that is the line
 		// the newline splits, collapsed carets and single-line selections
 		// included.
-		const insert = wantsIndent(lines, lineAt(from)) ? ENTRY_INDENT : '\n';
+		const insert = wantsIndent(lines, lineAt(from), ledgerLine) ? ENTRY_INDENT : '\n';
 		if (insert === ENTRY_INDENT) indented = true;
 		// The caret lands at the end of its insert — after the indent — and
 		// everything after this change shifts by what the earlier ones did.
@@ -115,10 +144,14 @@ export function postingIndentExtension(suggests: readonly SuggestState[]): Exten
 		// Enter accepts the open completion popover, ours included; the
 		// indent must not steal the keystroke from under it.
 		if (suggests.some((suggest) => suggest.context !== null)) return false;
-		const plan = postingIndentPlan(
-			view.state.doc.toString(),
-			view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }))
-		);
+		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
+		const ledgerLine = (lineIndex: number) => stateLineIsLedger(view.state, lineIndex);
+		if (
+			!carets.every((caret) => ledgerLine(docLineIndex(view.state.doc, Math.min(caret.anchor, caret.head))))
+		) {
+			return false;
+		}
+		const plan = postingIndentPlan(view.state.doc.toString(), carets, ledgerLine);
 		if (plan === null) return false;
 		view.dispatch({
 			changes: plan.changes,

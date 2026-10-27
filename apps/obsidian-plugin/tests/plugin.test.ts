@@ -276,22 +276,31 @@ describe('BeancountPlugin', () => {
 		await flush();
 
 		const narrations = plugin.registrations.editorSuggests[5] as {
-			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+			onTrigger(
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: { path: string; extension: string } | null
+			): unknown;
 		};
 		const line = createEditor(['2026-09-30 * "Shell" "Fu']);
 		const cursor = { line: 0, ch: line.lines[0].length };
+		const ledger = { path: 'ledger.bean', extension: 'bean' };
 		// Default settings leave the field alone…
-		expect(narrations.onTrigger(cursor, line, null)).toBeNull();
+		expect(narrations.onTrigger(cursor, line, ledger)).toBeNull();
 		// …the toggle turns it on…
 		plugin.settings.completeNarration = true;
-		expect(narrations.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
+		expect(narrations.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
 		// …and a stored true loads enabled.
 		const loaded = await loadPlugin(vault, { completeNarration: true });
 		await flush();
 		const enabled = loaded.plugin.registrations.editorSuggests[5] as {
-			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+			onTrigger(
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: { path: string; extension: string } | null
+			): unknown;
 		};
-		expect(enabled.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
+		expect(enabled.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
 	});
 
 	it('leaves the payee field to the payee suggest', async () => {
@@ -303,17 +312,22 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault);
 		await flush();
 		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
-			onTrigger: (cursor: { line: number; ch: number }, editor: unknown, file: null) => unknown;
+			onTrigger: (
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: { path: string; extension: string } | null
+			) => unknown;
 		}>;
 		// `"Ex` prefixes both the payee `Exxon` and the account
 		// `Expenses:Food`; the payee field must show payees, not accounts.
 		const payeeLine = createEditor(['2026-10-02 * "Ex']);
 		const cursor = { line: 0, ch: payeeLine.lines[0].length };
-		expect(accounts.onTrigger(cursor, payeeLine, null)).toBeNull();
-		expect(payees.onTrigger(cursor, payeeLine, null)).toMatchObject({ query: 'Ex' });
+		const ledger = { path: 'ledger.bean', extension: 'bean' };
+		expect(accounts.onTrigger(cursor, payeeLine, ledger)).toBeNull();
+		expect(payees.onTrigger(cursor, payeeLine, ledger)).toMatchObject({ query: 'Ex' });
 		// …while account completion still answers on posting lines.
 		const postingLine = createEditor(['  Expenses:Fo']);
-		expect(accounts.onTrigger({ line: 0, ch: 13 }, postingLine, null)).toMatchObject({
+		expect(accounts.onTrigger({ line: 0, ch: 13 }, postingLine, ledger)).toMatchObject({
 			query: 'Expenses:Fo',
 		});
 	});
@@ -446,12 +460,18 @@ describe('BeancountPlugin', () => {
 			// A popup is open: Enter accepts the suggestion, never indents.
 			suggest.context = {};
 			const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+			(open.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+				file: { path: 'ledger.bean', extension: 'bean' },
+			});
 			expect(run(open)).toBe(false);
 			expect(open.dispatched).toEqual([]);
 
 			suggest.context = null;
 		}
 		const closed = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		(closed.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(closed)).toBe(true);
 		expect(closed.dispatched).toHaveLength(1);
 	});
@@ -464,16 +484,25 @@ describe('BeancountPlugin', () => {
 		const text = '  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;
 		const view = createView(text, [{ anchor: caret }]);
+		(view.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(view)).toBe(true);
 		expect(view.dispatched).toHaveLength(1);
 		// Default separator column 50: the inserted `.` sits at 0-based index 49.
 		expect(view.dispatched[0].changes[0].insert.indexOf('.')).toBe(49);
 		plugin.settings.separatorColumn = 40;
 		const col40 = createView(text, [{ anchor: caret }]);
+		(col40.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(col40)).toBe(true);
 		expect(col40.dispatched[0].changes[0].insert.indexOf('.')).toBe(39);
 		plugin.settings.instantAlignment = false;
 		const silenced = createView(text, [{ anchor: caret }]);
+		(silenced.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(silenced)).toBe(false);
 		expect(silenced.dispatched).toEqual([]);
 	});

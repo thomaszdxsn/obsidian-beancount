@@ -1,3 +1,5 @@
+import { editorInfoField } from 'obsidian';
+
 /**
  * Markdown `beancount`/`bean` fenced code blocks are the notes' ledger.
  * bean-check cannot parse markdown, so the plugin copies each fence body into
@@ -156,6 +158,95 @@ export function ledgerSource(path: string, content: string): string {
 	return extractBeancountFences(content)
 		.map((fence) => fence.lines.join('\n'))
 		.join('\n');
+}
+
+/**
+ * File identity the ledger-text rule needs: a `.bean` / `.beancount`
+ * extension means the whole buffer is ledger; anything else (a markdown
+ * note, another extension, or no file) is ledger only inside fence bodies.
+ * Kept here so `fences` does not import `vault-index` (that module already
+ * imports this one).
+ */
+export interface LedgerFileRef {
+	extension: string;
+}
+
+/** Same extensions `isLedgerFile` accepts. */
+function isLedgerExtension(file: LedgerFileRef | null | undefined): boolean {
+	return file?.extension === 'bean' || file?.extension === 'beancount';
+}
+
+function fenceContainsLine(fences: readonly BeancountFence[], lineIndex: number): boolean {
+	for (const fence of fences) {
+		if (lineIndex >= fence.startLine && lineIndex < fence.startLine + fence.lines.length) return true;
+	}
+	return false;
+}
+
+/**
+ * Whether 0-based `lineIndex` is ledger text under the product rule.
+ * A ledger file is entirely ledger (and does not consult `fences`); any
+ * other buffer is ledger only on `beancount`/`bean` fence body lines.
+ */
+export function isLedgerTextLine(
+	file: LedgerFileRef | null | undefined,
+	lineIndex: number,
+	fences: readonly BeancountFence[]
+): boolean {
+	if (isLedgerExtension(file)) return true;
+	return fenceContainsLine(fences, lineIndex);
+}
+
+/**
+ * Ledger-text check for an Obsidian `Editor`: the file, plus a fence scan of
+ * the live buffer when the file is not a ledger. Callers run their cheap
+ * per-line trigger shape first so prose never scans.
+ */
+export function editorLineIsLedger(
+	editor: { getValue(): string },
+	lineIndex: number,
+	file: LedgerFileRef | null | undefined
+): boolean {
+	if (isLedgerExtension(file)) return true;
+	return fenceContainsLine(extractBeancountFences(editor.getValue()), lineIndex);
+}
+
+/**
+ * 0-based line of `pos` in `doc`. Prefers CodeMirror `lineAt` (1-based
+ * `number`); otherwise counts newlines, treating a newline as ending its line.
+ */
+export function docLineIndex(
+	doc: { toString(): string; lineAt?(pos: number): { number: number } },
+	pos: number
+): number {
+	if (doc.lineAt !== undefined) return doc.lineAt(pos).number - 1;
+	const text = doc.toString();
+	let line = 0;
+	for (let i = 0; i < pos && i < text.length; i += 1) {
+		if (text.charCodeAt(i) === 0x0a) line += 1;
+	}
+	return line;
+}
+
+/** Editor-info field shape tests and the live view put `{ file }` on. */
+interface EditorFileInfo {
+	file?: LedgerFileRef | null;
+}
+
+/**
+ * Ledger-text check for a CodeMirror `EditorState`: the file from
+ * `editorInfoField`, fences from `docFences(state.doc)` (cached per doc).
+ */
+export function stateLineIsLedger(
+	state: {
+		doc: FenceDoc;
+		field?(field: unknown, required?: boolean): EditorFileInfo | undefined;
+	},
+	lineIndex: number
+): boolean {
+	const file = state.field?.(editorInfoField, false)?.file ?? null;
+	if (isLedgerExtension(file)) return true;
+	return fenceContainsLine(docFences(state.doc).fences, lineIndex);
 }
 
 /**

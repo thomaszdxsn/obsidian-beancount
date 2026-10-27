@@ -5,7 +5,17 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type * as CMState from '@codemirror/state';
-import { buildFenceLedger, docFences, extractBeancountFences, isSafeIncludePath, ledgerSource } from '../fences';
+import {
+	buildFenceLedger,
+	docFences,
+	docLineIndex,
+	editorLineIsLedger,
+	extractBeancountFences,
+	isLedgerTextLine,
+	isSafeIncludePath,
+	ledgerSource,
+	stateLineIsLedger,
+} from '../fences';
 
 const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
 
@@ -214,6 +224,27 @@ describe('docFences', () => {
 		expect(none.masked).toBeNull();
 		expect(docFences(open)).toBe(fences);
 		expect(docFences(open).fences).not.toBe(none.fences);
+	});
+
+	it('answers whether a line is ledger text for a file, editor, or editor state', () => {
+		const fences = extractBeancountFences('# n\n```bean\n  Assets:Cash\n```\nprose');
+		expect(isLedgerTextLine({ extension: 'bean' }, 0, [])).toBe(true);
+		expect(isLedgerTextLine({ extension: 'md' }, 0, fences)).toBe(false);
+		expect(isLedgerTextLine({ extension: 'md' }, 2, fences)).toBe(true);
+		expect(isLedgerTextLine(null, 2, fences)).toBe(true);
+		const editor = { getValue: () => '# n\n```beancount\nopen\n```' };
+		expect(editorLineIsLedger(editor, 2, { extension: 'md' })).toBe(true);
+		expect(editorLineIsLedger(editor, 0, { extension: 'md' })).toBe(false);
+		expect(editorLineIsLedger(editor, 0, { extension: 'bean' })).toBe(true);
+		const text = '# n\n```bean\nopen\n```';
+		const state = {
+			doc: { toString: () => text },
+			field: () => ({ file: { extension: 'md' } }),
+		};
+		expect(stateLineIsLedger(state, 2)).toBe(true);
+		expect(stateLineIsLedger(state, 0)).toBe(false);
+		expect(docLineIndex({ toString: () => 'ab\ncd' }, 3)).toBe(1);
+		expect(docLineIndex({ toString: () => 'ab\ncd', lineAt: () => ({ number: 2 }) }, 3)).toBe(1);
 	});
 
 	it('strips the opener indent in the masked body, not only in extractBeancountFences', () => {

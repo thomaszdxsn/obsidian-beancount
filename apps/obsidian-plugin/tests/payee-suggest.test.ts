@@ -13,9 +13,12 @@ const PAYEES = {
 	'a.md': ['2026-09-30 * "Whole Foods" "Groceries"', '2026-10-01 * "Shell" "Fuel"'].join('\n'),
 };
 
-function trigger(suggest: PayeeSuggest, line: string, ch = line.length) {
+const LEDGER_FILE = { path: 'ledger.bean', extension: 'bean' } as TFile;
+const NOTE_FILE = { path: 'note.md', extension: 'md' } as TFile;
+
+function trigger(suggest: PayeeSuggest, line: string, ch = line.length, file: TFile | null = LEDGER_FILE) {
 	const editor = createEditor([line]);
-	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, null);
+	return suggest.onTrigger({ line: 0, ch }, editor as unknown as Editor, file);
 }
 
 function contextFor(query: string): EditorSuggestContext {
@@ -97,6 +100,23 @@ describe('PayeeSuggest.onTrigger', () => {
 		// text, decides.
 		expect(trigger(suggest, '2026-09-30 * "Shell" "Whole')).toBeNull();
 		expect(trigger(suggest, '2026-09-30 * "Whole Foods" "Who')).toBeNull();
+	});
+
+	it('stays quiet on capitalized prose in a markdown note outside fences', async () => {
+		const { suggest } = setup(PAYEES);
+		await flush();
+		expect(trigger(suggest, 'Meeting with The', undefined, NOTE_FILE)).toBeNull();
+		expect(trigger(suggest, 'I', undefined, NOTE_FILE)).toBeNull();
+		expect(trigger(suggest, '2026-09-30 * "Whole Fo', undefined, NOTE_FILE)).toBeNull();
+	});
+
+	it('still triggers inside a beancount fence', async () => {
+		const { suggest } = setup(PAYEES);
+		await flush();
+		const editor = createEditor(['```beancount', '2026-09-30 * "Whole Fo', '```']);
+		expect(
+			suggest.onTrigger({ line: 1, ch: editor.lines[1].length }, editor as unknown as Editor, NOTE_FILE)
+		).toMatchObject({ query: 'Whole Fo' });
 	});
 
 	it('stays quiet on lines that are not transactions', async () => {
