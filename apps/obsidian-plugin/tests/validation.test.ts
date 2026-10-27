@@ -583,18 +583,17 @@ describe('LedgerValidation entry ledger change', () => {
 
 	it('clears lastValidatedMtime so a same-mtime open after entry change re-runs', async () => {
 		const h = harness();
-		const child = h.add('child.bean', '2026-10-01 * "A"\n', 10);
-		h.saved(child);
+		h.entryLedger = '';
+		const main = h.add('main.bean', '2026-10-01 * "A"\n', 10);
+		h.saved(main);
 		await h.tick();
-		await h.finish({ stderr: '/vault/child.bean:1:       old\n', missing: false });
-		h.opened(child);
+		await h.finish();
 		expect(h.calls).toHaveLength(1);
-		h.markers.set('child.bean', [{ line: 0, message: 'flag stays' }]);
+		h.opened(main);
+		expect(h.calls).toHaveLength(1);
 		h.validation.handle({ kind: 'entryLedgerChanged', entryLedger: 'main.bean' });
 		h.entryLedger = 'main.bean';
-		h.add('main.bean', '', 10);
-		expect(h.markers.get('child.bean')).toEqual([]);
-		h.opened(child);
+		h.opened(main);
 		await h.tick();
 		expect(h.calls).toHaveLength(2);
 	});

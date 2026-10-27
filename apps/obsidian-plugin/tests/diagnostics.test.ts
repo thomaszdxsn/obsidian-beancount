@@ -24,6 +24,7 @@ import {
 	setBeanDiagnostics,
 	setEditorBeanDiagnostics,
 	setFlagOkayDiagnostics,
+	updateFlagOkayDiagnostics,
 } from '../diagnostics';
 import type {
 	MockDecorationRange,
@@ -209,6 +210,95 @@ describe('flagOkayDiagnostics', () => {
 		expect(field.update([], { effects: [], docChanged: true, state: note })).toEqual([
 			{ line: 2, message: FLAGGED_MESSAGE },
 		]);
+	});
+
+	function spansOf(text: string) {
+		const pieces = text.split('\n');
+		let from = 0;
+		return pieces.map((piece, index) => {
+			const span = { from, to: from + piece.length, number: index + 1, text: piece };
+			from += piece.length + 1;
+			return span;
+		});
+	}
+
+	function richState(text: string, extension: string) {
+		const spans = spansOf(text);
+		return {
+			doc: {
+				toString: () => text,
+				get lines() {
+					return spans.length;
+				},
+				line: (n: number) => spans[n - 1] ?? { text: '', from: 0, to: 0, number: n },
+				lineAt: (pos: number) => spans.find((span) => pos <= span.to) ?? spans[spans.length - 1],
+			},
+			field: (field: unknown) =>
+				field === editorInfoField ? { file: { extension, path: `x.${extension}` } } : undefined,
+		};
+	}
+
+	function replaceLine(before: string, after: string, extension: string, line0: number) {
+		const startState = richState(before, extension);
+		const state = richState(after, extension);
+		const fromA = startState.doc.line(line0 + 1).from;
+		const toA = startState.doc.line(line0 + 1).to;
+		const fromB = state.doc.line(line0 + 1).from;
+		const toB = state.doc.line(line0 + 1).to;
+		const delta = after.length - before.length;
+		return {
+			effects: [],
+			docChanged: true,
+			changes: {
+				iterChangedRanges: (fn: (a: number, b: number, c: number, d: number) => void) => {
+					fn(fromA, toA, fromB, toB);
+				},
+				mapPos: (pos: number) => {
+					if (pos <= fromA) return pos;
+					if (pos >= toA) return pos + delta;
+					return fromB;
+				},
+			},
+			startState,
+			state,
+		};
+	}
+
+	it('rescans only the edited fence body line', () => {
+		const two = [
+			'```beancount',
+			'2026-10-01 ! "A"',
+			'```',
+			'Wow!',
+			'```beancount',
+			'2026-10-01 ! "B"',
+			'```',
+			'',
+		].join('\n');
+		const starred = two.replace('! "A"', '* "A"');
+		const flags = [
+			{ line: 1, message: FLAGGED_MESSAGE },
+			{ line: 5, message: FLAGGED_MESSAGE },
+		];
+		expect(updateFlagOkayDiagnostics(flags, replaceLine(two, starred, 'md', 1) as never)).toEqual([
+			{ line: 5, message: FLAGGED_MESSAGE },
+		]);
+	});
+
+	it('keeps fence flags when markdown outside the region is edited', () => {
+		const note = 'Wow!\n```beancount\n2026-10-01 ! "Cafe"\n```\n';
+		const edited = 'Yep!\n```beancount\n2026-10-01 ! "Cafe"\n```\n';
+		expect(
+			updateFlagOkayDiagnostics([{ line: 2, message: FLAGGED_MESSAGE }], replaceLine(note, edited, 'md', 0) as never),
+		).toEqual([{ line: 2, message: FLAGGED_MESSAGE }]);
+	});
+
+	it('rescans the whole note when a fence opener changes', () => {
+		const note = '```beancount\n2026-10-01 ! "Cafe"\n```\n';
+		const prose = '```text\n2026-10-01 ! "Cafe"\n```\n';
+		expect(
+			updateFlagOkayDiagnostics([{ line: 1, message: FLAGGED_MESSAGE }], replaceLine(note, prose, 'md', 0) as never),
+		).toEqual([]);
 	});
 });
 

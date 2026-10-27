@@ -32,7 +32,7 @@ import { VaultIndex } from '../vault-index';
 import { extractPayees } from '../payee-index';
 import { extractCommodities, extractLinks, extractNarrations, extractTags } from '../token-index';
 import { ledgerDoc as ledgerOf, ledgerKind } from '../fences';
-import { OpenFileIndex, PairingIndex, flagDiagnostics } from '../code-actions';
+import { OpenFileIndex, PairingIndex, flagDiagnostics, flagDiagnosticsFromRegions } from '../code-actions';
 import { PayeeTemplateIndex } from '../payee-template';
 import type { App } from 'obsidian';
 import { editorInfoField } from 'obsidian';
@@ -214,21 +214,23 @@ function saveWorkload(): [() => unknown, () => unknown] {
 	return [run, run];
 }
 
-function flagOkayWorkload(): [() => unknown, () => unknown] {
-	const file = ledgerFile;
-	const stateOf = (doc: Text) => ({
-		doc,
+function flagOkayWorkload(doc: Text, file: typeof ledgerFile, line: number): [() => unknown, () => unknown] {
+	const stateOf = (next: Text) => ({
+		doc: next,
 		field: (f: unknown) => (f === editorInfoField ? { file } : undefined),
 	});
-	const [insert, undo] = keystroke(ledgerDoc, ledgerLine);
-	let flags: readonly LineDiagnostic[] = flagDiagnostics(ledger);
+	const [insert, undo] = keystroke(doc, line);
+	let flags: readonly LineDiagnostic[] =
+		ledgerKind(file) === 'ledger-file'
+			? flagDiagnostics(doc.toString())
+			: flagDiagnosticsFromRegions(ledgerOf('fenced', doc).regions);
 	const run = () => {
-		const typed = insert.apply(ledgerDoc);
+		const typed = insert.apply(doc);
 		flags = updateFlagOkayDiagnostics(flags, {
 			effects: [],
 			docChanged: true,
 			changes: insert,
-			startState: stateOf(ledgerDoc),
+			startState: stateOf(doc),
 			state: stateOf(typed),
 		} as never);
 		flags = updateFlagOkayDiagnostics(flags, {
@@ -236,12 +238,12 @@ function flagOkayWorkload(): [() => unknown, () => unknown] {
 			docChanged: true,
 			changes: undo,
 			startState: stateOf(typed),
-			state: stateOf(ledgerDoc),
+			state: stateOf(doc),
 		} as never);
 	};
 	const check = () => {
 		run();
-		return { count: flags.length, line: ledgerLine };
+		return { count: flags.length, line };
 	};
 	return [run, check];
 }
@@ -249,11 +251,12 @@ function flagOkayWorkload(): [() => unknown, () => unknown] {
 const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['key_inlay', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.inlay])],
 	['key_flags', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.flags])],
-	['key_flag_okay', flagOkayWorkload()],
+	['key_flag_okay', flagOkayWorkload(ledgerDoc, ledgerFile, ledgerLine)],
 	['key_highlight', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.highlight])],
 	['key_include', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.include])],
 	['scroll', scrollWorkload()],
 	['md_key', typingWorkload(markdownDoc, noteFile, markdownLine, [cls.inlay, cls.flags, cls.include])],
+	['md_flag_okay', flagOkayWorkload(markdownDoc, noteFile, markdownLine)],
 	['dot', pure(() => instantAlignmentPlan(integerOnly.toString(), [{ anchor: integerCaret, head: integerCaret }], 50))],
 	['enter', pure(() => postingIndentPlan(ledgerDoc.toString(), [{ anchor: ledgerDoc.line(ledgerLine).to, head: ledgerDoc.line(ledgerLine).to }]))],
 	['save', saveWorkload()],

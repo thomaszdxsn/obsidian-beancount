@@ -1,5 +1,5 @@
 import { Menu, Notice, Plugin } from 'obsidian';
-import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
+import type { App, Editor, FileSystemAdapter, MarkdownView, PluginManifest, TAbstractFile, TFile } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
 import type { ChildProcess } from 'child_process';
 import { isAbsolute, relative, resolve, sep } from 'path';
@@ -330,11 +330,13 @@ function applyEditorEdit(editor: Editor, edit: TextEdit): void {
 }
 
 export default class BeancountPlugin extends Plugin implements DiagnosticClickHost {
+	constructor(app: App, manifest: PluginManifest, private readonly clock: Clock = systemClock) {
+		super(app, manifest);
+	}
+
 	settings: BeancountSettings = { ...DEFAULT_SETTINGS };
 	/** How `bean-check` is started; tests swap in their own runner. */
 	beanCheckRunner: BeanCheckRunner = runBeanCheck;
-	/** Timer seam; tests set this before `onload`. */
-	clock: Clock = systemClock;
 	private validation!: LedgerValidation;
 	private readonly pairings = new PairingIndex();
 	private readonly openFiles = new OpenFileIndex();

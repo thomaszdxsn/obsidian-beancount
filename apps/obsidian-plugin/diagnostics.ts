@@ -74,20 +74,51 @@ function touchedLineRange(tr: Transaction): { from: number; toExclusive: number 
 	return { from, toExclusive };
 }
 
+function fenceMarkerLines(regions: readonly { hostStartLine: number; lines: readonly string[] }[]): number[] {
+	const lines: number[] = [];
+	for (const region of regions) {
+		if (region.hostStartLine > 0) lines.push(region.hostStartLine - 1);
+		lines.push(region.hostStartLine + region.lines.length);
+	}
+	return lines;
+}
+
+function rangeHitsLine(lines: readonly number[], range: { from: number; toExclusive: number }): boolean {
+	return lines.some((line) => line >= range.from && line < range.toExclusive);
+}
+
 function flagsFromTouchedLines(tr: Transaction, mapped: readonly LineDiagnostic[]): readonly LineDiagnostic[] {
 	const range = touchedLineRange(tr);
 	if (range === null) return flagsFromState(tr.state);
 	const file = tr.state.field(editorInfoField, false)?.file;
-	if (ledgerKind(file) !== 'ledger-file') return flagsFromState(tr.state);
 	const kept = mapped.filter((diagnostic) => diagnostic.line < range.from || diagnostic.line >= range.toExclusive);
-	const lines: string[] = [];
-	for (let line = range.from; line < range.toExclusive; line += 1) {
-		lines.push(tr.state.doc.line(line + 1).text);
+	if (ledgerKind(file) === 'ledger-file') {
+		const lines: string[] = [];
+		for (let line = range.from; line < range.toExclusive; line += 1) {
+			lines.push(tr.state.doc.line(line + 1).text);
+		}
+		const added = flagDiagnostics(lines.join('\n')).map((diagnostic) => ({
+			line: diagnostic.line + range.from,
+			message: diagnostic.message,
+		}));
+		return [...kept, ...added].sort((a, b) => a.line - b.line);
 	}
-	const added = flagDiagnostics(lines.join('\n')).map((diagnostic) => ({
-		line: diagnostic.line + range.from,
-		message: diagnostic.message,
-	}));
+	const before = ledgerDoc('fenced', tr.startState.doc).regions;
+	const after = ledgerDoc('fenced', tr.state.doc).regions;
+	if (rangeHitsLine(fenceMarkerLines(before), range) || rangeHitsLine(fenceMarkerLines(after), range)) {
+		return flagsFromState(tr.state);
+	}
+	const added: LineDiagnostic[] = [];
+	for (const region of after) {
+		const regionEnd = region.hostStartLine + region.lines.length;
+		const from = Math.max(range.from, region.hostStartLine);
+		const to = Math.min(range.toExclusive, regionEnd);
+		if (from >= to) continue;
+		const slice = region.lines.slice(from - region.hostStartLine, to - region.hostStartLine);
+		for (const diagnostic of flagDiagnostics(slice.join('\n'))) {
+			added.push({ line: diagnostic.line + from, message: diagnostic.message });
+		}
+	}
 	return [...kept, ...added].sort((a, b) => a.line - b.line);
 }
 

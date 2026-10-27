@@ -16,7 +16,7 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import { isLedgerFile, isSafeIncludePath, ledgerDoc } from './fences';
-import { ProblemStore, toProblemRows } from './problems';
+import { ProblemStore, finiteMtime, toProblemRows } from './problems';
 import { realpathInVault } from './vault-path';
 
 /** Delay before on-save validation, so a burst of saves checks once. */
@@ -82,10 +82,6 @@ export function createTempFilePort(
 			}
 		},
 	};
-}
-
-function finiteMtime(mtime: number | undefined): number | undefined {
-	return typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : undefined;
 }
 
 export interface MarkerSink {

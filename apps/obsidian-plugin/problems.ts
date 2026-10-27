@@ -58,10 +58,14 @@ export function toProblemRows(
 	return rows;
 }
 
+/** Missing or non-finite means "not proven unchanged". */
+export function finiteMtime(mtime: number | undefined): number | undefined {
+	return typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : undefined;
+}
+
 /** `TFile.stat.mtime` when the host stamped it; missing means "not proven unchanged". */
 export function fileMtime(file: { stat?: { mtime?: number } } | null | undefined): number | undefined {
-	const mtime = file?.stat?.mtime;
-	return typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : undefined;
+	return finiteMtime(file?.stat?.mtime);
 }
 
 

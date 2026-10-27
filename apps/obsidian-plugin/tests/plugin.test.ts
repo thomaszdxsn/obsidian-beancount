@@ -86,9 +86,9 @@ async function loadPlugin(
 			workspace: { getLeavesOfType: () => leaves, activeEditor, on: () => ({}) },
 		} as unknown as App,
 		manifest,
+		clock,
 	) as BeancountPlugin & RecordingPlugin;
 	plugin.loadedData = loadedData;
-	if (clock) plugin.clock = clock;
 	await plugin.onload();
 	plugin.beanCheckRunner = async (command, args) => {
 		beanCheckRuns.push({ command, args: [...args] });
