@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The plugin's `tsconfig.json` names `@types/node` explicitly, so the
+  community review's type-checked lint resolves `fs`, `path`,
+  `child_process` and `process` instead of treating them as `any`
+  (the `no-unsafe-*` and "Unresolved `error` type" findings).
+
 ## 0.2.2
 
 Clears the Obsidian community review findings (#65) and rewrites the README
