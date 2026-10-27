@@ -40,7 +40,7 @@ import { FAVA_HOST, favaUrl, isFavaBinary, normalizeFavaPort, openFavaUrl, runFa
 import type { FavaOpener, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { buildFenceLedger, extractBeancountFences, isSafeIncludePath, ledgerSource } from './fences';
+import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
@@ -421,14 +421,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const pinyinMatching = () => this.settings.pinyinMatching;
 		const accounts = new AccountIndex(this.usage, pinyinMatching);
 		const payees = new VaultIndex(extractPayees, this.usage, pinyinMatching);
-		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`), prose
-		// amounts (`- 10 GB`) and colon-joined words (`PG_DATA_DIR:-x`) collide
-		// with ledger token shapes, so on notes these extractors (and the
-		// account index) see only the beancount fence bodies; ledger files are
-		// scanned whole.
-		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerSource(path, content)), this.usage, pinyinMatching);
-		const tags = new VaultIndex((content, path) => extractTags(ledgerSource(path, content)), this.usage, pinyinMatching);
-		const links = new VaultIndex((content, path) => extractLinks(ledgerSource(path, content)), this.usage, pinyinMatching);
+		const commodities = new VaultIndex(extractCommodities, this.usage, pinyinMatching);
+		const tags = new VaultIndex(extractTags, this.usage, pinyinMatching);
+		const links = new VaultIndex(extractLinks, this.usage, pinyinMatching);
 		const narrations = new VaultIndex(extractNarrations, this.usage, pinyinMatching);
 		const payeeTemplates = new PayeeTemplateIndex();
 		const snippetSession = new SnippetSession();

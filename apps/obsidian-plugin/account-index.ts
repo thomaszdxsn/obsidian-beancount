@@ -7,7 +7,6 @@
  */
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
-import { ledgerSource } from './fences';
 import { VaultIndex } from './vault-index';
 import type { VaultCache } from './vault-index';
 
@@ -31,7 +30,7 @@ import type { VaultCache } from './vault-index';
 const SEGMENT_CHARS = String.raw`\p{L}\p{N}\p{M}_\-·・`;
 const SEGMENT = `[${SEGMENT_CHARS}]`;
 const NAME_END = String.raw`(?<=[\p{L}\p{N}\p{M}_])`;
-const ACCOUNT_SHAPE = String.raw`[A-Z]${SEGMENT}*(?::${SEGMENT}+)+${NAME_END}`;
+export const ACCOUNT_SHAPE = String.raw`[A-Z]${SEGMENT}*(?::${SEGMENT}+)+${NAME_END}`;
 const ACCOUNT_RE = new RegExp(`(?<![${SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
 
 /** The same shape while typing, where the last segment may be partial. */
@@ -186,11 +185,9 @@ export class AccountIndex implements VaultCache {
 		this.names = new VaultIndex(extractAccounts, usage, pinyin);
 	}
 
-	/** Markdown notes contribute only their beancount fences; ledger files all of it. */
 	setFileContent(path: string, content: string): void {
-		const ledger = ledgerSource(path, content);
-		this.names.setFileContent(path, ledger);
-		const directives = extractAccountDirectives(ledger);
+		this.names.setFileContent(path, content);
+		const directives = extractAccountDirectives(content);
 		if (directives.size === 0) this.directivesByPath.delete(path);
 		else this.directivesByPath.set(path, directives);
 		this.merged = null;

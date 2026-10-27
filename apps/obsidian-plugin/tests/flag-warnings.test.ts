@@ -111,6 +111,19 @@ describe('collectFlagDiagnostics', () => {
 		]);
 	});
 
+	it('marks no-space flags the same as spaced ones', () => {
+		const warnings = { '*': 'error' as const, '!': 'warning' as const };
+		expect(collectFlagDiagnostics('2026-10-01! "x"', warnings)).toEqual([
+			{ line: 0, flag: '!', severity: 'warning', message: 'Transaction flagged !' },
+		]);
+		expect(collectFlagDiagnostics('2026-10-01* "x"', warnings)).toEqual([
+			{ line: 0, flag: '*', severity: 'error', message: 'Transaction flagged *' },
+		]);
+		expect(collectFlagDiagnostics('2026-10-01txn "x"', warnings)).toEqual([
+			{ line: 0, flag: '*', severity: 'error', message: 'Transaction flagged *' },
+		]);
+	});
+
 	it('ignores org headings, postings, and silenced flags', () => {
 		const text = ['* Food', '  ! Assets:Cash  1.00 USD', '2026-10-01 P "Pad" "Note"'].join('\n');
 		expect(collectFlagDiagnostics(text, DEFAULT_FLAG_WARNINGS)).toEqual([]);

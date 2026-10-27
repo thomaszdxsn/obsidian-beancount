@@ -47,6 +47,13 @@ describe('flagOkayEdit', () => {
 		expect(apply(lines, edit!).join('\n')).toBe('2026-10-01 * "Cafe"\n  Assets:Cash  10.00 USD');
 	});
 
+	it('flags a header whose ! sits against the date', () => {
+		const lines = ['2026-10-01! "x"', '  Assets:Cash  10.00 USD'];
+		const edit = flagOkayEdit(lines, 0);
+		expect(edit).toEqual({ line: 0, fromCh: 10, toCh: 11, text: '*' });
+		expect(apply(lines, edit!).join('\n')).toBe('2026-10-01* "x"\n  Assets:Cash  10.00 USD');
+	});
+
 	it('deletes a posting’s leading flag and the space after it', () => {
 		const lines = ['2026-10-01 * "Cafe"', '  ! Assets:Cash  10.00 USD'];
 		const edit = flagOkayEdit(lines, 1);
@@ -86,6 +93,14 @@ describe('mergeDiagnostics', () => {
 });
 
 describe('extractPairings / inferBalancingAccount', () => {
+	it('indexes two-leg CJK accounts', () => {
+		expect(
+			extractPairings(
+				['2026-09-01 * "面馆"', '  Expenses:餐饮  18.00 CNY', '  Assets:Cash  -18.00 CNY'].join('\n')
+			)
+		).toEqual([{ date: '2026-09-01', payee: '面馆', accounts: ['Expenses:餐饮', 'Assets:Cash'] }]);
+	});
+
 	it('indexes two-leg single-commodity transactions', () => {
 		const content = [
 			'2026-09-01 * "Cafe"',
@@ -174,6 +189,15 @@ describe('padEdit', () => {
 	];
 	const unbalanced = 'Transaction does not balance: (10.00 USD)';
 
+	it('inserts a balancing posting from CJK pairing history', () => {
+		const history: Pairing[] = [
+			{ date: '2026-09-01', payee: '面馆', accounts: ['Expenses:餐饮', 'Assets:Cash'] },
+		];
+		const lines = ['2026-10-01 * "面馆"', '  Expenses:餐饮  18.00 CNY'];
+		const edit = padEdit(lines, 0, history, 'Transaction does not balance: (18.00 CNY)');
+		expect(edit?.text).toBe('\n  Assets:Cash  -18.00 CNY');
+	});
+
 	it('inserts the negated residual against the inferred account', () => {
 		const lines = ['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD'];
 		const edit = padEdit(lines, 0, history, unbalanced);
@@ -247,6 +271,18 @@ describe('quickFixesForLine', () => {
 		expect(fixes.map((fix) => fix.title)).toEqual([FLAG_OKAY_TITLE]);
 	});
 
+	it('offers Flag as okay on a no-space ! header', () => {
+		expect(
+			quickFixesForLine(
+				context({
+					lines: ['2026-10-01! "x"', '  Assets:Cash  10.00 USD'],
+					line: 0,
+					message: FLAGGED_MESSAGE,
+				})
+			).map((fix) => fix.title)
+		).toEqual([FLAG_OKAY_TITLE]);
+	});
+
 	it('offers a balancing posting when the transaction is one-leg and history knows the other account', () => {
 		const fixes = quickFixesForLine(
 			context({
@@ -257,6 +293,28 @@ describe('quickFixesForLine', () => {
 			})
 		);
 		expect(fixes.map((fix) => fix.title)).toEqual([PAD_TRANSACTION_TITLE]);
+	});
+
+	it('carries the posting commodity when opening an unknown CJK account', () => {
+		const lines = ['2026-10-01 * "面馆"', '  Expenses:餐饮  18.00 CNY'];
+		expect(
+			quickFixesForLine(
+				context({
+					lines,
+					line: 1,
+					message: "Invalid reference to unknown account 'Expenses:餐饮'",
+				})
+			)
+		).toEqual([
+			{
+				title: openAccountTitle('Expenses:餐饮'),
+				kind: 'open-account',
+				account: 'Expenses:餐饮',
+				date: '2026-10-01',
+				commodity: 'CNY',
+				path: 'accounts.bean',
+			},
+		]);
 	});
 
 	it('offers an open per unknown account, skipping names already opened', () => {
@@ -319,6 +377,13 @@ describe('PairingIndex', () => {
 });
 
 describe('OpenFileIndex', () => {
+	it('counts a CJK open line', () => {
+		const index = new OpenFileIndex();
+		index.setFileContent('accounts.bean', '2026-01-01 open Expenses:餐饮 CNY\n');
+		expect(index.bestFile()).toBe('accounts.bean');
+		expect([...index.openedIn('accounts.bean')]).toEqual(['Expenses:餐饮']);
+	});
+
 	it('picks the ledger with the most opens over a markdown note', () => {
 		const index = new OpenFileIndex();
 		index.setFileContent(

@@ -28,9 +28,9 @@ import { extractBeancountFences } from './fences';
 import { isLedgerFile } from './vault-index';
 
 /** A dated directive at column 0; the parser decides whether it is a transaction. */
-const DATED_HEADER = /^\d{4}[-/]\d{2}[-/]\d{2}[ \t]/;
+const DATED_HEADER = /^\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
 /** A header, possibly under a fence opener's 0–3 space indent: the cheap pre-check. */
-const MAYBE_HEADER = /^ {0,3}\d{4}[-/]\d{2}[-/]\d{2}[ \t]/;
+const MAYBE_HEADER = /^ {0,3}\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
 /** A line the grammar can attach to the directive above: indent, then content. */
 const ATTACHED_LINE = /^[ \t]+\S/;
 

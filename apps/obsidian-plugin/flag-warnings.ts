@@ -61,7 +61,7 @@ const refreshFlagWarnings = StateEffect.define<null>();
  * Org-mode `*` headings have no date and never match.
  */
 const TXN_FLAG_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
+	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]*(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
 
 /**
  * Flagged transaction lines in `text` whose configured level is error or

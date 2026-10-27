@@ -21,6 +21,7 @@
 import type { Plugin, TAbstractFile, TFile } from 'obsidian';
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
+import { ledgerSource } from './fences';
 
 export { MAX_SUGGESTIONS } from './completion-rank';
 
@@ -70,9 +71,8 @@ export class VaultIndex implements VaultCache {
 	private sorted: readonly string[] | null = null;
 
 	/**
-	 * The extractor takes the file's path too: token shapes that also occur
-	 * in markdown prose (tags, links, commodities) are extracted from
-	 * beancount fence bodies only, which the caller decides by extension.
+	 * The extractor receives ledger text (`registerVaultIndex` applies
+	 * `ledgerSource` once per read) and the file path.
 	 */
 	constructor(
 		private readonly extract: (content: string, path: string) => ReadonlySet<string>,
@@ -168,7 +168,8 @@ export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultCac
 			.cachedRead(file)
 			.then((content) => {
 				if (revisions.get(path) !== current) return;
-				for (const index of indexes) index.setFileContent(path, content);
+				const ledger = ledgerSource(path, content);
+				for (const index of indexes) index.setFileContent(path, ledger);
 				revisions.delete(path);
 			})
 			.catch(() => undefined);

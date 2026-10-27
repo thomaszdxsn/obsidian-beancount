@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import type { Plugin, PluginManifest } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
 import { AccountIndex, extractAccounts } from '../account-index';
+import { OpenFileIndex, PairingIndex } from '../code-actions';
 import { extractPayees } from '../payee-index';
+import { PayeeTemplateIndex } from '../payee-template';
+import { extractNarrations } from '../token-index';
 import { registerVaultIndex, VaultIndex } from '../vault-index';
 import { FakeVault, flush } from './fakes';
 
@@ -147,7 +150,7 @@ describe('registerVaultIndex', () => {
 		registerVaultIndex(plugin as unknown as Plugin, index);
 		await flush();
 
-		expect(index.values()).toEqual(['Assets:Cash', 'Expenses:Food', 'Income:Salary'].sort());
+		expect(index.values()).toEqual(['Expenses:Food', 'Income:Salary']);
 		expect([...vault.reads].sort()).toEqual(['a.md', 'b.bean', 'c.beancount']);
 	});
 
@@ -172,9 +175,9 @@ describe('registerVaultIndex', () => {
 	});
 
 	it('re-indexes a modified file', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old' });
 		await flush();
-		const file = vault.write('a.md', 'Assets:New Expenses:Food');
+		const file = vault.write('a.bean', 'Assets:New Expenses:Food');
 		await vault.emit('modify', file);
 		expect(index.values()).toEqual(['Assets:New', 'Expenses:Food']);
 	});
@@ -182,35 +185,35 @@ describe('registerVaultIndex', () => {
 	it('indexes files created after load', async () => {
 		const { vault, index } = setup();
 		await flush();
-		const file = vault.write('new.md', 'Liabilities:Card');
+		const file = vault.write('new.bean', 'Liabilities:Card');
 		await vault.emit('create', file);
 		expect(index.values()).toEqual(['Liabilities:Card']);
 	});
 
 	it('drops strings when a file is deleted', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Cash', 'b.md': 'Expenses:Food' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Cash', 'b.bean': 'Expenses:Food' });
 		await flush();
-		await vault.emit('delete', vault.delete('a.md'));
+		await vault.emit('delete', vault.delete('a.bean'));
 		expect(index.values()).toEqual(['Expenses:Food']);
 	});
 
 	it('ignores events for files outside the indexed extensions', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Cash' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Cash' });
 		await flush();
 		const file = vault.write('d.png', 'Assets:Ignored');
 		await vault.emit('modify', file);
 		expect(index.values()).toEqual(['Assets:Cash']);
-		expect(vault.reads).toEqual(['a.md']);
+		expect(vault.reads).toEqual(['a.bean']);
 	});
 
 	it('keeps cached strings on rename without re-reading', async () => {
-		const { vault, index } = setup({ 'dir/a.md': 'Assets:Cash' });
+		const { vault, index } = setup({ 'dir/a.bean': 'Assets:Cash' });
 		await flush();
-		const renamed = vault.rename('dir/a.md', 'dir/b.md');
-		await vault.emit('rename', renamed, 'dir/a.md');
+		const renamed = vault.rename('dir/a.bean', 'dir/b.bean');
+		await vault.emit('rename', renamed, 'dir/a.bean');
 		expect(index.values()).toEqual(['Assets:Cash']);
-		expect(vault.reads).toEqual(['dir/a.md']);
-		index.removeFile('dir/b.md');
+		expect(vault.reads).toEqual(['dir/a.bean']);
+		index.removeFile('dir/b.bean');
 		expect(index.values()).toEqual([]);
 	});
 
@@ -218,17 +221,17 @@ describe('registerVaultIndex', () => {
 		// The file carries an account but no payee: the payee index stays
 		// untracked, yet the path was read before, so no re-read is needed.
 		const vault = new FakeVault();
-		vault.write('a.md', 'Assets:Cash');
+		vault.write('a.bean', 'Assets:Cash');
 		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
 		const accounts = new VaultIndex(extractAccounts);
 		const payees = new VaultIndex(extractPayees);
 		registerVaultIndex(plugin as unknown as Plugin, accounts, payees);
 		await flush();
-		const renamed = vault.rename('a.md', 'b.md');
-		await vault.emit('rename', renamed, 'a.md');
+		const renamed = vault.rename('a.bean', 'b.bean');
+		await vault.emit('rename', renamed, 'a.bean');
 		expect(accounts.values()).toEqual(['Assets:Cash']);
 		expect(payees.values()).toEqual([]);
-		expect(vault.reads).toEqual(['a.md']);
+		expect(vault.reads).toEqual(['a.bean']);
 	});
 
 	it('re-keys every index on rename and drops every index on delete', async () => {
@@ -253,22 +256,22 @@ describe('registerVaultIndex', () => {
 	});
 
 	it('moves every child entry on a folder rename', async () => {
-		const { vault, index } = setup({ 'dir/a.md': 'Assets:Cash', 'other.md': 'Expenses:Food' });
+		const { vault, index } = setup({ 'dir/a.bean': 'Assets:Cash', 'other.bean': 'Expenses:Food' });
 		await flush();
 		const renamed = vault.rename('dir', 'moved');
 		await vault.emit('rename', renamed, 'dir');
 		expect(index.values()).toEqual(['Assets:Cash', 'Expenses:Food']);
-		index.removeFile('moved/a.md');
+		index.removeFile('moved/a.bean');
 		expect(index.values()).toEqual(['Expenses:Food']);
 	});
 
 	it('reads the file when a rename makes it indexable', async () => {
 		const { vault, index } = setup({ 'note.txt': 'Assets:Cash' });
 		await flush();
-		const renamed = vault.rename('note.txt', 'note.md');
+		const renamed = vault.rename('note.txt', 'note.bean');
 		await vault.emit('rename', renamed, 'note.txt');
 		expect(index.values()).toEqual(['Assets:Cash']);
-		expect(vault.reads).toEqual(['note.md']);
+		expect(vault.reads).toEqual(['note.bean']);
 	});
 
 	it('re-reads a note ↔ ledger rename, whose ledger text differs', async () => {
@@ -289,42 +292,92 @@ describe('registerVaultIndex', () => {
 		expect(accounts.match('')).toEqual(['Expenses:Food']);
 	});
 
-	it('drops the entry when a rename makes the file unindexable', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Cash' });
+	it('indexes payee, narration, template, pairing and open facts from ledger text only', async () => {
+		const prose = [
+			'2026-09-01 * "Cafe" "Lunch"',
+			'  Expenses:Food  10.00 USD',
+			'  Assets:Wallet  -10.00 USD',
+			'2026-01-01 open Assets:Prose USD',
+		].join('\n');
+		const fence = [
+			'```bean',
+			'2026-08-01 * "Cafe" "Fence meal"',
+			'  Expenses:Food  4.00 USD',
+			'  Assets:Cash  -4.00 USD',
+			'2026-01-01 open Assets:Cash USD',
+			'```',
+		].join('\n');
+		const vault = new FakeVault();
+		vault.write('note.md', `${prose}\n${fence}\n`);
+		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
+		const payees = new VaultIndex(extractPayees);
+		const narrations = new VaultIndex(extractNarrations);
+		const templates = new PayeeTemplateIndex();
+		const pairings = new PairingIndex();
+		const openFiles = new OpenFileIndex();
+		registerVaultIndex(plugin as unknown as Plugin, payees, narrations, templates, pairings, openFiles);
 		await flush();
-		const renamed = vault.rename('a.md', 'a.txt');
-		await vault.emit('rename', renamed, 'a.md');
+		expect(payees.values()).toEqual(['Cafe']);
+		expect(narrations.values()).toEqual(['Fence meal']);
+		expect(templates.get('Cafe')?.postings[0].account).toBe('Expenses:Food');
+		expect(templates.get('Cafe')?.postings.some((posting) => posting.account === 'Assets:Wallet')).toBe(false);
+		expect(pairings.all()).toEqual([
+			{ date: '2026-08-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		]);
+		expect(openFiles.bestFile()).toBe('note.md');
+		expect([...openFiles.openedIn('note.md')]).toEqual(['Assets:Cash']);
+
+		await vault.emit('rename', vault.rename('note.md', 'note.bean'), 'note.md');
+		await flush();
+		expect(narrations.values()).toEqual(['Fence meal', 'Lunch']);
+		expect(pairings.all().map((pairing) => pairing.accounts[1]).sort()).toEqual(['Assets:Cash', 'Assets:Wallet']);
+		expect([...openFiles.openedIn('note.bean')].sort()).toEqual(['Assets:Cash', 'Assets:Prose']);
+
+		await vault.emit('rename', vault.rename('note.bean', 'note.md'), 'note.bean');
+		await flush();
+		expect(narrations.values()).toEqual(['Fence meal']);
+		expect(pairings.all()).toEqual([
+			{ date: '2026-08-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		]);
+		expect([...openFiles.openedIn('note.md')]).toEqual(['Assets:Cash']);
+	});
+
+	it('drops the entry when a rename makes the file unindexable', async () => {
+		const { vault, index } = setup({ 'a.bean': 'Assets:Cash' });
+		await flush();
+		const renamed = vault.rename('a.bean', 'a.txt');
+		await vault.emit('rename', renamed, 'a.bean');
 		expect(index.values()).toEqual([]);
 	});
 
 	it('replaces a dropped in-flight read after rename', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old' });
 		await flush();
 		// A modify read is in flight when the rename arrives; the rename drops
 		// it, so a read of the new path must take over.
-		vault.delays.set('a.md', [50]);
-		const file = vault.write('a.md', 'Assets:Fresh');
+		vault.delays.set('a.bean', [50]);
+		const file = vault.write('a.bean', 'Assets:Fresh');
 		await vault.emit('modify', file);
-		const renamed = vault.rename('a.md', 'b.md');
-		await vault.emit('rename', renamed, 'a.md');
+		const renamed = vault.rename('a.bean', 'b.bean');
+		await vault.emit('rename', renamed, 'a.bean');
 		expect(index.values()).toEqual(['Assets:Fresh']);
 		await delay(100);
 		expect(index.values()).toEqual(['Assets:Fresh']);
-		index.removeFile('b.md');
+		index.removeFile('b.bean');
 		expect(index.values()).toEqual([]);
 	});
 
 	it('does not let a stale read overwrite a recreated file', async () => {
 		const vault = new FakeVault();
-		vault.delays.set('a.md', [50]);
-		vault.write('a.md', 'Assets:Stale');
+		vault.delays.set('a.bean', [50]);
+		vault.write('a.bean', 'Assets:Stale');
 		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
 		const index = new VaultIndex(extractAccounts);
 		registerVaultIndex(plugin as unknown as Plugin, index);
 		// Delete and recreate while the first read is still on disk; the path's
 		// first-life read must not clobber the recreated content.
-		await vault.emit('delete', vault.delete('a.md'));
-		const recreated = vault.write('a.md', 'Assets:Fresh');
+		await vault.emit('delete', vault.delete('a.bean'));
+		const recreated = vault.write('a.bean', 'Assets:Fresh');
 		await vault.emit('create', recreated);
 		expect(index.values()).toEqual(['Assets:Fresh']);
 		await delay(100);
@@ -333,7 +386,7 @@ describe('registerVaultIndex', () => {
 
 	it('skips prototype-named extensions in the scan', async () => {
 		const vault = new FakeVault();
-		vault.write('a.md', 'Assets:Cash');
+		vault.write('a.bean', 'Assets:Cash');
 		vault.write('trap.constructor', 'Expenses:Trap');
 		vault.write('trap.toString', 'Expenses:Trap');
 		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
@@ -341,14 +394,14 @@ describe('registerVaultIndex', () => {
 		registerVaultIndex(plugin as unknown as Plugin, index);
 		await flush();
 		expect(index.values()).toEqual(['Assets:Cash']);
-		expect(vault.reads).toEqual(['a.md']);
+		expect(vault.reads).toEqual(['a.bean']);
 	});
 
 	it('replaces dropped in-flight child reads on a folder rename', async () => {
-		const { vault, index } = setup({ 'dir/a.md': 'Assets:Old', 'other.md': 'Expenses:Food' });
+		const { vault, index } = setup({ 'dir/a.bean': 'Assets:Old', 'other.bean': 'Expenses:Food' });
 		await flush();
-		vault.delays.set('dir/a.md', [50]);
-		const file = vault.write('dir/a.md', 'Assets:Fresh');
+		vault.delays.set('dir/a.bean', [50]);
+		const file = vault.write('dir/a.bean', 'Assets:Fresh');
 		await vault.emit('modify', file);
 		const renamed = vault.rename('dir', 'moved');
 		await vault.emit('rename', renamed, 'dir');
@@ -356,71 +409,71 @@ describe('registerVaultIndex', () => {
 		// The dropped read may only land under the new path, never back under
 		// the old one.
 		expect(index.values()).toEqual(['Assets:Fresh', 'Expenses:Food']);
-		index.removeFile('moved/a.md');
+		index.removeFile('moved/a.bean');
 		expect(index.values()).toEqual(['Expenses:Food']);
 	});
 
 	it('discards an in-flight read when the rename makes the file unindexable', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old' });
 		await flush();
-		vault.delays.set('a.md', [50]);
-		const file = vault.write('a.md', 'Assets:Fresh');
+		vault.delays.set('a.bean', [50]);
+		const file = vault.write('a.bean', 'Assets:Fresh');
 		await vault.emit('modify', file);
-		const renamed = vault.rename('a.md', 'a.txt');
-		await vault.emit('rename', renamed, 'a.md');
+		const renamed = vault.rename('a.bean', 'a.txt');
+		await vault.emit('rename', renamed, 'a.bean');
 		await delay(100);
 		expect(index.values()).toEqual([]);
 	});
 
 	it('discards an in-flight read when the file is deleted', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old' });
 		await flush();
-		vault.delays.set('a.md', [50]);
-		const file = vault.write('a.md', 'Assets:Fresh');
+		vault.delays.set('a.bean', [50]);
+		const file = vault.write('a.bean', 'Assets:Fresh');
 		await vault.emit('modify', file);
-		await vault.emit('delete', vault.delete('a.md'));
+		await vault.emit('delete', vault.delete('a.bean'));
 		await delay(100);
 		expect(index.values()).toEqual([]);
 	});
 
 	it('leaves unrelated in-flight reads alone on rename', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old', 'other.md': 'Expenses:Food' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old', 'other.bean': 'Expenses:Food' });
 		await flush();
-		vault.delays.set('other.md', [20]);
-		const other = vault.write('other.md', 'Expenses:Fresh');
+		vault.delays.set('other.bean', [20]);
+		const other = vault.write('other.bean', 'Expenses:Fresh');
 		await vault.emit('modify', other);
-		const renamed = vault.rename('a.md', 'b.md');
-		await vault.emit('rename', renamed, 'a.md');
+		const renamed = vault.rename('a.bean', 'b.bean');
+		await vault.emit('rename', renamed, 'a.bean');
 		expect(index.values()).toEqual(['Assets:Old', 'Expenses:Food']);
 		await delay(60);
 		expect(index.values()).toEqual(['Assets:Old', 'Expenses:Fresh']);
 	});
 
 	it('ignores dropped children that vanished from the file listing', async () => {
-		const { vault, index } = setup({ 'dir/a.md': 'Assets:Old' });
+		const { vault, index } = setup({ 'dir/a.bean': 'Assets:Old' });
 		await flush();
-		vault.delays.set('dir/a.md', [50]);
-		const file = vault.write('dir/a.md', 'Assets:Fresh');
+		vault.delays.set('dir/a.bean', [50]);
+		const file = vault.write('dir/a.bean', 'Assets:Fresh');
 		await vault.emit('modify', file);
 		const renamed = vault.rename('dir', 'moved');
 		// The host's listing can lag the rename event: the child is gone by
 		// the time the dropped read would be replaced. Must not throw, and the
 		// re-keyed entry survives.
-		vault.files.delete('moved/a.md');
+		vault.files.delete('moved/a.bean');
 		await vault.emit('rename', renamed, 'dir');
 		await delay(100);
 		expect(index.values()).toEqual(['Assets:Old']);
 	});
 
 	it('drops stale out-of-order reads instead of applying them', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old' });
 		await flush();
 		// The first read is slow and captures `Assets:Old`; the second read
 		// lands first with `Assets:Fresh`. The stale one must not win.
-		vault.delays.set('a.md', [50, 0]);
-		const file = vault.write('a.md', 'Assets:Old');
+		vault.delays.set('a.bean', [50, 0]);
+		const file = vault.write('a.bean', 'Assets:Old');
 		await vault.emit('modify', file);
-		vault.write('a.md', 'Assets:Fresh');
+		vault.write('a.bean', 'Assets:Fresh');
 		await vault.emit('modify', file);
 		expect(index.values()).toEqual(['Assets:Fresh']);
 		await delay(100);
@@ -428,19 +481,19 @@ describe('registerVaultIndex', () => {
 	});
 
 	it('keeps the last good cache entry when a read fails', async () => {
-		const { vault, index } = setup({ 'a.md': 'Assets:Old', 'b.md': 'Expenses:Food' });
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old', 'b.bean': 'Expenses:Food' });
 		await flush();
-		vault.failures.add('a.md');
-		const file = vault.write('a.md', 'Assets:New');
+		vault.failures.add('a.bean');
+		const file = vault.write('a.bean', 'Assets:New');
 		await vault.emit('modify', file);
 		expect(index.values()).toEqual(['Assets:Old', 'Expenses:Food']);
 	});
 
 	it('skips unreadable files during the initial scan', async () => {
 		const vault = new FakeVault();
-		vault.write('a.md', 'Assets:Cash');
-		vault.write('b.md', 'Expenses:Food');
-		vault.failures.add('a.md');
+		vault.write('a.bean', 'Assets:Cash');
+		vault.write('b.bean', 'Expenses:Food');
+		vault.failures.add('a.bean');
 		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
 		const index = new VaultIndex(extractAccounts);
 		registerVaultIndex(plugin as unknown as Plugin, index);

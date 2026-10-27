@@ -9,6 +9,7 @@
  * (`PairingIndex`); the `open` lands in the vault file that already holds
  * the most `open` directives (`OpenFileIndex`).
  */
+import { ACCOUNT_SHAPE } from './account-index';
 import { blockRangeAt } from './align';
 import { clipText } from './bean-check';
 import type { LineDiagnostic } from './bean-check';
@@ -66,17 +67,19 @@ export interface QuickFixContext {
 
 const TXN_HEADER_RE =
 	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]*(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])(.*)$/;
-const HEADER_BANG_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]+(!)(?![A-Za-z0-9])/;
+const HEADER_BANG_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]*(!)(?![A-Za-z0-9])/;
 const POSTING_BANG_RE = /^([ \t]+)(!)([ \t]+)/;
-const OPEN_LINE_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+open(?![A-Za-z0-9])[ \t]+([A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+)\b/;
+const OPEN_LINE_RE = new RegExp(
+	String.raw`^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+open(?![A-Za-z0-9])[ \t]+(${ACCOUNT_SHAPE})`,
+	'u'
+);
 const UNKNOWN_ACCOUNT_RE = /Invalid reference to unknown account '([^']+)'/g;
 const UNBALANCED_RE = /Transaction does not balance:\s*\(([^)]+)\)/;
 const RESIDUAL_RE = /^([-+]?[0-9][0-9,]*(?:\.[0-9]*)?)\s+(\S+)$/;
 const PAYEE_RE = /^[ \t]*"((?:[^"\\\n]|\\.)+)"/;
 const INDENT_RE = /^[ \t]+/;
 const LEADING_FLAG_RE = /^[*!&#?%A-Z][ \t]+/;
-const ACCOUNT_RE = /^[A-Z][A-Za-z0-9\-_]*(?::[A-Za-z0-9\-_]+)+/;
+const ACCOUNT_RE = new RegExp(`^${ACCOUNT_SHAPE}`, 'u');
 const NUMBER_RE = /^[-+]?[0-9][0-9,]*(?:\.[0-9]*)?/;
 const COMMODITY_RE = /^(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")/;
 const TRAILING_FLAG_RE = /^[*!&#?%A-Z](?=\s|$)/;
