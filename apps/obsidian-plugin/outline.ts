@@ -16,8 +16,7 @@
  * transactions and directives. Other dated directives (pad, price, …) are
  * not outline items — the issue names txn/open/close/balance only.
  */
-import type { Editor } from 'obsidian';
-import { classifyLine, scanLedger } from './scan';
+import { parseHeaderLine, unescapeQuoted } from './scan';
 
 /** Dummy heading title inserted for a skipped org-mode level. */
 export const DUMMY_HEADING = '_';
@@ -102,7 +101,7 @@ export function parseBeancountOutline(text: string): OutlineNode[] {
 	const lines = text.split('\n');
 	for (let line = 0; line < lines.length; line++) {
 		const raw = lines[line];
-		if (classifyLine(raw) === 'org') {
+		if (raw.charCodeAt(0) === 0x2a) {
 			const heading = parseHeading(raw);
 			if (heading.level < 1 || !heading.name) continue;
 			attachHeading(heading.level, heading.name, line);
@@ -110,18 +109,13 @@ export function parseBeancountOutline(text: string): OutlineNode[] {
 		}
 		const head = raw.charCodeAt(0);
 		if (!(head >= 0x30 && head <= 0x39)) continue;
-		const kind = classifyLine(raw);
-		if (kind === 'txn-header') {
-			const header = scanLedger(raw).entries[0]?.header;
-			if (header === undefined) continue;
-			const payee =
-				header.payee === undefined
-					? undefined
-					: raw.slice(header.payee.from, header.payee.to).replace(/\\(.)/g, '$1');
-			const narration =
-				header.narration === undefined
-					? undefined
-					: raw.slice(header.narration.from, header.narration.to).replace(/\\(.)/g, '$1');
+		const header = parseHeaderLine(raw);
+		if (header === null) continue;
+		if (header.kind === 'txn-header') {
+			const payee = header.payee ? unescapeQuoted(raw.slice(header.payee.from, header.payee.to)) : undefined;
+			const narration = header.narration
+				? unescapeQuoted(raw.slice(header.narration.from, header.narration.to))
+				: undefined;
 			pushDated(currentSiblings(), header.date, line, {
 				kind: 'transaction',
 				title: payee && narration ? `${payee} — ${narration}` : payee || narration || header.flag || '*',
@@ -130,19 +124,16 @@ export function parseBeancountOutline(text: string): OutlineNode[] {
 			});
 			continue;
 		}
-		if (kind === 'directive') {
-			const header = scanLedger(raw).entries[0]?.header;
-			const keyword = header?.keyword;
-			if (keyword !== 'open' && keyword !== 'close' && keyword !== 'balance') continue;
-			const after = raw.search(/(?:open|close|balance)(?![A-Za-z0-9])/);
-			const token = after < 0 ? '' : raw.slice(after).split(/[ \t]+/)[1];
-			pushDated(currentSiblings(), header?.date ?? raw.slice(0, 10), line, {
-				kind: keyword,
-				title: token ? `${keyword} ${token}` : keyword,
-				line,
-				children: [],
-			});
-		}
+		const keyword = header.keyword;
+		if (keyword !== 'open' && keyword !== 'close' && keyword !== 'balance') continue;
+		const rest = header.keywordSpan ? raw.slice(header.keywordSpan.to).trim() : '';
+		const token = rest.split(/[ \t]+/)[0];
+		pushDated(currentSiblings(), header.date, line, {
+			kind: keyword,
+			title: token ? `${keyword} ${token}` : keyword,
+			line,
+			children: [],
+		});
 	}
 
 	return roots;

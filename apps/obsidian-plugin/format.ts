@@ -22,7 +22,8 @@
  */
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import type { Directive, Posting } from '@repo/beancount-parser';
-import { alignLines, endsInString } from './align';
+import { alignLines } from './align';
+import { endsInString, stepQuoteComment } from './scan';
 import { ledgerDoc, splitLines } from './fences';
 import type { LedgerRegion } from './fences';
 
@@ -394,28 +395,23 @@ function collapseHeaderLine(line: string, inStringStart: boolean): { text: strin
 	let out = '';
 	for (let i = 0; i < line.length; i += 1) {
 		const ch = line[i];
-		if (inComment) {
+		const step = stepQuoteComment(line, i, inString, inComment);
+		if (inComment || step.inComment) {
+			inComment = true;
 			out += ch;
 			continue;
 		}
 		if (inString) {
 			out += ch;
-			if (ch === '\\' && i + 1 < line.length) {
+			if (step.skip === 1) {
 				out += line[i + 1];
 				i += 1;
-				continue;
 			}
-			if (ch === '"') inString = false;
+			inString = step.inString;
 			continue;
 		}
+		inString = step.inString;
 		if (ch === '"') {
-			inString = true;
-			inWs = false;
-			out += ch;
-			continue;
-		}
-		if (ch === ';') {
-			inComment = true;
 			inWs = false;
 			out += ch;
 			continue;

@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { LineDiagnostic } from '../bean-check';
+import { AccountIndex, accountTokenAt, describeAccount } from '../account-index';
 import {
 	FLAG_OKAY_TITLE,
 	FLAGGED_MESSAGE,
@@ -382,6 +383,20 @@ describe('OpenFileIndex', () => {
 		index.setFileContent('accounts.bean', '2026-01-01 open Expenses:餐饮 CNY\n');
 		expect(index.bestFile()).toBe('accounts.bean');
 		expect([...index.openedIn('accounts.bean')]).toEqual(['Expenses:餐饮']);
+	});
+
+	it('keeps CJK opens consistent across completion, hover, and the open-file target', () => {
+		const open = '2026-01-01 open Expenses:餐饮 CNY\n';
+		const accounts = new AccountIndex();
+		accounts.setFileContent('accounts.bean', open);
+		expect(accounts.has('Expenses:餐饮')).toBe(true);
+		expect(accounts.match('餐')).toContain('Expenses:餐饮');
+		expect(describeAccount(accounts.record('Expenses:餐饮'))).toContain('CNY');
+		expect(accountTokenAt('  Expenses:餐饮  18.00 CNY', 4)?.name).toBe('Expenses:餐饮');
+		const files = new OpenFileIndex();
+		files.setFileContent('accounts.bean', open);
+		expect(files.bestFile()).toBe('accounts.bean');
+		expect([...files.openedIn('accounts.bean')]).toEqual(['Expenses:餐饮']);
 	});
 
 	it('picks the ledger with the most opens over a markdown note', () => {

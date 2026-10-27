@@ -15,7 +15,7 @@ import type { LineDiagnostic } from './bean-check';
 import type { VaultCache } from './vault-index';
 import { ledgerKindFromPath } from './fences';
 import type { LedgerRegion } from './fences';
-import { ACCOUNT_SHAPE, classifyLine, parsePostingLine, scanLedger } from './scan';
+import { ACCOUNT_SHAPE, headerPayee, parseHeaderLine, parsePostingLine } from './scan';
 
 /** Tooltip on a `!` transaction that bean-check does not itself report. */
 export const FLAGGED_MESSAGE = 'Transaction is flagged incomplete';
@@ -162,10 +162,9 @@ export function quickFixesForLine(context: QuickFixContext): QuickFix[] {
 export function flagOkayEdit(lines: readonly string[], line: number): TextEdit | null {
 	const text = lines[line];
 	if (text === undefined) return null;
-	if (classifyLine(text) === 'txn-header' && scanLedger(text).entries[0]?.header?.flag === '!') {
-		let fromCh = 10;
-		while (fromCh < text.length && (text.charCodeAt(fromCh) === 0x20 || text.charCodeAt(fromCh) === 0x09)) fromCh += 1;
-		return { line, fromCh, toCh: fromCh + 1, text: '*' };
+	const flagged = parseHeaderLine(text);
+	if (flagged?.kind === 'txn-header' && flagged.flag === '!' && flagged.flagSpan !== undefined) {
+		return { line, fromCh: flagged.flagSpan.from, toCh: flagged.flagSpan.to, text: '*' };
 	}
 	const posting = POSTING_BANG_RE.exec(text);
 	if (posting !== null && posting.index === 0) {
@@ -204,11 +203,8 @@ export function padEdit(
 	if (commodity === undefined) return null;
 	const number = residual ? negateAmount(residual.number) : negateAmount(posting.number);
 	const headerLine = lines[range.from] ?? '';
-	const payeeSpan = scanLedger(headerLine).entries[0]?.header?.payee;
-	const payee =
-		payeeSpan !== undefined && payeeSpan.from < payeeSpan.to
-			? headerLine.slice(payeeSpan.from, payeeSpan.to)
-			: undefined;
+	const padHeader = parseHeaderLine(headerLine);
+	const payee = padHeader ? headerPayee(headerLine, padHeader) : undefined;
 	const account = inferBalancingAccount(posting.account, payee, pairings);
 	if (account === null || account === posting.account) return null;
 	const insertAt = range.to;
@@ -285,12 +281,12 @@ export function extractPairings(content: string): readonly Pairing[] {
 	let line = 0;
 	while (line < lines.length) {
 		const head = lines[line].charCodeAt(0);
-		if (!(head >= 0x30 && head <= 0x39) || classifyLine(lines[line]) !== 'txn-header') {
+		const headerLine = lines[line] ?? '';
+		const header = head >= 0x30 && head <= 0x39 ? parseHeaderLine(headerLine) : null;
+		if (header === null || header.kind !== 'txn-header') {
 			line += 1;
 			continue;
 		}
-		const headerLine = lines[line] ?? '';
-		const header = scanLedger(headerLine).entries[0]?.header;
 		const range = blockRangeAt(lines, line);
 		let accounts = 0;
 		const postings: Array<{ account: string; commodity?: string }> = [];
@@ -307,13 +303,9 @@ export function extractPairings(content: string): readonly Pairing[] {
 				first.commodity !== undefined &&
 				first.commodity === second.commodity
 			) {
-				const payeeSpan = header?.payee;
 				pairings.push({
-					date: headerLine.slice(0, 10).replace(/\//g, '-'),
-					payee:
-						payeeSpan !== undefined && payeeSpan.from < payeeSpan.to
-							? headerLine.slice(payeeSpan.from, payeeSpan.to)
-							: undefined,
+					date: header.date.replace(/\//g, '-'),
+					payee: headerPayee(headerLine, header),
 					accounts: [first.account, second.account],
 				});
 			}
@@ -444,9 +436,8 @@ function entryDate(lines: readonly string[], line: number): string | undefined {
 	if (onLine !== null) return onLine[1];
 	const range = blockRangeAt(lines, line);
 	for (let i = range.from; i <= range.to; i += 1) {
-		if (classifyLine(lines[i] ?? '') === 'txn-header') {
-			return scanLedger(lines[i] ?? '').entries[0]?.header?.date;
-		}
+		const header = parseHeaderLine(lines[i] ?? '');
+		if (header?.kind === 'txn-header') return header.date;
 	}
 	return undefined;
 }

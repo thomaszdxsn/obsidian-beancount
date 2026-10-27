@@ -27,6 +27,7 @@ import { LedgerFileController } from '../ledger-file-view';
 import { includeLinksExtension } from '../include-links';
 import { instantAlignmentPlan } from '../instant-alignment';
 import { postingIndentPlan } from '../posting-indent';
+import { transactionFoldAt } from '../transaction-fold';
 import { AccountIndex } from '../account-index';
 import { VaultIndex } from '../vault-index';
 import { extractPayees } from '../payee-index';
@@ -248,6 +249,17 @@ function flagOkayWorkload(doc: Text, file: typeof ledgerFile, line: number): [()
 	return [run, check];
 }
 
+function foldWorkload(): [() => unknown, () => unknown] {
+	const headers: number[] = [];
+	const from = Math.max(1, ledgerLine - 40);
+	const to = Math.min(ledgerDoc.lines, ledgerLine + 40);
+	for (let n = from; n <= to; n += 1) {
+		if (/^\d{4}[-/]\d{2}[-/]\d{2}/.test(ledgerDoc.line(n).text)) headers.push(n);
+	}
+	const run = () => headers.map((n) => transactionFoldAt(ledgerDoc, n));
+	return [run, run];
+}
+
 const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['key_inlay', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.inlay])],
 	['key_flags', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.flags])],
@@ -260,6 +272,7 @@ const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['dot', pure(() => instantAlignmentPlan(integerOnly.toString(), [{ anchor: integerCaret, head: integerCaret }], 50))],
 	['enter', pure(() => postingIndentPlan(ledgerDoc.toString(), [{ anchor: ledgerDoc.line(ledgerLine).to, head: ledgerDoc.line(ledgerLine).to }]))],
 	['save', saveWorkload()],
+	['fold', foldWorkload()],
 ];
 
 const expectedPath = 'bench/editor-expected.json';

@@ -7,11 +7,10 @@
  */
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
-import { ACCOUNT_SHAPE } from './scan';
+import { ACCOUNT_SEGMENT_CHARS, ACCOUNT_SHAPE } from './scan';
 import { VaultIndex } from './vault-index';
 import type { VaultCache } from './vault-index';
 
-export { ACCOUNT_SHAPE };
 /**
  * A complete account name: a capitalized root segment plus one or more
  * `:segment` parts, e.g. `Assets:Cash:Wallet` or `Expenses:餐饮:午饭`.
@@ -29,18 +28,17 @@ export { ACCOUNT_SHAPE };
  * (`pre-Assets:Cash`, `见Assets:Cash`, `github.com/User:Repo`), mirroring
  * the prefix regex.
  */
-const SEGMENT_CHARS = String.raw`\p{L}\p{N}\p{M}_\-·・`;
-const SEGMENT = `[${SEGMENT_CHARS}]`;
-const ACCOUNT_RE = new RegExp(`(?<![${SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
+const SEGMENT = `[${ACCOUNT_SEGMENT_CHARS}]`;
+const ACCOUNT_RE = new RegExp(`(?<![${ACCOUNT_SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
 
 /** The same shape while typing, where the last segment may be partial. */
 export const ACCOUNT_PREFIX_RE = new RegExp(
-	`(?:^|[^${SEGMENT_CHARS}:/])([A-Z]${SEGMENT}*(?::${SEGMENT}*)*)$`,
+	`(?:^|[^${ACCOUNT_SEGMENT_CHARS}:/])([A-Z]${SEGMENT}*(?::${SEGMENT}*)*)$`,
 	'u'
 );
 
 /** A character that continues an account token: a segment character or `:`. */
-export const ACCOUNT_CHAR_RE = new RegExp(`[${SEGMENT_CHARS}:]`, 'u');
+export const ACCOUNT_CHAR_RE = new RegExp(`[${ACCOUNT_SEGMENT_CHARS}:]`, 'u');
 
 /** The complete account token covering `offset`, if any. */
 export function accountTokenAt(

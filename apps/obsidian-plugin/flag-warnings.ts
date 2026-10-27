@@ -11,7 +11,7 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS } from './diagnostics';
 import { isLedgerFile, ledgerDoc } from './fences';
-import { canonicalTxnFlag, classifyLine, scanLedger } from './scan';
+import { canonicalTxnFlag, parseHeaderLine } from './scan';
 
 /** The CSS contract between these markers and `styles.css`. */
 export const WARNING_LINE_CLASS = 'cm-beancount-warning-line';
@@ -78,10 +78,10 @@ function flagDiagnosticsOfLines(
 		const text = lines[line] ?? '';
 		const head = text.charCodeAt(0);
 		if (!(head >= 0x30 && head <= 0x39)) continue;
-		if (classifyLine(text) !== 'txn-header') continue;
-		const flagToken = scanLedger(text).entries[0]?.header?.flag;
-		if (flagToken === undefined) continue;
-		const flag = canonicalTxnFlag(flagToken);
+		const cut = text.indexOf('"');
+		const header = parseHeaderLine(cut < 0 ? text : text.slice(0, cut));
+		if (header === null || header.kind !== 'txn-header' || header.flag === undefined) continue;
+		const flag = canonicalTxnFlag(header.flag);
 		const severity = flagWarnings[flag];
 		if (severity !== 'error' && severity !== 'warning') continue;
 		diagnostics.push({

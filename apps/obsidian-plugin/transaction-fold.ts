@@ -25,7 +25,7 @@ import type { EditorState, Extension, Text } from '@codemirror/state';
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import { editorInfoField } from 'obsidian';
 import { isLedgerFile, ledgerDoc } from './fences';
-import { classifyLine, endsInString, entryAt } from './scan';
+import { classifyLine, endsInString, entryExtent } from './scan';
 
 /** Cheap reject: a line that might be a dated header, including 0–3 space fence indent. */
 const DATE_HEAD = /^ {0,3}\d{4}[-/]\d{2}[-/]\d{2}/;
@@ -103,12 +103,18 @@ export function transactionFoldAt(
 	const textOf = (n: number) => (body ? body.lines[n - body.first] : doc.line(n).text);
 	const header = textOf(lineNumber);
 	if (classifyLine(header) !== 'txn-header') return null;
-	const slice: string[] = [];
-	for (let n = lineNumber; n <= lastLine; n += 1) slice.push(textOf(n));
-	const range = entryAt(slice, 0);
-	if (range === null || range.from !== 0 || range.to === 0) return null;
-	if (range.to + 1 > MAX_ENTRY_LINES) return null;
-	const entry = slice.slice(0, range.to + 1);
+	const range = entryExtent(
+		(i) => {
+			const n = lineNumber + i;
+			if (n > lastLine) return undefined;
+			return textOf(n);
+		},
+		0,
+		MAX_ENTRY_LINES
+	);
+	if (range === null || range.to === 0) return null;
+	const entry: string[] = [];
+	for (let i = 0; i <= range.to; i += 1) entry.push(textOf(lineNumber + i));
 	let inString = false;
 	for (const text of entry) inString = endsInString(text, inString);
 	if (inString) return null;

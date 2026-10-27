@@ -8,9 +8,14 @@ import {
 	classifyLine,
 	endsInString,
 	entryAt,
+	entryExtent,
+	headerPayee,
 	inStringOrComment,
+	parseHeaderLine,
 	parsePostingLine,
 	scanLedger,
+	stripComment,
+	unescapeQuoted,
 } from '../scan';
 
 function kinds(text: string) {
@@ -56,11 +61,11 @@ describe('scanLedger', () => {
 		const found = entries(text);
 		expect(found).toHaveLength(2);
 		expect(found[0]).toMatchObject({ startLine: 0, endLine: 4, damaged: false });
-		expect(found[0].postings.map((p) => p.account?.text)).toEqual(['Expenses:Food', 'Assets:Cash']);
+		expect(found[0].postings.map((p) => p.account.text)).toEqual(['Expenses:Food', 'Assets:Cash']);
 		expect(found[1]).toMatchObject({ startLine: 7, endLine: 8, damaged: false });
 	});
 
-	it('keeps multi-line strings across blank and column-0 lines, and does not treat inner posting-shaped text as a posting', () => {
+	it('keeps multi-line strings across blank and column-0 lines, including a dated column-0 continuation', () => {
 		const text = [
 			'2026-01-05 * "x"',
 			'  memo: "first',
@@ -81,19 +86,19 @@ describe('scanLedger', () => {
 		]);
 		expect(classifyLine('last ; not a comment"', true)).toBe('string-continue');
 		expect(classifyLine('  Assets:Cash  1 USD', true)).toBe('string-continue');
+		expect(classifyLine('2026-01-06 * "next"', true)).toBe('string-continue');
 		const found = entries(text);
 		expect(found).toHaveLength(2);
 		expect(found[0]).toMatchObject({ startLine: 0, endLine: 5, damaged: false });
-		expect(found[0].postings.map((p) => p.account?.text)).toEqual(['Assets:Cash', 'Income:Job']);
-		expect(found[1]).toMatchObject({ startLine: 6, endLine: 6 });
+		expect(found[0].postings.map((p) => p.account.text)).toEqual(['Assets:Cash', 'Income:Job']);
 	});
 
-	it('marks a damaged middle entry without swallowing its neighbours', () => {
+	it('marks a damaged middle posting without swallowing neighbours', () => {
 		const text = [
 			'2026-01-01 * "Good"',
 			'  Assets:Cash  1 USD',
 			'  Income:Job',
-			'2026-01-02 * "Typing',
+			'2026-01-02 * "Bad"',
 			'  Assets:Cash  1 U$D',
 			'2026-01-03 * "Also good"',
 			'  Assets:Cash  2 USD',
@@ -145,45 +150,42 @@ describe('classifyLine', () => {
 });
 
 describe('parsePostingLine', () => {
-	it('parses a leading flag, CJK account, thousands, cost, price and an inline comment', () => {
-		const cjk = '  Expenses:餐饮  18.00 CNY';
-		const parsed = parsePostingLine(cjk);
-		expect(parsed?.account?.text).toBe('Expenses:餐饮');
-		expect(slice(cjk, parsed?.number)).toBe('18.00');
-		expect(slice(cjk, parsed?.commodity)).toBe('CNY');
-		expect(parsed?.hasCost).toBe(false);
-		expect(parsed?.hasPrice).toBe(false);
+	it.each([
+		['  Expenses:餐饮  18.00 CNY', { account: 'Expenses:餐饮', number: '18.00', commodity: 'CNY', hasCost: false, hasPrice: false }],
+		['  ! Assets:Cash  1,234.50 USD', { account: 'Assets:Cash', number: '1,234.50', flag: '!', leadingFlag: '!' }],
+		['  Expenses:Food * 12.50 USD', { account: 'Expenses:Food', flag: '*', trailingFlag: '*' }],
+		['  Assets:Broker:AAPL  10 AAPL {150.00 USD}', { account: 'Assets:Broker:AAPL', number: '10', hasCost: true, hasPrice: false }],
+		['  Expenses:餐饮:午餐  12.00 CNY @ 0.14 USD', { account: 'Expenses:餐饮:午餐', number: '12.00', hasCost: false, hasPrice: true }],
+		['  Assets:Cash  10 USD ; 99 EUR', { account: 'Assets:Cash', number: '10', commodity: 'USD' }],
+		['  Expenses:卡片・ローン  1 JPY', { account: 'Expenses:卡片・ローン' }],
+		['  Assets:Cash_ISA  1 USD', { account: 'Assets:Cash_ISA' }],
+		['  ! Assets:Cash * 10 USD', { account: 'Assets:Cash', leadingFlag: '!', trailingFlag: '*', number: '10' }],
+	])('%j', (line, expected) => {
+		const parsed = parsePostingLine(line);
+		expect(parsed).not.toBeNull();
+		if (parsed === null) return;
+		expect(parsed.account.text).toBe(expected.account);
+		if ('number' in expected && expected.number !== undefined) {
+			expect(slice(line, parsed.number)).toBe(expected.number);
+		}
+		if ('commodity' in expected && expected.commodity !== undefined) {
+			expect(slice(line, parsed.commodity)).toBe(expected.commodity);
+		}
+		if ('flag' in expected) expect(parsed.flag).toBe(expected.flag);
+		if ('leadingFlag' in expected) expect(parsed.leadingFlag).toBe(expected.leadingFlag);
+		if ('trailingFlag' in expected) expect(parsed.trailingFlag).toBe(expected.trailingFlag);
+		if ('hasCost' in expected) expect(parsed.hasCost).toBe(expected.hasCost);
+		if ('hasPrice' in expected) expect(parsed.hasPrice).toBe(expected.hasPrice);
+	});
 
-		const flagged = '  ! Assets:Cash  1,234.50 USD';
-		expect(parsePostingLine(flagged)?.flag).toBe('!');
-		expect(parsePostingLine(flagged)?.account?.text).toBe('Assets:Cash');
-		expect(slice(flagged, parsePostingLine(flagged)?.number)).toBe('1,234.50');
-
-		const trailing = '  Expenses:Food * 12.50 USD';
-		expect(parsePostingLine(trailing)?.flag).toBe('*');
-		expect(parsePostingLine(trailing)?.account?.text).toBe('Expenses:Food');
-
-		const cost = '  Assets:Broker:AAPL  10 AAPL {150.00 USD}';
-		expect(parsePostingLine(cost)).toMatchObject({ hasCost: true, hasPrice: false });
-		expect(slice(cost, parsePostingLine(cost)?.number)).toBe('10');
-
-		const price = '  Expenses:餐饮:午餐  12.00 CNY @ 0.14 USD';
-		expect(parsePostingLine(price)).toMatchObject({ hasCost: false, hasPrice: true });
-		expect(slice(price, parsePostingLine(price)?.number)).toBe('12.00');
-
-		const commented = '  Assets:Cash  10 USD ; 99 EUR';
-		expect(slice(commented, parsePostingLine(commented)?.number)).toBe('10');
-		expect(slice(commented, parsePostingLine(commented)?.commodity)).toBe('USD');
-
-		expect(parsePostingLine('  Expenses:卡片・ローン  1 JPY')?.account?.text).toBe('Expenses:卡片・ローン');
-		expect(parsePostingLine('  Assets:Cash_ISA  1 USD')?.account?.text).toBe('Assets:Cash_ISA');
+	it('rejects metadata, comments and column-0 directives', () => {
 		expect(parsePostingLine('  invoice: "9"')).toBeNull();
 		expect(parsePostingLine('  ; note')).toBeNull();
 		expect(parsePostingLine('2026-01-01 * "x"')).toBeNull();
 	});
 });
 
-describe('entryAt', () => {
+describe('entryAt / entryExtent', () => {
 	it('returns the inclusive range of the entry that holds a line', () => {
 		const lines = ['2026-01-01 * "A"', '  Assets:Cash  1 USD', '', '2026-01-02 * "B"', '  Expenses:Food  1 USD'];
 		expect(entryAt(lines, 0)).toEqual({ from: 0, to: 1 });
@@ -192,9 +194,30 @@ describe('entryAt', () => {
 		expect(entryAt(lines, 3)).toEqual({ from: 3, to: 4 });
 		expect(entryAt(lines, 4)).toEqual({ from: 3, to: 4 });
 	});
+
+	it('does not read lines after the entry ends', () => {
+		const lines = [
+			'2026-01-01 * "A"',
+			'  Assets:Cash  1 USD',
+			'',
+			'2026-01-02 * "B"',
+			'  Expenses:Food  1 USD',
+		];
+		const seen: number[] = [];
+		const range = entryExtent(
+			(i) => {
+				seen.push(i);
+				return lines[i];
+			},
+			0
+		);
+		expect(range).toEqual({ from: 0, to: 1 });
+		expect(Math.max(...seen)).toBe(2);
+		expect(seen.includes(3)).toBe(false);
+	});
 });
 
-describe('endsInString / inStringOrComment', () => {
+describe('endsInString / inStringOrComment / stripComment', () => {
 	it('does not end a string on an escaped quote; a semicolon inside a string is not a comment', () => {
 		expect(endsInString('2026-01-01 * "say \\"hi\\""', false)).toBe(false);
 		expect(endsInString('  memo: "first', false)).toBe(true);
@@ -204,6 +227,15 @@ describe('endsInString / inStringOrComment', () => {
 		expect(inStringOrComment('2026-01-01 * "say \\"hi')).toBe(true);
 		expect(inStringOrComment('2026-01-01 * "hi" ; a " in a comment')).toBe(true);
 		expect(inStringOrComment('2026-01-01 * "hi" #tr')).toBe(false);
+		expect(stripComment('  Assets:Cash  10 USD "a \\" ; b" ; 99 EUR')).toBe('  Assets:Cash  10 USD "a \\" ; b" ');
+	});
+
+	it('treats a trailing backslash as not escaping the next line', () => {
+		expect(endsInString('"foo\\', false)).toBe(true);
+		expect(inStringOrComment('"foo\\')).toBe(true);
+		expect(stripComment('"foo\\ ; bar')).toBe('"foo\\ ; bar');
+		expect(endsInString('"foo\\"', false)).toBe(true);
+		expect(inStringOrComment('"foo\\"')).toBe(true);
 	});
 });
 
@@ -216,22 +248,26 @@ describe('canonicalTxnFlag', () => {
 	});
 });
 
-describe('header fields', () => {
+describe('parseHeaderLine', () => {
 	it('keeps slash dates as written and txn as the source flag token', () => {
-		const slash = scanLedger('2026/01/02 * "Cafe" "Lunch"').entries[0];
-		expect(slash.header).toMatchObject({ date: '2026/01/02', flag: '*' });
-		expect(slice('2026/01/02 * "Cafe" "Lunch"', slash.header?.payee)).toBe('Cafe');
-		expect(slice('2026/01/02 * "Cafe" "Lunch"', slash.header?.narration)).toBe('Lunch');
+		const slashLine = '2026/01/02 * "Cafe" "Lunch"';
+		const slash = parseHeaderLine(slashLine);
+		expect(slash).toMatchObject({ kind: 'txn-header', date: '2026/01/02', flag: '*' });
+		expect(headerPayee(slashLine, slash!)).toBe('Cafe');
+		expect(slice(slashLine, slash?.narration)).toBe('Lunch');
+		expect(unescapeQuoted('Say \\"hi\\"')).toBe('Say "hi"');
 
-		const txn = scanLedger('2026-10-01txn "x"').entries[0];
-		expect(txn.header).toMatchObject({ date: '2026-10-01', flag: 'txn' });
-		expect(canonicalTxnFlag(txn.header?.flag ?? '')).toBe('*');
+		const txn = parseHeaderLine('2026-10-01txn "x"');
+		expect(txn).toMatchObject({ date: '2026-10-01', flag: 'txn' });
+		expect(canonicalTxnFlag(txn?.flag ?? '')).toBe('*');
 
-		const bang = scanLedger('2026-10-01! "x"').entries[0];
-		expect(bang.header).toMatchObject({ date: '2026-10-01', flag: '!' });
+		const bang = parseHeaderLine('2026-10-01! "x"');
+		expect(bang).toMatchObject({ date: '2026-10-01', flag: '!' });
+		expect(bang?.flagSpan).toEqual({ from: 10, to: 11 });
 
-		const open = scanLedger('2026-01-01 open Assets:Cash USD').entries[0];
-		expect(open.header).toMatchObject({ date: '2026-01-01', keyword: 'open' });
-		expect(open.header?.flag).toBeUndefined();
+		const open = parseHeaderLine('2026-01-01 open Assets:Cash USD');
+		expect(open).toMatchObject({ kind: 'directive', date: '2026-01-01', keyword: 'open' });
+		expect(open?.flag).toBeUndefined();
+		expect(slice('2026-01-01 open Assets:Cash USD', open?.keywordSpan)).toBe('open');
 	});
 });

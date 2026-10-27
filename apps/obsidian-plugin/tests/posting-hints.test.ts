@@ -268,6 +268,12 @@ describe('posting amount hints', () => {
 		).toEqual([]);
 	});
 
+	it('treats a posting with both a leading and a trailing flag as a simple amount', () => {
+		expect(
+			hints('2026-01-01 * "Both"', '  ! Assets:Cash * 10 USD', '  Expenses:Food  -10 USD')
+		).toEqual([]);
+	});
+
 	it('strips trailing comments before deciding cost or price', () => {
 		expect(
 			hints(

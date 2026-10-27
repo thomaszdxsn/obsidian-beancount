@@ -4,15 +4,17 @@
  * must be absent on a legal ledger.
  */
 import { describe, expect, it } from 'vitest';
-import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
+import {
+	Balance,
+	BeancountParser,
+	Close,
+	Open,
+	Transaction,
+} from '@repo/beancount-parser';
 import { generateLedger } from '../bench/common';
-import { ACCOUNT_SHAPE, canonicalTxnFlag, scanLedger } from '../scan';
+import { ACCOUNT_SHAPE, canonicalTxnFlag, scanLedger, unescapeQuoted } from '../scan';
 
 const ACCOUNT_FULL = new RegExp(`^${ACCOUNT_SHAPE}$`, 'u');
-
-function unescapeLiteral(text: string): string {
-	return text.includes('\\') ? text.replace(/\\(.)/g, '$1') : text;
-}
 
 function isoDate(date: Date): string {
 	const y = date.getFullYear();
@@ -22,18 +24,13 @@ function isoDate(date: Date): string {
 }
 
 function diffAgainstParser(text: string): void {
-	let parsed;
-	try {
-		parsed = BeancountParser.parse(text);
-	} catch (e) {
-		if (e instanceof BeancountSyntaxError) return;
-		throw e;
-	}
+	const parsed = BeancountParser.parse(text);
 	const scanned = scanLedger(text);
 	expect(scanned.entries.filter((entry) => entry.damaged)).toEqual([]);
+	const lines = text.split('\n');
 
 	const txns = parsed.directives.filter((d): d is Transaction => d instanceof Transaction);
-	const scannedTxns = scanned.entries.filter((entry) => entry.header !== undefined && entry.header.keyword === undefined);
+	const scannedTxns = scanned.entries.filter((entry) => entry.header?.kind === 'txn-header');
 	expect(scannedTxns).toHaveLength(txns.length);
 
 	for (let i = 0; i < txns.length; i += 1) {
@@ -44,16 +41,41 @@ function diffAgainstParser(text: string): void {
 		if (header === undefined) continue;
 		expect(header.date.replace(/\//g, '-')).toBe(isoDate(txn.date));
 		expect(canonicalTxnFlag(header.flag ?? '*')).toBe(txn.flag);
-		if (txn.payee !== null && header.payee !== undefined) {
-			const line = text.split('\n')[entry.startLine] ?? '';
-			expect(unescapeLiteral(line.slice(header.payee.from, header.payee.to))).toBe(txn.payee);
+		if (txn.location) {
+			expect(entry.startLine).toBe(txn.location.start.line - 1);
+			expect(entry.endLine).toBeGreaterThanOrEqual(txn.location.end.line - 1);
+		}
+		if (txn.payee !== null) {
+			expect(header.payee).toBeDefined();
+			const line = lines[entry.startLine] ?? '';
+			expect(unescapeQuoted(line.slice(header.payee!.from, header.payee!.to))).toBe(txn.payee);
 		}
 		const parserAccounts = txn.postings.map((p) => p.account).filter((name) => ACCOUNT_FULL.test(name));
-		const scannerAccounts = entry.postings
-			.map((p) => p.account?.text)
-			.filter((name): name is string => name !== undefined && ACCOUNT_FULL.test(name));
+		const scannerAccounts = entry.postings.map((p) => p.account.text).filter((name) => ACCOUNT_FULL.test(name));
 		expect(scannerAccounts).toEqual(parserAccounts);
+		const parserPostings = txn.postings.filter((p) => ACCOUNT_FULL.test(p.account));
+		const scannerPostings = entry.postings.filter((p) => ACCOUNT_FULL.test(p.account.text));
+		expect(scannerPostings.map((p) => p.account.text)).toEqual(parserPostings.map((p) => p.account));
+		for (let p = 0; p < parserPostings.length; p += 1) {
+			const posting = parserPostings[p];
+			const scannedPosting = scannerPostings[p];
+			expect(scannedPosting.leadingFlag ?? scannedPosting.trailingFlag).toBe(posting.flag);
+			const amount = posting.amount;
+			if (amount && 'currency' in amount && amount.currency) {
+				expect(scannedPosting.commodity).toBeDefined();
+			}
+			expect(scannedPosting.hasCost).toBe(posting.cost !== undefined);
+			expect(scannedPosting.hasPrice).toBe(posting.priceAnnotation !== undefined);
+		}
 	}
+
+	const opens = parsed.directives.filter((d): d is Open => d instanceof Open);
+	const closes = parsed.directives.filter((d): d is Close => d instanceof Close);
+	const balances = parsed.directives.filter((d): d is Balance => d instanceof Balance);
+	const scannedDirs = scanned.entries.filter((entry) => entry.header?.keyword !== undefined);
+	expect(scannedDirs.filter((e) => e.header?.keyword === 'open').length).toBe(opens.length);
+	expect(scannedDirs.filter((e) => e.header?.keyword === 'close').length).toBe(closes.length);
+	expect(scannedDirs.filter((e) => e.header?.keyword === 'balance').length).toBe(balances.length);
 }
 
 describe('scanLedger vs BeancountParser', () => {
@@ -68,6 +90,7 @@ describe('scanLedger vs BeancountParser', () => {
 			['2026-10-01! "x"', '  Expenses:Food  1.00 USD', '  Assets:Cash'].join('\n'),
 			['2026-10-01 * "Say \\"hi\\"" "n"', '  Assets:Cash  1.00 USD', '  Income:Job'].join('\n'),
 			['2026-10-01 * "x" "a ; b"', '  Assets:Cash  1.00 USD', '  Income:Job'].join('\n'),
+			['2026-01-01 close Assets:Cash', '2026-01-02 balance Assets:Cash 0 USD'].join('\n'),
 		];
 		for (const text of fragments) diffAgainstParser(text + '\n');
 	});

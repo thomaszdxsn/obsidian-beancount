@@ -19,9 +19,16 @@
  * module already refuses. Org headings, comments and metadata are not
  * postings. Automatic legs (`__automatic__`) are not inferred.
  */
-import { ACCOUNT_SHAPE, classifyLine, parsePostingLine, stripComment } from './scan';
+import {
+	ACCOUNT_SHAPE,
+	classifyLine,
+	commodityOf,
+	isPlainNumber,
+	parseHeaderLine,
+	parsePostingLine,
+	stripComment,
+} from './scan';
 
-export { stripComment };
 
 export interface BalanceHint {
 	/** Zero-based line of the `balance` directive in `lines`. */
@@ -64,43 +71,7 @@ interface Balance {
 }
 
 const MAX_SAFE = 9007199254740991;
-const NUMBER_SRC = '[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]*)?';
-const DATED_RE = /^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})[ \t]+([a-z][a-z0-9]*)(?![A-Za-z0-9])(.*)$/;
-const NUMBER_EXACT = new RegExp('^' + NUMBER_SRC + '$');
 const ACCOUNT_START = new RegExp('^' + ACCOUNT_SHAPE, 'u');
-const NUMBER_START = new RegExp('^' + NUMBER_SRC);
-const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
-
-/**
- * Dated keywords this module knows. Anything else dated is unsupported:
- * treating it as a no-op would publish a delta that pretends it added nothing.
- */
-const KNOWN_DATED: Record<string, true> = {
-	open: true,
-	close: true,
-	pad: true,
-	custom: true,
-	event: true,
-	commodity: true,
-	note: true,
-	document: true,
-	query: true,
-	price: true,
-	balance: true,
-};
-
-/** Directives that do not themselves post units. `pad` and `balance` are handled. */
-const NO_UNIT: Record<string, true> = {
-	open: true,
-	close: true,
-	custom: true,
-	event: true,
-	commodity: true,
-	note: true,
-	document: true,
-	query: true,
-	price: true,
-};
 
 interface Inventory {
 	qty: Qty;
@@ -159,22 +130,24 @@ function describeLine(line: string): LineInfo {
 	if (kind === 'blank' || kind === 'comment') return IGNORE;
 	if (kind === 'org') return CLOSE;
 	if (line.charAt(0) === ' ' || line.charAt(0) === '\t') return { kind: 'indented', posting: postingUnits(line) };
-	if (kind === 'txn-header') return { kind: 'txn', date: line.slice(0, 10).replace(/\//g, '-') };
-	const dated = DATED_RE.exec(line);
-	if (dated === null) return CLOSE;
-	const keyword = dated[4];
-	if (KNOWN_DATED[keyword] !== true) return REFUSE;
-	const date = dated[1] + '-' + dated[2] + '-' + dated[3];
-	const rest = stripComment(dated[5]).trim();
-	if (keyword === 'balance') {
-		const balance = parseBalance(rest);
-		return balance === null ? CLOSE : { kind: 'balance', date, ...balance };
+	const header = parseHeaderLine(line);
+	if (header?.kind === 'txn-header') return { kind: 'txn', date: header.date.replace(/\//g, '-') };
+	if (header?.kind === 'directive' && header.keyword !== undefined) {
+		const keyword = header.keyword;
+		const date = header.date.replace(/\//g, '-');
+		const rest = stripComment(line.slice(header.keywordSpan?.to ?? 0)).trim();
+		if (keyword === 'balance') {
+			const balance = parseBalance(rest);
+			return balance === null ? CLOSE : { kind: 'balance', date, ...balance };
+		}
+		if (keyword === 'pad') {
+			const accounts = parsePad(rest);
+			return accounts === null ? REFUSE : { kind: 'pad', date, accounts };
+		}
+		return CLOSE;
 	}
-	if (keyword === 'pad') {
-		const accounts = parsePad(rest);
-		return accounts === null ? REFUSE : { kind: 'pad', date, accounts };
-	}
-	return NO_UNIT[keyword] === true ? CLOSE : REFUSE;
+	if (kind === 'other' && line.charCodeAt(0) >= 0x30 && line.charCodeAt(0) <= 0x39) return REFUSE;
+	return CLOSE;
 }
 
 /** Plain comparison: every date here is `YYYY-MM-DD`, fixed width. */
@@ -384,11 +357,7 @@ type PostingParse =
  */
 function postingUnits(line: string): PostingParse {
 	const parsed = parsePostingLine(line);
-	if (parsed?.account === undefined) {
-		const body = stripComment(line).trim();
-		if (body === '' || META_RE.test(body)) return { kind: 'skip' };
-		return { kind: 'skip' };
-	}
+	if (parsed === null) return { kind: 'skip' };
 	if (parsed.hasCost || parsed.hasPrice || parsed.number === undefined || parsed.commodity === undefined) {
 		return { kind: 'taint', account: parsed.account.text };
 	}
@@ -416,12 +385,11 @@ function readNumber(text: string, i: number): { qty: Qty; end: number } | null {
 
 /** End index of a number token. A discarded tolerance may exceed the safe range. */
 function readNumberSpan(text: string, i: number): number | null {
-	const match = NUMBER_START.exec(text.slice(i));
-	if (match === null) return null;
-	const end = i + match[0].length;
-	const next = text.charAt(end);
+	const token = readToken(text, i);
+	if (token === null || !isPlainNumber(token.token)) return null;
+	const next = text.charAt(token.end);
 	if (next !== '' && next !== ' ' && next !== '\t' && next !== '~') return null;
-	return end;
+	return token.end;
 }
 
 function readCommodity(text: string, i: number): { id: string; display: string; end: number } | null {
@@ -443,15 +411,9 @@ function readToken(text: string, i: number): { token: string; end: number } | nu
 	return { token: text.slice(i, end), end };
 }
 
-export function commodityOf(token: string): { id: string } | null {
-	if (/^[A-Z][A-Z0-9'._-]*$/.test(token)) return { id: token };
-	if (/^"[^"\s]+"$/.test(token)) return { id: token.slice(1, -1) };
-	return null;
-}
-
 /** `null` when the token is not a plain decimal or the scaled integer overflows. */
 export function toQty(token: string): Qty | null {
-	if (!NUMBER_EXACT.test(token)) return null;
+	if (!isPlainNumber(token)) return null;
 	let sign = 1;
 	let body = token;
 	if (body.charAt(0) === '+' || body.charAt(0) === '-') {
