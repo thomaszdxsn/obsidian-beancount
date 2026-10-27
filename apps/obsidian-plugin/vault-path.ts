@@ -1,7 +1,8 @@
 /**
  * Confine a vault-relative path to the vault root. Symlink realpath that
- * leaves the vault is an escape; include-injection characters are not
- * this module's job (`isSafeIncludePath`).
+ * leaves the vault is a separate follow step — only Entry ledger includes
+ * use it. Include-injection characters are not this module's job
+ * (`isSafeIncludePath`).
  */
 import { realpathSync } from 'fs';
 import { isAbsolute, relative, resolve, sep } from 'path';
@@ -25,8 +26,8 @@ function escapesRoot(root: string, absPath: string): boolean {
 }
 
 /**
- * Resolve `vaultRel` under `root`. `root` is `/`-separated with a trailing
- * slash, as `vaultRoot` returns it.
+ * Resolve `vaultRel` under `root` without following symlinks. `root` is
+ * `/`-separated with a trailing slash, as `vaultRoot` returns it.
  */
 export function resolveInVault(
 	root: string,
@@ -34,11 +35,22 @@ export function resolveInVault(
 ): { ok: true; absPath: string } | { ok: false; reason: 'escape' } {
 	const confined = resolve(root, vaultRel);
 	if (escapesRoot(root, confined)) return { ok: false, reason: 'escape' };
+	return { ok: true, absPath: confined.replace(/\\/g, '/') };
+}
+
+/**
+ * Follow symlinks at `absPath` and reject a target outside `root`. A missing
+ * path is not an escape — return the unresolved path.
+ */
+export function realpathInVault(
+	root: string,
+	absPath: string,
+): { ok: true; absPath: string } | { ok: false; reason: 'escape' } {
 	try {
-		const real = realpathSync(confined).replace(/\\/g, '/');
+		const real = realpathSync(absPath).replace(/\\/g, '/');
 		if (escapesRoot(root, real)) return { ok: false, reason: 'escape' };
 		return { ok: true, absPath: real };
 	} catch {
-		return { ok: true, absPath: confined.replace(/\\/g, '/') };
+		return { ok: true, absPath: absPath.replace(/\\/g, '/') };
 	}
 }

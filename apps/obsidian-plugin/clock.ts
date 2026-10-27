@@ -4,13 +4,11 @@
  */
 
 export interface Clock {
-	now(): number;
 	setTimeout(fn: () => void, ms: number): number;
 	clearTimeout(id: number): void;
 }
 
 export const systemClock: Clock = {
-	now: () => Date.now(),
 	setTimeout: (fn, ms) => window.setTimeout(fn, ms),
 	clearTimeout: (id) => {
 		window.clearTimeout(id);

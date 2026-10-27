@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveInVault, vaultRoot } from '../vault-path';
+import { realpathInVault, resolveInVault, vaultRoot } from '../vault-path';
 
 describe('vaultRoot', () => {
 	it('normalizes slashes and a trailing slash when the base does not exist', () => {
@@ -36,7 +36,7 @@ describe('resolveInVault', () => {
 	});
 });
 
-describe('resolveInVault symlink escape', () => {
+describe('realpathInVault', () => {
 	let dir: string | undefined;
 
 	afterEach(() => {
@@ -44,7 +44,7 @@ describe('resolveInVault symlink escape', () => {
 		dir = undefined;
 	});
 
-	it('rejects a vault-relative name that realpath-resolves outside the vault', () => {
+	it('rejects a vault-relative symlink that leaves the vault, while resolveInVault does not', () => {
 		dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-vault-path-'));
 		const vault = join(dir, 'vault');
 		const outside = join(dir, 'outside.bean');
@@ -52,8 +52,13 @@ describe('resolveInVault symlink escape', () => {
 		writeFileSync(outside, '');
 		symlinkSync(outside, join(vault, 'escape.bean'));
 		const root = vaultRoot(vault);
-		expect(resolveInVault(root, 'escape.bean')).toEqual({ ok: false, reason: 'escape' });
-		expect(resolveInVault(root, 'missing.bean')).toEqual({
+		const confined = resolveInVault(root, 'escape.bean');
+		expect(confined).toEqual({
+			ok: true,
+			absPath: resolve(root, 'escape.bean').replace(/\\/g, '/'),
+		});
+		expect(confined.ok && realpathInVault(root, confined.absPath)).toEqual({ ok: false, reason: 'escape' });
+		expect(realpathInVault(root, resolve(root, 'missing.bean').replace(/\\/g, '/'))).toEqual({
 			ok: true,
 			absPath: resolve(root, 'missing.bean').replace(/\\/g, '/'),
 		});

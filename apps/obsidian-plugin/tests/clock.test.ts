@@ -3,7 +3,6 @@
  * Validation (and later alignment) inject this instead of window timers.
  */
 import { describe, expect, it } from 'vitest';
-import { systemClock } from '../clock';
 import { FakeClock } from './fakes';
 
 describe('FakeClock', () => {
@@ -46,13 +45,5 @@ describe('FakeClock', () => {
 		expect(clock.now()).toBe(0);
 		clock.tick(7);
 		expect(clock.now()).toBe(7);
-	});
-});
-
-describe('systemClock', () => {
-	it('exposes now and window timers', () => {
-		expect(typeof systemClock.now()).toBe('number');
-		expect(typeof systemClock.setTimeout).toBe('function');
-		expect(typeof systemClock.clearTimeout).toBe('function');
 	});
 });

@@ -5,7 +5,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Editor } from 'obsidian';
+import { editorInfoField } from 'obsidian';
 import type { LineDiagnostic } from '../bean-check';
+import { FLAGGED_MESSAGE } from '../code-actions';
 import {
 	beanDiagnostics,
 	createDiagnosticsExtension,
@@ -21,7 +23,6 @@ import {
 	flagOkayDiagnostics,
 	setBeanDiagnostics,
 	setEditorBeanDiagnostics,
-	setEditorFlagOkayDiagnostics,
 	setFlagOkayDiagnostics,
 } from '../diagnostics';
 import type {
@@ -165,18 +166,49 @@ describe('beanDiagnostics', () => {
 });
 
 describe('flagOkayDiagnostics', () => {
+	function stateFor(text: string, extension: string) {
+		return {
+			doc: {
+				toString: () => text,
+				line: (n: number) => {
+					const lines = text.split('\n');
+					return { text: lines[n - 1] ?? '', from: 0, to: 0, number: n };
+				},
+				lineAt: () => ({ number: 1, from: 0, to: 0 }),
+			},
+			field: (field: unknown) =>
+				field === editorInfoField ? { file: { extension, path: `x.${extension}` } } : undefined,
+		};
+	}
+
 	it('starts empty and is replaced wholesale by a set effect', () => {
 		const field = flagOkayDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
 		expect(field.create()).toEqual([]);
-
-		const next = [{ line: 0, message: 'Transaction is flagged incomplete' }];
+		const next = [{ line: 0, message: FLAGGED_MESSAGE }];
 		expect(field.update([], { effects: [setFlagOkayDiagnostics.of(next)] })).toBe(next);
 	});
 
 	it('ignores a bean-field effect', () => {
 		const field = flagOkayDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
-		const flags = [{ line: 0, message: 'Transaction is flagged incomplete' }];
+		const flags = [{ line: 0, message: FLAGGED_MESSAGE }];
 		expect(field.update(flags, { effects: [setBeanDiagnostics.of([{ line: 2, message: 'oops' }])] })).toBe(flags);
+	});
+
+	it('marks a ! transaction from the document and clears it when the bang is gone', () => {
+		const field = flagOkayDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const bang = stateFor('2026-10-01 ! "Cafe"\n  Assets:Cash  10.00 USD\n', 'bean');
+		const flags = field.update([], { effects: [], docChanged: true, state: bang });
+		expect(flags).toEqual([{ line: 0, message: FLAGGED_MESSAGE }]);
+		const star = stateFor('2026-10-01 * "Cafe"\n  Assets:Cash  10.00 USD\n', 'bean');
+		expect(field.update(flags, { effects: [], docChanged: true, state: star })).toEqual([]);
+	});
+
+	it('marks a bang only inside a markdown fence', () => {
+		const field = flagOkayDiagnostics as unknown as MockStateField<readonly LineDiagnostic[]>;
+		const note = stateFor('Wow!\n```beancount\n2026-10-01 ! "Cafe"\n```\n', 'md');
+		expect(field.update([], { effects: [], docChanged: true, state: note })).toEqual([
+			{ line: 2, message: FLAGGED_MESSAGE },
+		]);
 	});
 });
 
@@ -325,12 +357,5 @@ describe('setEditorBeanDiagnostics', () => {
 		expect(() => setEditorBeanDiagnostics(bare as unknown as Editor, [])).not.toThrow();
 	});
 
-	it('publishes flag diagnostics on their own effect', () => {
-		const editor = createEditor(['line']);
-		const flags = [{ line: 0, message: 'Transaction is flagged incomplete' }];
-		setEditorFlagOkayDiagnostics(editor as unknown as Editor, flags);
-		const [effect] = editor.cm.dispatched[0].effects as Array<{ value: unknown; is(spec: unknown): boolean }>;
-		expect(effect.is(setFlagOkayDiagnostics)).toBe(true);
-		expect(effect.value).toBe(flags);
-	});
+
 });

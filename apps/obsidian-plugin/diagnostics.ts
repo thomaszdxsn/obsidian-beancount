@@ -58,24 +58,57 @@ function flagsFromState(state: EditorState): readonly LineDiagnostic[] {
 	return flagDiagnosticsFromRegions(ledgerDoc('fenced', state.doc).regions);
 }
 
+function touchedLineRange(tr: Transaction): { from: number; toExclusive: number } | null {
+	const changes = tr.changes;
+	if (!changes || typeof changes.iterChangedRanges !== 'function') return null;
+	let from = Number.POSITIVE_INFINITY;
+	let toExclusive = 0;
+	changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+		const start = tr.state.doc.lineAt(fromB).number - 1;
+		const endPos = Math.max(fromB, toB - (toB > fromB ? 1 : 0));
+		const end = tr.state.doc.lineAt(endPos).number;
+		from = Math.min(from, start);
+		toExclusive = Math.max(toExclusive, end);
+	});
+	if (from === Number.POSITIVE_INFINITY) return { from: 0, toExclusive: 0 };
+	return { from, toExclusive };
+}
+
+function flagsFromTouchedLines(tr: Transaction, mapped: readonly LineDiagnostic[]): readonly LineDiagnostic[] {
+	const range = touchedLineRange(tr);
+	if (range === null) return flagsFromState(tr.state);
+	const file = tr.state.field(editorInfoField, false)?.file;
+	if (ledgerKind(file) !== 'ledger-file') return flagsFromState(tr.state);
+	const kept = mapped.filter((diagnostic) => diagnostic.line < range.from || diagnostic.line >= range.toExclusive);
+	const lines: string[] = [];
+	for (let line = range.from; line < range.toExclusive; line += 1) {
+		lines.push(tr.state.doc.line(line + 1).text);
+	}
+	const added = flagDiagnostics(lines.join('\n')).map((diagnostic) => ({
+		line: diagnostic.line + range.from,
+		message: diagnostic.message,
+	}));
+	return [...kept, ...added].sort((a, b) => a.line - b.line);
+}
+
+export function updateFlagOkayDiagnostics(
+	value: readonly LineDiagnostic[],
+	tr: Transaction,
+): readonly LineDiagnostic[] {
+	if (!tr.docChanged) return value;
+	if (!tr.changes || typeof tr.changes.iterChangedRanges !== 'function') {
+		return flagsFromState(tr.state);
+	}
+	return flagsFromTouchedLines(tr, mapDiagnostics(value, tr));
+}
+
 export const flagOkayDiagnostics = StateField.define<readonly LineDiagnostic[]>({
-	create: (state) => {
-		try {
-			return flagsFromState(state);
-		} catch {
-			return [];
-		}
-	},
+	create: (state) => (state === undefined ? [] : flagsFromState(state)),
 	update(value, tr) {
 		for (const effect of tr.effects) {
 			if (effect.is(setFlagOkayDiagnostics)) return effect.value;
 		}
-		if (!tr.docChanged) return value;
-		try {
-			return flagsFromState(tr.state);
-		} catch {
-			return mapDiagnostics(value, tr);
-		}
+		return updateFlagOkayDiagnostics(value, tr);
 	},
 });
 
@@ -228,9 +261,4 @@ function publishDiagnostics(
  */
 export function setEditorBeanDiagnostics(editor: Editor, diagnostics: readonly LineDiagnostic[]): void {
 	publishDiagnostics(editor, setBeanDiagnostics, diagnostics);
-}
-
-/** Publish Flag as okay diagnostics; tests and the document-driven field use this. */
-export function setEditorFlagOkayDiagnostics(editor: Editor, diagnostics: readonly LineDiagnostic[]): void {
-	publishDiagnostics(editor, setFlagOkayDiagnostics, diagnostics);
 }

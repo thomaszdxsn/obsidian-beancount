@@ -6,6 +6,8 @@ UI/UX fixes from the architecture review (#75).
 
 ### Changed
 
+- **Flag as okay** markers follow the document as you type: adding or
+  removing `!` updates that underline without waiting for bean-check.
 - **Align decimal points**, **Align amounts on save** and **Format ledger**
   put decimal points on the **Separator column** (default 50), like typing
   `.` and the dotted ruler, instead of the tightest column of each

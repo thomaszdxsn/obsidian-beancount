@@ -77,19 +77,19 @@ async function loadPlugin(
 	vault: FakeVault = new FakeVault(),
 	loadedData: unknown = null,
 	leaves: FakeLeaf[] = [],
-	activeEditor: FakeLeaf['view'] | null = null
+	activeEditor: FakeLeaf['view'] | null = null,
+	clock?: FakeClock,
 ): Promise<{ plugin: BeancountPlugin & RecordingPlugin; vault: FakeVault }> {
 	const plugin = new BeancountPlugin(
 		{
 			vault: vault.api,
 			workspace: { getLeavesOfType: () => leaves, activeEditor, on: () => ({}) },
 		} as unknown as App,
-		manifest
+		manifest,
 	) as BeancountPlugin & RecordingPlugin;
 	plugin.loadedData = loadedData;
+	if (clock) plugin.clock = clock;
 	await plugin.onload();
-	// Saves validate through bean-check; tests record the invocation and
-	// answer with `beanCheckResult` instead of running the real tool.
 	plugin.beanCheckRunner = async (command, args) => {
 		beanCheckRuns.push({ command, args: [...args] });
 		return beanCheckResult;
@@ -1159,8 +1159,7 @@ describe('BeancountPlugin', () => {
 	it('persists the on-save toggle and honors it', async () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
-		const { plugin } = await loadPlugin(vault);
-		plugin.clock = new FakeClock();
+		const { plugin } = await loadPlugin(vault, null, [], null, new FakeClock());
 		const tab = new BeancountSettingTab({} as App, plugin);
 		tab.display();
 		const { settings } = tab.containerEl as unknown as FakeSettingContainer;
@@ -1263,9 +1262,8 @@ describe('BeancountPlugin', () => {
 	it('runs bean-check for a saved ledger after the validation debounce', async () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
-		const { plugin } = await loadPlugin(vault);
 		const clock = new FakeClock();
-		plugin.clock = clock;
+		await loadPlugin(vault, null, [], null, clock);
 
 		await vault.emit('modify', file);
 		clock.tick(500);
@@ -1275,12 +1273,37 @@ describe('BeancountPlugin', () => {
 		expect(beanCheckRuns).toEqual([{ command: 'bean-check', args: ['/vault/ledger.bean'] }]);
 	});
 
+	it('marks every pane showing a reported file', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const first = createEditor(['2026-10-01 * "A"']);
+		const second = createEditor(['2026-10-01 * "A"']);
+		const clock = new FakeClock();
+		await loadPlugin(
+			vault,
+			null,
+			[
+				{ view: { file, editor: first } },
+				{ view: { file, editor: second } },
+			],
+			null,
+			clock,
+		);
+		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
+		await vault.emit('modify', file);
+		clock.tick(500);
+		await flush();
+		await flush();
+		expect(published(first)).toEqual([{ line: 0, message: 'oops' }]);
+		expect(published(second)).toEqual([{ line: 0, message: 'oops' }]);
+	});
+
+
 	it('clears Problems when saveSettings changes the entry ledger without running bean-check', async () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
-		const { plugin } = await loadPlugin(vault);
 		const clock = new FakeClock();
-		plugin.clock = clock;
+		const { plugin } = await loadPlugin(vault, null, [], null, clock);
 		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
 
 		await vault.emit('modify', file);

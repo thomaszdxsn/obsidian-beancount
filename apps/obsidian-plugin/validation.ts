@@ -3,6 +3,9 @@
  * rows and bean-check markers out. Callers report events; this module owns
  * run target, debounce, seq, temp ledger mapping, notices, and marker owners.
  */
+import * as fs from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { Clock } from './clock';
 import type { BeanCheckError, BeanCheckRunner, LineDiagnostic } from './bean-check';
 import {
@@ -13,7 +16,8 @@ import {
 	toLineDiagnostics,
 } from './bean-check';
 import { isLedgerFile, isSafeIncludePath, ledgerDoc } from './fences';
-import { fileMtime, ProblemStore, toProblemRows } from './problems';
+import { ProblemStore, toProblemRows } from './problems';
+import { realpathInVault } from './vault-path';
 
 /** Delay before on-save validation, so a burst of saves checks once. */
 export const VALIDATE_DEBOUNCE_MS = 500;
@@ -42,6 +46,7 @@ export type ValidationEvent =
 export interface VaultPort {
 	read(path: string): Promise<string>;
 	files(): Iterable<FileRef>;
+	byPath(path: string): FileRef | undefined;
 	resolveInVault(vaultRel: string): { ok: true; absPath: string } | { ok: false; reason: 'escape' };
 	vaultRoot(): string;
 }
@@ -49,6 +54,38 @@ export interface VaultPort {
 /** Disk only. Text and host mapping come from `ledgerDoc().tempLedger`. */
 export interface TempFilePort {
 	write(text: string): { checkPath: string; dispose(): void };
+}
+
+export function createTempFilePort(
+	io: {
+		mkdtempSync: typeof fs.mkdtempSync;
+		writeFileSync: typeof fs.writeFileSync;
+		realpathSync: typeof fs.realpathSync;
+		rmSync: typeof fs.rmSync;
+	} = fs,
+): TempFilePort {
+	return {
+		write(text: string) {
+			const dir = io.mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
+			try {
+				const temp = join(dir, 'fences.bean');
+				io.writeFileSync(temp, text);
+				return {
+					checkPath: io.realpathSync(temp),
+					dispose() {
+						io.rmSync(dir, { recursive: true, force: true });
+					},
+				};
+			} catch (error) {
+				io.rmSync(dir, { recursive: true, force: true });
+				throw error;
+			}
+		},
+	};
+}
+
+function finiteMtime(mtime: number | undefined): number | undefined {
+	return typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : undefined;
 }
 
 export interface MarkerSink {
@@ -138,6 +175,8 @@ export class LedgerValidation {
 	private readonly noticesShown = new Map<string, Set<string>>();
 	/** Host-mapped bean-check markers per target, keyed by vault path. */
 	private readonly replayByTarget = new Map<string, Map<string, LineDiagnostic[]>>();
+	private appliedEntryLedger = '';
+	private appliedBeanCheckPath = '';
 
 	constructor(
 		ports: {
@@ -158,6 +197,8 @@ export class LedgerValidation {
 		this.notifier = ports.notifier;
 		this.entryLedger = () => settings.entryLedger();
 		this.beanCheckPath = () => settings.beanCheckPath();
+		this.appliedEntryLedger = settings.entryLedger();
+		this.appliedBeanCheckPath = settings.beanCheckPath();
 	}
 
 	handle(event: ValidationEvent): void {
@@ -175,14 +216,21 @@ export class LedgerValidation {
 				this.dropValidation(event.path);
 				return;
 			case 'entryLedgerChanged':
-				this.onEntryLedgerChanged();
+				this.onEntryLedgerChanged(event.entryLedger);
 				return;
 			case 'beanCheckPathChanged':
-				this.noticesShown.clear();
+				this.onBeanCheckPathChanged();
 				return;
 			case 'unload':
 				this.onUnload();
 		}
+	}
+
+	/** Apply a new entry ledger. False when it matches the last applied value. */
+	commitEntryLedger(entryLedger: string): boolean {
+		if (entryLedger === this.appliedEntryLedger) return false;
+		this.onEntryLedgerChanged(entryLedger);
+		return true;
 	}
 
 	private onUnload(): void {
@@ -193,7 +241,9 @@ export class LedgerValidation {
 		this.pendingFile.clear();
 	}
 
-	private onEntryLedgerChanged(): void {
+	private onEntryLedgerChanged(entryLedger: string): void {
+		if (entryLedger === this.appliedEntryLedger) return;
+		this.appliedEntryLedger = entryLedger;
 		this.noticesShown.clear();
 		this.problems.clear();
 		this.lastValidatedMtime.clear();
@@ -207,6 +257,13 @@ export class LedgerValidation {
 		}
 	}
 
+	private onBeanCheckPathChanged(): void {
+		const path = this.beanCheckPath();
+		if (path === this.appliedBeanCheckPath) return;
+		this.appliedBeanCheckPath = path;
+		this.noticesShown.clear();
+	}
+
 	private onOpened(file: FileRef, text: string): void {
 		if (!this.validateLive) return;
 		const entryLedger = this.entryLedger().trim();
@@ -218,7 +275,7 @@ export class LedgerValidation {
 			extension: file.extension,
 			text,
 			entryLedger,
-			targetMtime: fileMtime(targetFile ? { stat: { mtime: targetFile.mtime } } : undefined),
+			targetMtime: finiteMtime(targetFile?.mtime),
 			lastValidatedMtime: this.lastValidatedMtime.get(target),
 		};
 		const recheck = this.validateTimers.has(target) || this.validateInFlight.has(target);
@@ -309,7 +366,18 @@ export class LedgerValidation {
 			}
 
 			let includePath: string | undefined;
-			if (markdown && entry) includePath = resolved.absPath;
+			if (markdown && entry) {
+				const followed = realpathInVault(root, resolved.absPath);
+				if (!followed.ok) {
+					this.recordRunFailure(
+						target,
+						`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`,
+						`entry ledger must be a vault file, not "${clipText(entry)}"`,
+					);
+					return;
+				}
+				includePath = followed.absPath;
+			}
 
 			let checkPath = resolved.absPath;
 			let cleanup: (() => void) | undefined;
@@ -378,7 +446,7 @@ export class LedgerValidation {
 		};
 		this.problems.replace(target, toProblemRows(errors, vaultPathFor));
 		const targetFile = filesByPath.get(target);
-		const mtime = fileMtime(targetFile ? { stat: { mtime: targetFile.mtime } } : undefined);
+		const mtime = finiteMtime(targetFile?.mtime);
 		if (mtime === undefined) this.lastValidatedMtime.delete(target);
 		else this.lastValidatedMtime.set(target, mtime);
 
@@ -433,9 +501,6 @@ export class LedgerValidation {
 	}
 
 	private fileByPath(path: string): FileRef | undefined {
-		for (const entry of this.vault.files()) {
-			if (entry.path === path) return entry;
-		}
-		return undefined;
+		return this.vault.byPath(path);
 	}
 }

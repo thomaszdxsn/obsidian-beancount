@@ -32,9 +32,12 @@ import { VaultIndex } from '../vault-index';
 import { extractPayees } from '../payee-index';
 import { extractCommodities, extractLinks, extractNarrations, extractTags } from '../token-index';
 import { ledgerDoc as ledgerOf, ledgerKind } from '../fences';
-import { OpenFileIndex, PairingIndex } from '../code-actions';
+import { OpenFileIndex, PairingIndex, flagDiagnostics } from '../code-actions';
 import { PayeeTemplateIndex } from '../payee-template';
 import type { App } from 'obsidian';
+import { editorInfoField } from 'obsidian';
+import { updateFlagOkayDiagnostics } from '../diagnostics';
+import type { LineDiagnostic } from '../bean-check';
 
 interface Plugin {
 	decorations: unknown;
@@ -211,9 +214,42 @@ function saveWorkload(): [() => unknown, () => unknown] {
 	return [run, run];
 }
 
+function flagOkayWorkload(): [() => unknown, () => unknown] {
+	const file = ledgerFile;
+	const stateOf = (doc: Text) => ({
+		doc,
+		field: (f: unknown) => (f === editorInfoField ? { file } : undefined),
+	});
+	const [insert, undo] = keystroke(ledgerDoc, ledgerLine);
+	let flags: readonly LineDiagnostic[] = flagDiagnostics(ledger);
+	const run = () => {
+		const typed = insert.apply(ledgerDoc);
+		flags = updateFlagOkayDiagnostics(flags, {
+			effects: [],
+			docChanged: true,
+			changes: insert,
+			startState: stateOf(ledgerDoc),
+			state: stateOf(typed),
+		} as never);
+		flags = updateFlagOkayDiagnostics(flags, {
+			effects: [],
+			docChanged: true,
+			changes: undo,
+			startState: stateOf(typed),
+			state: stateOf(ledgerDoc),
+		} as never);
+	};
+	const check = () => {
+		run();
+		return { count: flags.length, line: ledgerLine };
+	};
+	return [run, check];
+}
+
 const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['key_inlay', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.inlay])],
 	['key_flags', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.flags])],
+	['key_flag_okay', flagOkayWorkload()],
 	['key_highlight', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.highlight])],
 	['key_include', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.include])],
 	['scroll', scrollWorkload()],

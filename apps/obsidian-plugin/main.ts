@@ -1,10 +1,8 @@
 import { Menu, Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, TAbstractFile, TFile } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
-import { tmpdir } from 'os';
-import { isAbsolute, join, relative, resolve, sep } from 'path';
+import { isAbsolute, relative, resolve, sep } from 'path';
 import {
 	alignFencedDocument,
 	alignmentRanges,
@@ -69,8 +67,8 @@ import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings
 import type { Clock } from './clock';
 import { systemClock } from './clock';
 import { resolveInVault, vaultRoot } from './vault-path';
-import { LedgerValidation } from './validation';
-import type { FileRef, MarkerSink, TempFilePort, VaultPort } from './validation';
+import { createTempFilePort, LedgerValidation } from './validation';
+import type { FileRef, MarkerSink, VaultPort } from './validation';
 
 /**
  * Obsidian highlights fenced code blocks through its bundled CodeMirror 5
@@ -335,11 +333,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	settings: BeancountSettings = { ...DEFAULT_SETTINGS };
 	/** How `bean-check` is started; tests swap in their own runner. */
 	beanCheckRunner: BeanCheckRunner = runBeanCheck;
-	/** Timer seam; tests swap FakeClock after onload. */
+	/** Timer seam; tests set this before `onload`. */
 	clock: Clock = systemClock;
 	private validation!: LedgerValidation;
-	private appliedEntryLedger = '';
-	private appliedBeanCheckPath = '';
 	private readonly pairings = new PairingIndex();
 	private readonly openFiles = new OpenFileIndex();
 	/** Pending on-save alignment per file path. */
@@ -386,18 +382,12 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			stored = null;
 		}
 		this.settings = mergeSettings(stored);
-		this.appliedEntryLedger = this.settings.entryLedger;
-		this.appliedBeanCheckPath = this.settings.beanCheckPath;
 		this.validation = new LedgerValidation(
 			{
-				clock: {
-					now: () => this.clock.now(),
-					setTimeout: (fn, ms) => this.clock.setTimeout(fn, ms),
-					clearTimeout: (id) => this.clock.clearTimeout(id),
-				},
+				clock: this.clock,
 				runner: (...args) => this.beanCheckRunner(...args),
 				vault: this.vaultPort(),
-				tempFile: this.tempFilePort(),
+				tempFile: createTempFilePort(),
 				markers: this.markerSink(),
 				notifier: { show: (text) => new Notice(text) },
 			},
@@ -580,23 +570,13 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 
 	onunload() {}
 	async saveSettings(): Promise<void> {
-		const entryLedger = this.settings.entryLedger;
-		const entryChanged = entryLedger !== this.appliedEntryLedger;
-		const beanCheckPath = this.settings.beanCheckPath;
-		const beanCheckChanged = beanCheckPath !== this.appliedBeanCheckPath;
 		await this.writePluginData();
-		if (beanCheckChanged) {
-			this.appliedBeanCheckPath = beanCheckPath;
-			this.validation.handle({ kind: 'beanCheckPathChanged' });
-		}
-		if (entryChanged) {
-			this.appliedEntryLedger = entryLedger;
-			this.validation.handle({ kind: 'entryLedgerChanged', entryLedger });
-			await this.refreshBalanceViews();
-		}
+		this.validation.handle({ kind: 'beanCheckPathChanged' });
+		const entryChanged = this.validation.commitEntryLedger(this.settings.entryLedger);
 		this.balanceInlays.refresh();
 		this.flagWarnings.refresh();
 		this.ledgerFile.refresh();
+		if (entryChanged) await this.refreshBalanceViews();
 	}
 
 	private async refreshBalanceViews(): Promise<void> {
@@ -885,6 +865,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				return this.app.vault.read(located);
 			},
 			files: () => this.app.vault.getFiles().map((entry) => fileRef(entry)),
+			byPath: (path) => {
+				const located = this.app.vault.getAbstractFileByPath(path);
+				return isVaultFile(located) ? fileRef(located) : undefined;
+			},
 			resolveInVault: (vaultRel) => resolveInVault(this.vaultRootPath(), vaultRel),
 			vaultRoot: () => this.vaultRootPath(),
 		};
@@ -892,22 +876,6 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 
 	private vaultRootPath(): string {
 		return vaultRoot((this.app.vault.adapter as FileSystemAdapter).getBasePath());
-	}
-
-	private tempFilePort(): TempFilePort {
-		return {
-			write(text) {
-				const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
-				const temp = join(dir, 'fences.bean');
-				writeFileSync(temp, text);
-				return {
-					checkPath: realpathSync(temp),
-					dispose() {
-						rmSync(dir, { recursive: true, force: true });
-					},
-				};
-			},
-		};
 	}
 
 	private markerSink(): MarkerSink {
