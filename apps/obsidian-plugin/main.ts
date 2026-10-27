@@ -5,7 +5,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
-import { alignFencedDocument, alignText, blockRangeAt, computeAlignment } from './align';
+import { alignFencedDocument, alignmentRanges, alignText, blockRangeAt, computeAlignment, intersectRange } from './align';
 import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
@@ -243,35 +243,18 @@ function alignmentTarget(separatorColumn: number): number {
 	return Math.max(0, separatorColumn - 1);
 }
 
-/** Host line span of a fence body, clipped to the buffer. */
-function fenceBodyRange(fence: BeancountFence, lineCount: number): LineRange | null {
-	if (fence.lines.length === 0) return null;
-	const from = fence.startLine;
-	const to = Math.min(lineCount - 1, from + fence.lines.length - 1);
-	if (from < 0 || from > to) return null;
-	return { from, to };
-}
-
-function intersectRange(a: LineRange, b: LineRange): LineRange | null {
-	const from = Math.max(a.from, b.from);
-	const to = Math.min(a.to, b.to);
-	return from <= to ? { from, to } : null;
-}
-
 /**
  * What the command aligns: the selected lines when there is a selection,
- * otherwise the transaction block the cursor sits in. `fences` non-null
- * means the buffer is not a ledger file: only fence-body lines, and a
- * block never crosses a fence.
+ * otherwise the transaction block the cursor sits in. A non-ledger buffer
+ * only contributes fence-body ranges, and a block never crosses a fence.
  */
-function commandScope(editor: Editor, lines: readonly string[], fences: readonly BeancountFence[] | null): LineRange[] {
+function commandScope(editor: Editor, lines: readonly string[], ledger: boolean): LineRange[] {
+	const bodies = alignmentRanges(lines, ledger);
 	if (!editor.somethingSelected()) {
 		const line = editor.getCursor().line;
 		const block = blockRangeAt(lines, line);
-		if (fences === null) return [block];
-		for (const fence of fences) {
-			const body = fenceBodyRange(fence, lines.length);
-			if (body === null || line < body.from || line > body.to) continue;
+		for (const body of bodies) {
+			if (line < body.from || line > body.to) continue;
 			const clipped = intersectRange(block, body);
 			return clipped === null ? [] : [clipped];
 		}
@@ -289,11 +272,8 @@ function commandScope(editor: Editor, lines: readonly string[], fences: readonly
 		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
 	}
 	const selected = { from, to };
-	if (fences === null) return [selected];
 	const scopes: LineRange[] = [];
-	for (const fence of fences) {
-		const body = fenceBodyRange(fence, lines.length);
-		if (body === null) continue;
+	for (const body of bodies) {
 		const clipped = intersectRange(selected, body);
 		if (clipped !== null) scopes.push(clipped);
 	}
@@ -346,12 +326,7 @@ function alignCommand(
 	separatorColumn: number
 ): void {
 	const lines = editorLines(editor);
-	const ledger = file !== null && isLedgerFile(file);
-	const scopes = commandScope(
-		editor,
-		lines,
-		ledger ? null : extractBeancountFences(editor.getValue())
-	);
+	const scopes = commandScope(editor, lines, file !== null && isLedgerFile(file));
 	if (scopes.length === 0) return;
 	alignInEditor(editor, scopes, alignmentTarget(separatorColumn));
 }
@@ -362,15 +337,7 @@ function alignOpenEditor(
 	file: { path: string; extension: string },
 	targetColumn: number
 ): void {
-	if (isLedgerFile(file)) {
-		alignInEditor(editor, undefined, targetColumn);
-		return;
-	}
-	const scopes: LineRange[] = [];
-	for (const fence of extractBeancountFences(editor.getValue())) {
-		const range = fenceBodyRange(fence, editor.lineCount());
-		if (range !== null) scopes.push(range);
-	}
+	const scopes = alignmentRanges(editorLines(editor), isLedgerFile(file));
 	if (scopes.length === 0) return;
 	alignInEditor(editor, scopes, targetColumn);
 }

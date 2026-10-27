@@ -3,7 +3,17 @@
  * column is computed, and that the rewrite is idempotent and surgical.
  */
 import { describe, expect, it } from 'vitest';
-import { alignFencedDocument, alignLines, alignText, blockRangeAt, computeAlignment, displayWidth, isAmountDotInsert } from '../align';
+import {
+	alignFencedDocument,
+	alignmentRanges,
+	alignLines,
+	alignText,
+	blockRangeAt,
+	computeAlignment,
+	displayWidth,
+	intersectRange,
+	isAmountDotInsert,
+} from '../align';
 
 /** Align a document given as lines; return the document as lines. */
 function align(lines: string[]): string[] {
@@ -359,6 +369,26 @@ describe('alignFencedDocument', () => {
 		expect(alignFencedDocument('intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n')).toBe(
 			'intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n'
 		);
+	});
+});
+
+describe('alignmentRanges', () => {
+	it('covers a ledger buffer, and only non-empty fence bodies in a note', () => {
+		const ledger = ['2026-10-01 * "A"', '  Assets:Cash -1 USD'];
+		expect(alignmentRanges(ledger, true)).toEqual([{ from: 0, to: 1 }]);
+		expect(alignmentRanges([], true)).toEqual([]);
+		const note = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'```beancount',
+			'```',
+			'  Assets:Cash -12.5 USD',
+		];
+		expect(alignmentRanges(note, false)).toEqual([{ from: 2, to: 2 }]);
+		expect(intersectRange({ from: 0, to: 6 }, { from: 2, to: 2 })).toEqual({ from: 2, to: 2 });
+		expect(intersectRange({ from: 0, to: 1 }, { from: 2, to: 2 })).toBeNull();
 	});
 });
 

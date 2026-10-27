@@ -355,22 +355,40 @@ export function alignText(text: string, targetColumn?: number): string {
 }
 
 /**
+ * Line ranges alignment may rewrite: the whole buffer of a ledger file, or
+ * each non-empty ```beancount / ```bean fence body, clipped to `lines`.
+ */
+export function alignmentRanges(lines: readonly string[], ledger: boolean): LineRange[] {
+	if (ledger) return lines.length === 0 ? [] : [{ from: 0, to: lines.length - 1 }];
+	const ranges: LineRange[] = [];
+	for (const fence of extractBeancountFences(lines.join('\n'))) {
+		if (fence.lines.length === 0) continue;
+		const from = fence.startLine;
+		const to = Math.min(lines.length - 1, from + fence.lines.length - 1);
+		if (from >= 0 && from <= to) ranges.push({ from, to });
+	}
+	return ranges;
+}
+
+export function intersectRange(a: LineRange, b: LineRange): LineRange | null {
+	const from = Math.max(a.from, b.from);
+	const to = Math.min(a.to, b.to);
+	return from <= to ? { from, to } : null;
+}
+
+/**
  * Align each ```beancount / ```bean fence body on the host lines. Prose and
  * fence markers stay as written. A note with no ledger fence is unchanged,
  * so a save must not rewrite it. Indented openers keep the indent they
  * still carry on the host line.
  */
 export function alignFencedDocument(text: string, targetColumn?: number): string {
-	const fences = extractBeancountFences(text);
-	if (fences.length === 0) return text;
 	const lines = text.split('\n');
+	const ranges = alignmentRanges(lines, false);
+	if (ranges.length === 0) return text;
 	let changed = false;
-	for (const fence of fences) {
-		if (fence.lines.length === 0) continue;
-		const from = fence.startLine;
-		const to = Math.min(lines.length - 1, from + fence.lines.length - 1);
-		if (from > to) continue;
-		if (applyAlignment(lines, { from, to }, targetColumn)) changed = true;
+	for (const range of ranges) {
+		if (applyAlignment(lines, range, targetColumn)) changed = true;
 	}
 	return changed ? lines.join('\n') : text;
 }
