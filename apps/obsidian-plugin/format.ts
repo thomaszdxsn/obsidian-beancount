@@ -24,6 +24,7 @@ import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beanco
 import type { Directive, Posting } from '@repo/beancount-parser';
 import { alignLines } from './align';
 import { endsInString, stepQuoteComment } from './scan';
+import type { QuoteCommentState } from './scan';
 import { ledgerDoc, splitLines } from './fences';
 import type { LedgerRegion } from './fences';
 
@@ -389,31 +390,23 @@ function collapseHeaderLine(line: string, inStringStart: boolean): { text: strin
 	) {
 		return { text: line, inString: endsInString(line, inStringStart) };
 	}
-	let inString = inStringStart;
-	let inComment = false;
+	const st: QuoteCommentState = { inString: inStringStart, inComment: false };
 	let inWs = false;
 	let out = '';
 	for (let i = 0; i < line.length; i += 1) {
 		const ch = line[i];
-		const step = stepQuoteComment(line, i, inString, inComment);
-		if (inComment || step.inComment) {
-			inComment = true;
+		const skip = stepQuoteComment(line, i, st);
+		if (st.inComment) {
 			out += ch;
 			continue;
 		}
-		if (inString) {
+		if (st.inString || ch === '"') {
+			inWs = false;
 			out += ch;
-			if (step.skip === 1) {
+			if (skip === 1) {
 				out += line[i + 1];
 				i += 1;
 			}
-			inString = step.inString;
-			continue;
-		}
-		inString = step.inString;
-		if (ch === '"') {
-			inWs = false;
-			out += ch;
 			continue;
 		}
 		if (ch === ' ' || ch === '\t') {
@@ -426,6 +419,6 @@ function collapseHeaderLine(line: string, inStringStart: boolean): { text: strin
 		inWs = false;
 		out += ch;
 	}
-	return { text: inString ? out : stripTrailing(out), inString };
+	return { text: st.inString ? out : stripTrailing(out), inString: st.inString };
 }
 

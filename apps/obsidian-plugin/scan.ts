@@ -16,16 +16,9 @@ const NAME_END = String.raw`(?<=[\p{L}\p{N}\p{M}_])`;
  */
 export const ACCOUNT_SHAPE = String.raw`[A-Z]${SEGMENT}*(?::${SEGMENT}+)+${NAME_END}`;
 
-const ACCOUNT_ASCII_EXACT = /^[A-Z][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)+$/;
 const ACCOUNT_UNI_EXACT = new RegExp(`^${ACCOUNT_SHAPE}$`, 'u');
 const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
-const NUMBER_BODY = '[-+]?[0-9][0-9,]*(?:\\.[0-9]*)?';
-const NUMBER_RE = new RegExp(NUMBER_BODY + '(?=\\s|$|[{@;])', 'y');
-const NUMBER_EXACT = new RegExp('^' + NUMBER_BODY + '$');
-const COMMODITY_BODY = String.raw`(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")`;
-const COMMODITY_RE = new RegExp(COMMODITY_BODY + '(?=\\s|$)', 'y');
-const COMMODITY_EXACT = new RegExp('^' + COMMODITY_BODY + '$');
-const ANNOTATION_STARTS: Record<string, true> = { '{': true, '@': true, ';': true };
+const COMMODITY_EXACT = /^(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")$/;
 
 const DATED_KEYWORDS: Record<string, true> = {
 	open: true,
@@ -103,9 +96,7 @@ function skipBlank(line: string, at: number): number {
 	return at;
 }
 
-function isSpace(c: number): boolean {
-	if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) return true;
-	if (c < 0xa0) return false;
+function isRareSpace(c: number): boolean {
 	return (
 		c === 0xa0 ||
 		c === 0x1680 ||
@@ -119,8 +110,22 @@ function isSpace(c: number): boolean {
 	);
 }
 
+function isSpace(c: number): boolean {
+	if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) return true;
+	return c >= 0xa0 && isRareSpace(c);
+}
+
 function skipSpace(line: string, at: number): number {
-	while (at < line.length && isSpace(line.charCodeAt(at))) at += 1;
+	const n = line.length;
+	while (at < n) {
+		const c = line.charCodeAt(at);
+		if (c === 0x20 || c === 0x09) {
+			at += 1;
+			continue;
+		}
+		if (c < 0xa0 || !isRareSpace(c)) return at;
+		at += 1;
+	}
 	return at;
 }
 
@@ -156,45 +161,56 @@ function isKeywordChar(c: number): boolean {
 }
 
 /**
- * One step of the quote / `;` comment machine. A trailing `\` inside a
- * string does not escape the next line (`skip` is 0 at end of line).
+ * One step of the quote / `;` comment machine. Mutates `state`. A trailing
+ * `\` inside a string does not escape the next line (returned skip is 0).
+ * Returns extra characters consumed (1 for an escape pair).
  */
-export function stepQuoteComment(
-	line: string,
-	i: number,
-	inString: boolean,
-	inComment: boolean
-): { inString: boolean; inComment: boolean; skip: number } {
-	if (inComment) return { inString: false, inComment: true, skip: 0 };
-	const ch = line[i];
-	if (inString) {
-		if (ch === '\\' && i + 1 < line.length) return { inString: true, inComment: false, skip: 1 };
-		if (ch === '"') return { inString: false, inComment: false, skip: 0 };
-		return { inString: true, inComment: false, skip: 0 };
-	}
-	if (ch === '"') return { inString: true, inComment: false, skip: 0 };
-	if (ch === ';') return { inString: false, inComment: true, skip: 0 };
-	return { inString: false, inComment: false, skip: 0 };
+export interface QuoteCommentState {
+	inString: boolean;
+	inComment: boolean;
 }
 
+export function stepQuoteComment(line: string, i: number, state: QuoteCommentState): number {
+	if (state.inComment) return 0;
+	const ch = line.charCodeAt(i);
+	if (state.inString) {
+		if (ch === 0x5c && i + 1 < line.length) return 1;
+		if (ch === 0x22) state.inString = false;
+		return 0;
+	}
+	if (ch === 0x22) {
+		state.inString = true;
+		return 0;
+	}
+	if (ch === 0x3b) {
+		state.inComment = true;
+		return 0;
+	}
+	return 0;
+}
+
+const quoteState: QuoteCommentState = { inString: false, inComment: false };
+
 function scanQuoteComment(line: string, inStringStart: boolean): { inString: boolean; commentAt: number } {
-	if (!inStringStart && !line.includes('"') && !line.includes(';')) {
+	if (!inStringStart && line.indexOf('"') < 0 && line.indexOf(';') < 0) {
 		return { inString: false, commentAt: -1 };
 	}
-	let inString = inStringStart;
-	let inComment = false;
+	quoteState.inString = inStringStart;
+	quoteState.inComment = false;
 	for (let i = 0; i < line.length; i += 1) {
-		const step = stepQuoteComment(line, i, inString, inComment);
-		if (!inComment && step.inComment) return { inString: false, commentAt: i };
-		inString = step.inString;
-		inComment = step.inComment;
-		i += step.skip;
+		const wasComment = quoteState.inComment;
+		i += stepQuoteComment(line, i, quoteState);
+		if (!wasComment && quoteState.inComment) return { inString: false, commentAt: i };
 	}
-	return { inString, commentAt: -1 };
+	return { inString: quoteState.inString, commentAt: -1 };
 }
 
 export function endsInString(line: string, inStringStart: boolean): boolean {
-	return scanQuoteComment(line, inStringStart).inString;
+	if (!inStringStart && line.indexOf('"') < 0) return false;
+	quoteState.inString = inStringStart;
+	quoteState.inComment = false;
+	for (let i = 0; i < line.length; i += 1) i += stepQuoteComment(line, i, quoteState);
+	return quoteState.inString;
 }
 
 export function inStringOrComment(prefix: string): boolean {
@@ -219,7 +235,7 @@ export function headerPayee(line: string, header: ScannedHeader): string | undef
 }
 
 export function isPlainNumber(token: string): boolean {
-	return NUMBER_EXACT.test(token);
+	return /^(?:[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?)$/.test(token);
 }
 
 export function commodityOf(token: string): { id: string } | null {
@@ -233,10 +249,12 @@ function quotedSpan(line: string, from: number): { span: LineSpan; end: number }
 	if (line.charCodeAt(start) !== 0x22) return null;
 	let i = start + 1;
 	const innerFrom = i;
+	quoteState.inString = true;
+	quoteState.inComment = false;
 	while (i < line.length) {
-		const step = stepQuoteComment(line, i, true, false);
-		if (!step.inString) return { span: { from: innerFrom, to: i }, end: i + 1 };
-		i += 1 + step.skip;
+		const skip = stepQuoteComment(line, i, quoteState);
+		if (!quoteState.inString) return { span: { from: innerFrom, to: i }, end: i + 1 };
+		i += 1 + skip;
 	}
 	return null;
 }
@@ -249,6 +267,41 @@ function txnHeader(line: string, date: string, flag: string, flagFrom: number, r
 	if (second === null) return { kind: 'txn-header', date, flag, flagSpan, payee: first.span };
 	return { kind: 'txn-header', date, flag, flagSpan, payee: first.span, narration: second.span };
 }
+
+/** Flag token of a txn-header, or undefined. Skips payee/narration. */
+export function parseTxnFlag(line: string): string | undefined {
+	if (line.length < 10) return undefined;
+	const y0 = line.charCodeAt(0);
+	if (y0 < 0x30 || y0 > 0x39) return undefined;
+	const sep = line.charCodeAt(4);
+	if (sep !== 0x2d && sep !== 0x2f) return undefined;
+	if (
+		line.charCodeAt(1) < 0x30 ||
+		line.charCodeAt(1) > 0x39 ||
+		line.charCodeAt(2) < 0x30 ||
+		line.charCodeAt(2) > 0x39 ||
+		line.charCodeAt(3) < 0x30 ||
+		line.charCodeAt(3) > 0x39 ||
+		line.charCodeAt(5) < 0x30 ||
+		line.charCodeAt(5) > 0x39 ||
+		line.charCodeAt(6) < 0x30 ||
+		line.charCodeAt(6) > 0x39 ||
+		line.charCodeAt(7) !== sep ||
+		line.charCodeAt(8) < 0x30 ||
+		line.charCodeAt(8) > 0x39 ||
+		line.charCodeAt(9) < 0x30 ||
+		line.charCodeAt(9) > 0x39
+	) {
+		return undefined;
+	}
+	const afterDate = skipBlank(line, 10);
+	if (afterDate >= line.length) return undefined;
+	if (line.startsWith('txn', afterDate) && !isIdentContinue(line.charCodeAt(afterDate + 3))) return 'txn';
+	const flagCode = line.charCodeAt(afterDate);
+	if (isFlagChar(flagCode) && !isIdentContinue(line.charCodeAt(afterDate + 1))) return line.charAt(afterDate);
+	return undefined;
+}
+
 
 /** Parse a column-0 dated header. Does not scan the rest of the file. */
 export function parseHeaderLine(line: string): ScannedHeader | null {
@@ -314,34 +367,191 @@ function postingBroken(line: string, parsed: ScannedPosting): boolean {
 	return second !== '*' && second[0] !== '{' && second[0] !== '@' && commodityOf(second) === null;
 }
 
+function isAsciiAccountChar(c: number): boolean {
+	return (
+		(c >= 0x41 && c <= 0x5a) ||
+		(c >= 0x61 && c <= 0x7a) ||
+		(c >= 0x30 && c <= 0x39) ||
+		c === 0x5f ||
+		c === 0x2d
+	);
+}
+
+function isNameEndAscii(c: number): boolean {
+	return (
+		(c >= 0x41 && c <= 0x5a) ||
+		(c >= 0x61 && c <= 0x7a) ||
+		(c >= 0x30 && c <= 0x39) ||
+		c === 0x5f
+	);
+}
+
+function accountEndAt(text: string, at: number): number {
+	const n = text.length;
+	if (at >= n) return -1;
+	const c0 = text.charCodeAt(at);
+	if (c0 < 0x41 || c0 > 0x5a) return -1;
+	let i = at + 1;
+	let colons = 0;
+	let segLen = 1;
+	while (i < n) {
+		const c = text.charCodeAt(i);
+		if (c === 0x3a) {
+			if (segLen === 0) return -1;
+			colons += 1;
+			segLen = 0;
+			i += 1;
+			continue;
+		}
+		if (isAsciiAccountChar(c)) {
+			segLen += 1;
+			i += 1;
+			continue;
+		}
+		if (c > 0x7f) {
+			if (isSpace(c)) break;
+			let end = i + 1;
+			while (end < n && !isSpace(text.charCodeAt(end)) && text.charCodeAt(end) !== 0x3b) end += 1;
+			return ACCOUNT_UNI_EXACT.test(text.slice(at, end)) ? end : -1;
+		}
+		break;
+	}
+	if (colons === 0 || segLen === 0 || !isNameEndAscii(text.charCodeAt(i - 1))) return -1;
+	return i;
+}
+
+function numberEndAt(text: string, at: number): number {
+	const n = text.length;
+	let i = at;
+	const sign = text.charCodeAt(i);
+	if (sign === 0x2b || sign === 0x2d) i += 1;
+	if (i >= n) return -1;
+	const d0 = text.charCodeAt(i);
+	if (d0 < 0x30 || d0 > 0x39) return -1;
+	i += 1;
+	while (i < n) {
+		const c = text.charCodeAt(i);
+		if ((c >= 0x30 && c <= 0x39) || c === 0x2c) {
+			i += 1;
+			continue;
+		}
+		break;
+	}
+	if (i < n && text.charCodeAt(i) === 0x2e) {
+		i += 1;
+		while (i < n) {
+			const c = text.charCodeAt(i);
+			if (c < 0x30 || c > 0x39) break;
+			i += 1;
+		}
+	}
+	if (i < n) {
+		const next = text.charCodeAt(i);
+		if (next !== 0x20 && next !== 0x09 && next !== 0x7b && next !== 0x40 && next !== 0x3b && !isSpace(next)) return -1;
+	}
+	return i;
+}
+
+function commodityEndAt(text: string, at: number): number {
+	const n = text.length;
+	if (at >= n) return -1;
+	if (text.charCodeAt(at) === 0x22) {
+		let i = at + 1;
+		while (i < n) {
+			const c = text.charCodeAt(i);
+			if (c === 0x20 || c === 0x09) return -1;
+			if (c === 0x22) {
+				i += 1;
+				if (i >= n || isSpace(text.charCodeAt(i))) return i;
+				return -1;
+			}
+			i += 1;
+		}
+		return -1;
+	}
+	if (text.charCodeAt(at) < 0x41 || text.charCodeAt(at) > 0x5a) return -1;
+	let i = at + 1;
+	let last = text.charCodeAt(at);
+	while (i < n) {
+		const c = text.charCodeAt(i);
+		if (
+			(c >= 0x41 && c <= 0x5a) ||
+			(c >= 0x30 && c <= 0x39) ||
+			c === 0x27 ||
+			c === 0x2d ||
+			c === 0x2e ||
+			c === 0x5f
+		) {
+			if (i - at > 23) return -1;
+			last = c;
+			i += 1;
+			continue;
+		}
+		break;
+	}
+	if (i - at < 2) return -1;
+	if (!((last >= 0x41 && last <= 0x5a) || (last >= 0x30 && last <= 0x39))) return -1;
+	if (i < n && !isSpace(text.charCodeAt(i))) return -1;
+	return i;
+}
+
+
 function amountTailOk(line: string, at: number): boolean {
 	const next = skipSpace(line, at);
 	if (next >= line.length) return true;
-	if (ANNOTATION_STARTS[line[next]] === true) return true;
-	COMMODITY_RE.lastIndex = next;
-	return COMMODITY_RE.test(line);
+	const c = line.charCodeAt(next);
+	if (c === 0x7b || c === 0x40 || c === 0x3b) return true;
+	return commodityEndAt(line, next) >= 0;
 }
 
 function annotationsFrom(line: string, from: number): { hasCost: boolean; hasPrice: boolean } {
 	if (line.indexOf('{', from) < 0 && line.indexOf('@', from) < 0) return { hasCost: false, hasPrice: false };
-	
 	let hasCost = false;
 	let hasPrice = false;
-	let inString = false;
-	let inComment = false;
+	quoteState.inString = false;
+	quoteState.inComment = false;
 	for (let i = from; i < line.length; i += 1) {
-		const step = stepQuoteComment(line, i, inString, inComment);
-		if (step.inComment) break;
-		if (!step.inString) {
-			const ch = line[i];
-			if (ch === '{') hasCost = true;
-			else if (ch === '@') hasPrice = true;
+		i += stepQuoteComment(line, i, quoteState);
+		if (quoteState.inComment) break;
+		if (!quoteState.inString) {
+			const ch = line.charCodeAt(i);
+			if (ch === 0x7b) hasCost = true;
+			else if (ch === 0x40) hasPrice = true;
 		}
-		inString = step.inString;
-		inComment = step.inComment;
-		i += step.skip;
 	}
 	return { hasCost, hasPrice };
+}
+
+const amountCols = { gapStart: 0, numberFrom: 0, numberTo: 0 };
+
+/**
+ * Gap and units-amount columns of an indented posting. Reuses one object;
+ * copy the fields before the next call. Same rules as `parsePostingLine`.
+ */
+export function postingAmountCols(line: string): { gapStart: number; numberFrom: number; numberTo: number } | null {
+	if (line.length > 0 && line.charCodeAt(line.length - 1) === 0x0d) line = line.slice(0, -1);
+	let at = skipBlank(line, 0);
+	if (at === 0 || line.charCodeAt(at) === 0x3b) return null;
+	if (isFlagChar(line.charCodeAt(at))) {
+		const afterFlag = skipBlank(line, at + 1);
+		if (afterFlag > at + 1) at = afterFlag;
+	}
+	const accountTo = accountEndAt(line, at);
+	if (accountTo < 0) return null;
+	let cursor = accountTo;
+	const flagAt = skipSpace(line, cursor);
+	if (flagAt > cursor && isFlagChar(line.charCodeAt(flagAt))) {
+		const next = flagAt + 1;
+		if (next >= line.length || isSpace(line.charCodeAt(next))) cursor = next;
+	}
+	const gapEnd = skipSpace(line, cursor);
+	if (gapEnd === cursor || line.charCodeAt(gapEnd) === 0x3b) return null;
+	const numTo = numberEndAt(line, gapEnd);
+	if (numTo < 0 || !amountTailOk(line, numTo)) return null;
+	amountCols.gapStart = cursor;
+	amountCols.numberFrom = gapEnd;
+	amountCols.numberTo = numTo;
+	return amountCols;
 }
 
 
@@ -350,63 +560,48 @@ function annotationsFrom(line: string, from: number): { hasCost: boolean; hasPri
  * flag, optional units amount and commodity, plus cost/price markers.
  */
 export function parsePostingLine(line: string): ScannedPosting | null {
-	const text = stripCR(line);
-	let at = skipBlank(text, 0);
-	if (at === 0) return null;
-	if (text.charCodeAt(at) === 0x3b) return null;
-
+	if (line.length > 0 && line.charCodeAt(line.length - 1) === 0x0d) line = line.slice(0, -1);
+	let at = skipBlank(line, 0);
+	if (at === 0 || line.charCodeAt(at) === 0x3b) return null;
 	let leadingFlag: string | undefined;
-	if (isFlagChar(text.charCodeAt(at))) {
-		const afterFlag = skipBlank(text, at + 1);
+	if (isFlagChar(line.charCodeAt(at))) {
+		const afterFlag = skipBlank(line, at + 1);
 		if (afterFlag > at + 1) {
-			leadingFlag = text.charAt(at);
+			leadingFlag = line.charAt(at);
 			at = afterFlag;
 		}
 	}
-
-	let accountEnd = at;
-	while (accountEnd < text.length && !isSpace(text.charCodeAt(accountEnd)) && text.charCodeAt(accountEnd) !== 0x3b) {
-		accountEnd += 1;
-	}
-	if (accountEnd === at) return null;
-	const token = text.slice(at, accountEnd);
-	if (!ACCOUNT_ASCII_EXACT.test(token) && !ACCOUNT_UNI_EXACT.test(token)) {
-		return null;
-	}
-	const account = { text: token, span: { from: at, to: accountEnd } };
-
-	let cursor = accountEnd;
+	const accountTo = accountEndAt(line, at);
+	if (accountTo < 0) return null;
+	const account = { text: line.slice(at, accountTo), span: { from: at, to: accountTo } };
+	let cursor = accountTo;
 	let trailingFlag: string | undefined;
-	const flagAt = skipSpace(text, cursor);
-	if (
-		flagAt > cursor &&
-		isFlagChar(text.charCodeAt(flagAt)) &&
-		(flagAt + 1 >= text.length || isSpace(text.charCodeAt(flagAt + 1)))
-	) {
-		trailingFlag = text.charAt(flagAt);
-		cursor = flagAt + 1;
+	const flagAt = skipSpace(line, cursor);
+	if (flagAt > cursor && isFlagChar(line.charCodeAt(flagAt))) {
+		const next = flagAt + 1;
+		if (next >= line.length || isSpace(line.charCodeAt(next))) {
+			trailingFlag = line.charAt(flagAt);
+			cursor = next;
+		}
 	}
 	const gapStart = cursor;
 	const flag = leadingFlag ?? trailingFlag;
-
-	const gapEnd = skipSpace(text, cursor);
-	if (gapEnd === cursor || text.charCodeAt(gapEnd) === 0x3b) {
-		return { account, flag, leadingFlag, trailingFlag, gapStart, ...annotationsFrom(text, cursor) };
+	const gapEnd = skipSpace(line, cursor);
+	if (gapEnd === cursor || line.charCodeAt(gapEnd) === 0x3b) {
+		return { account, flag, leadingFlag, trailingFlag, gapStart, hasCost: false, hasPrice: false };
 	}
-
-	NUMBER_RE.lastIndex = gapEnd;
-	if (!NUMBER_RE.test(text) || !amountTailOk(text, NUMBER_RE.lastIndex)) {
-		return { account, flag, leadingFlag, trailingFlag, gapStart, ...annotationsFrom(text, cursor) };
+	const numTo = numberEndAt(line, gapEnd);
+	if (numTo < 0 || !amountTailOk(line, numTo)) {
+		return { account, flag, leadingFlag, trailingFlag, gapStart, ...annotationsFrom(line, cursor) };
 	}
-	const number: LineSpan = { from: gapEnd, to: NUMBER_RE.lastIndex };
-	let afterNumber = NUMBER_RE.lastIndex;
+	const commodityAt = skipSpace(line, numTo);
 	let commodity: LineSpan | undefined;
-	if (amountTailOk(text, afterNumber)) {
-		const commodityAt = skipSpace(text, afterNumber);
-		COMMODITY_RE.lastIndex = commodityAt;
-		if (commodityAt < text.length && COMMODITY_RE.test(text)) {
-			commodity = { from: commodityAt, to: COMMODITY_RE.lastIndex };
-			afterNumber = COMMODITY_RE.lastIndex;
+	let after = numTo;
+	if (commodityAt < line.length) {
+		const cEnd = commodityEndAt(line, commodityAt);
+		if (cEnd >= 0) {
+			commodity = { from: commodityAt, to: cEnd };
+			after = cEnd;
 		}
 	}
 	return {
@@ -415,9 +610,9 @@ export function parsePostingLine(line: string): ScannedPosting | null {
 		leadingFlag,
 		trailingFlag,
 		gapStart,
-		number,
+		number: { from: gapEnd, to: numTo },
 		commodity,
-		...annotationsFrom(text, afterNumber),
+		...annotationsFrom(line, after),
 	};
 }
 

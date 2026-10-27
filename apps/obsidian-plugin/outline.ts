@@ -16,6 +16,7 @@
  * transactions and directives. Other dated directives (pad, price, …) are
  * not outline items — the issue names txn/open/close/balance only.
  */
+import type { Editor } from 'obsidian';
 import { parseHeaderLine, unescapeQuoted } from './scan';
 
 /** Dummy heading title inserted for a skipped org-mode level. */

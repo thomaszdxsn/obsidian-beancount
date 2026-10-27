@@ -37,7 +37,7 @@
  */
 
 import { ledgerDoc } from './fences';
-import { endsInString, parsePostingLine } from './scan';
+import { endsInString, postingAmountCols } from './scan';
 
 /** Minimum whitespace between the account (and its flag) and the amount. */
 const MIN_GAP = 1;
@@ -99,22 +99,23 @@ interface Posting {
 }
 
 function alignmentPosting(line: string): Posting | null {
-	const parsed = parsePostingLine(line);
-	if (parsed === null || parsed.number === undefined) return null;
-	if (parsed.commodity === undefined) {
-		const rest = line.slice(parsed.number.to).trimStart();
-		if (rest !== '' && rest[0] !== '{' && rest[0] !== '@' && rest[0] !== ';') return null;
-	}
-	const gapStart = parsed.gapStart;
-	const gapEnd = parsed.number.from;
+	const cols = postingAmountCols(line);
+	if (cols === null) return null;
+	const gapStart = cols.gapStart;
+	const gapEnd = cols.numberFrom;
 	if (gapEnd === gapStart) return null;
-	const number = line.slice(parsed.number.from, parsed.number.to);
-	const dot = number.indexOf('.');
+	let beforeDot = cols.numberTo - cols.numberFrom;
+	for (let i = cols.numberFrom; i < cols.numberTo; i += 1) {
+		if (line.charCodeAt(i) === 0x2e) {
+			beforeDot = i - cols.numberFrom;
+			break;
+		}
+	}
 	return {
 		gapStart,
 		gapEnd,
 		prefixWidth: displayWidth(line.slice(0, gapStart)),
-		beforeDot: dot === -1 ? number.length : dot,
+		beforeDot,
 		line: 0,
 		block: -1,
 	};
