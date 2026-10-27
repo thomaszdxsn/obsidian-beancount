@@ -69,11 +69,22 @@ export interface MockDispatchSpec {
 /** The whole `EditorView` surface the posting-indent binding touches. */
 export interface MockView {
 	state: {
-		doc: { toString(): string };
+		doc: { toString(): string; lineAt(pos: number): { number: number } };
 		selection: { ranges: MockCaret[] };
+		field(spec?: unknown, required?: boolean): { file?: { path: string; extension: string } } | undefined;
 	};
 	dispatched: MockDispatchSpec[];
 	dispatch(spec: MockDispatchSpec): void;
+}
+
+/** 1-based line of `pos`, matching CodeMirror `Text.lineAt` (a newline ends its line). */
+function lineAt(text: string, pos: number): { number: number } {
+	let number = 1;
+	const end = Math.min(Math.max(0, pos), text.length);
+	for (let i = 0; i < end; i += 1) {
+		if (text.charCodeAt(i) === 0x0a) number += 1;
+	}
+	return { number };
 }
 
 /** A view over `text` with one caret/selection per given range. */
@@ -81,13 +92,17 @@ export function createView(text: string, carets: Array<{ anchor: number; head?: 
 	const dispatched: MockDispatchSpec[] = [];
 	return {
 		state: {
-			doc: { toString: () => text },
+			doc: {
+				toString: () => text,
+				lineAt: (pos: number) => lineAt(text, pos),
+			},
 			selection: {
 				ranges: carets.map((range) => ({
 					anchor: range.anchor,
 					head: range.head === undefined ? range.anchor : range.head,
 				})),
 			},
+			field: () => undefined,
 		},
 		dispatched,
 		dispatch(spec: MockDispatchSpec): void {

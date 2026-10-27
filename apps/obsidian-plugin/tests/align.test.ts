@@ -9,6 +9,7 @@ import {
 	alignLines,
 	alignText,
 	blockRangeAt,
+	blockRangeInLedger,
 	computeAlignment,
 	displayWidth,
 	intersectRange,
@@ -542,6 +543,19 @@ describe('blockRangeAt', () => {
 		expect(blockRangeAt([], 0)).toEqual({ from: 0, to: 0 });
 	});
 
+});
+
+describe('blockRangeInLedger', () => {
+	it('matches blockRangeAt when every line is ledger text', () => {
+		const lines = ['2026-10-01 * "A"', '  Assets:Cash 1.00 USD', '  Expenses:Food 2.00 USD'];
+		expect(blockRangeInLedger(lines, 2, undefined)).toEqual(blockRangeAt(lines, 2));
+		expect(blockRangeInLedger(lines, 2, () => true)).toEqual(blockRangeAt(lines, 2));
+	});
+
+	it('does not look past a fence-shaped gap in the ledger-line filter', () => {
+		const lines = ['2026-10-14 open questions', '   ```beancount', '  Assets:Cash', '```'];
+		expect(blockRangeInLedger(lines, 2, (i) => i === 2)).toEqual({ from: 2, to: 2 });
+	});
 });
 
 describe('displayWidth', () => {

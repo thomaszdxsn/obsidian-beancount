@@ -280,6 +280,26 @@ export function blockRangeAt(lines: readonly string[], line: number): LineRange 
 }
 
 /**
+ * `blockRangeAt` clipped to the contiguous run of ledger lines around
+ * `line`, so a header above a fence opener cannot pull a fence body into
+ * its entry and an entry that started outside cannot claim fence lines.
+ * Without `ledgerLine`, the range is the same as `blockRangeAt`.
+ */
+export function blockRangeInLedger(
+	lines: readonly string[],
+	line: number,
+	ledgerLine: ((lineIndex: number) => boolean) | undefined
+): LineRange {
+	if (ledgerLine === undefined) return blockRangeAt(lines, line);
+	let lo = line;
+	while (lo > 0 && ledgerLine(lo - 1)) lo -= 1;
+	let hi = line;
+	while (hi + 1 < lines.length && ledgerLine(hi + 1)) hi += 1;
+	const local = blockRangeAt(lines.slice(lo, hi + 1), line - lo);
+	return { from: lo + local.from, to: lo + local.to };
+}
+
+/**
  * Gap rewrites that align the decimal points of the posting amounts in
  * `lines` — one column per transaction block, or per block inside `range`
  * when given (a selection). `targetColumn` is a floor on that column: the

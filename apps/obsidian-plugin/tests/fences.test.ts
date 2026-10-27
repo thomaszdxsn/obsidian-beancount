@@ -8,13 +8,11 @@ import type * as CMState from '@codemirror/state';
 import {
 	buildFenceLedger,
 	docFences,
-	docLineIndex,
 	editorLineIsLedger,
 	extractBeancountFences,
 	isLedgerTextLine,
 	isSafeIncludePath,
 	ledgerSource,
-	stateLineIsLedger,
 } from '../fences';
 
 const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
@@ -226,7 +224,7 @@ describe('docFences', () => {
 		expect(docFences(open).fences).not.toBe(none.fences);
 	});
 
-	it('answers whether a line is ledger text for a file, editor, or editor state', () => {
+	it('answers whether a line is ledger text for a file or editor', () => {
 		const fences = extractBeancountFences('# n\n```bean\n  Assets:Cash\n```\nprose');
 		expect(isLedgerTextLine({ extension: 'bean' }, 0, [])).toBe(true);
 		expect(isLedgerTextLine({ extension: 'md' }, 0, fences)).toBe(false);
@@ -236,15 +234,6 @@ describe('docFences', () => {
 		expect(editorLineIsLedger(editor, 2, { extension: 'md' })).toBe(true);
 		expect(editorLineIsLedger(editor, 0, { extension: 'md' })).toBe(false);
 		expect(editorLineIsLedger(editor, 0, { extension: 'bean' })).toBe(true);
-		const text = '# n\n```bean\nopen\n```';
-		const state = {
-			doc: { toString: () => text },
-			field: () => ({ file: { extension: 'md' } }),
-		};
-		expect(stateLineIsLedger(state, 2)).toBe(true);
-		expect(stateLineIsLedger(state, 0)).toBe(false);
-		expect(docLineIndex({ toString: () => 'ab\ncd' }, 3)).toBe(1);
-		expect(docLineIndex({ toString: () => 'ab\ncd', lineAt: () => ({ number: 2 }) }, 3)).toBe(1);
 	});
 
 	it('strips the opener indent in the masked body, not only in extractBeancountFences', () => {
