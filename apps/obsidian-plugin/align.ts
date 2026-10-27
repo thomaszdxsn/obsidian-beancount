@@ -368,6 +368,15 @@ export function isAmountDotInsert(line: string, ch: number): boolean {
 	return posting !== null && posting.gapEnd + posting.beforeDot === ch;
 }
 
+/**
+ * The 0-based decimal column `computeAlignment` aligns to for the 1-based
+ * `separatorColumn` setting. Every alignment entry point (typing `.`, the
+ * command, align on save, Format ledger) uses it; 1 gives the tightest layout.
+ */
+export function alignmentTarget(separatorColumn: number): number {
+	return Math.max(0, separatorColumn - 1);
+}
+
 /** `computeAlignment` applied to a whole document's text. */
 export function alignText(text: string, targetColumn?: number): string {
 	const lines = text.split('\n');

@@ -10,8 +10,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS } from './diagnostics';
-import { docFences } from './fences';
-import { isLedgerFile } from './vault-index';
+import { docFences, isLedgerFile } from './fences';
 
 /** The CSS contract between these markers and `styles.css`. */
 export const WARNING_LINE_CLASS = 'cm-beancount-warning-line';

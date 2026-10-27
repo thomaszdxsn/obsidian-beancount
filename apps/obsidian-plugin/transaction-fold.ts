@@ -24,10 +24,9 @@ import { foldService } from '@codemirror/language';
 import type { EditorState, Extension, Text } from '@codemirror/state';
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import { editorInfoField } from 'obsidian';
-import { extractBeancountFences } from './fences';
-import { isLedgerFile } from './vault-index';
+import { extractBeancountFences, isLedgerFile } from './fences';
 
-/** A dated directive at column 0; the parser decides whether it is a transaction. */
+/** A transaction header at column 0: a date, then `txn` or a flag, space optional as in the grammar. */
 const DATED_HEADER = /^\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
 /** A header, possibly under a fence opener's 0–3 space indent: the cheap pre-check. */
 const MAYBE_HEADER = /^ {0,3}\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;

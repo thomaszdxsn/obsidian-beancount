@@ -1,9 +1,13 @@
 /**
- * Markdown `beancount`/`bean` fenced code blocks are the notes' ledger.
+ * Where a buffer's ledger text is. A `.bean` / `.beancount` file is ledger
+ * text throughout; any other buffer (a markdown note, another extension, or
+ * no file) only inside its `beancount`/`bean` fenced code blocks.
+ *
  * bean-check cannot parse markdown, so the plugin copies each fence body into
  * a temporary `.bean` file, then maps the tool's 1-based temp lines back onto
  * the host document so markers land on the fence, not the temp file.
  */
+import type { TFile } from 'obsidian';
 
 /** One fenced ledger in a markdown document. */
 export interface BeancountFence {
@@ -158,20 +162,18 @@ export function ledgerSource(path: string, content: string): string {
 		.join('\n');
 }
 
-/**
- * File identity the ledger-text rule needs: a `.bean` / `.beancount`
- * extension means the whole buffer is ledger; anything else (a markdown
- * note, another extension, or no file) is ledger only inside fence bodies.
- * Kept here so `fences` does not import `vault-index` (that module already
- * imports this one).
- */
-export interface LedgerFileRef {
-	extension: string;
-}
+/** File extensions bean-check parses: the ledger files validation checks. */
+const LEDGER_EXTENSIONS: Record<string, true> = { beancount: true, bean: true };
 
-/** Same extensions `isLedgerFile` accepts. */
-function isLedgerExtension(file: LedgerFileRef | null | undefined): boolean {
-	return file?.extension === 'bean' || file?.extension === 'beancount';
+/**
+ * Whether a vault entry is one of the ledger files `bean-check` parses —
+ * ledger text throughout, and the only files whose saves are worth
+ * validating. A folder has no `extension`.
+ */
+export function isLedgerFile(file: { extension?: string }): file is TFile {
+	// `=== true`, not truthiness: inherited keys such as `constructor` or
+	// `toString` resolve to functions on the prototype chain.
+	return typeof file.extension === 'string' && LEDGER_EXTENSIONS[file.extension] === true;
 }
 
 function fenceContainsLine(fences: readonly BeancountFence[], lineIndex: number): boolean {
@@ -187,11 +189,11 @@ function fenceContainsLine(fences: readonly BeancountFence[], lineIndex: number)
  * other buffer is ledger only on `beancount`/`bean` fence body lines.
  */
 export function isLedgerTextLine(
-	file: LedgerFileRef | null | undefined,
+	file: { extension?: string } | null | undefined,
 	lineIndex: number,
 	fences: readonly BeancountFence[]
 ): boolean {
-	if (isLedgerExtension(file)) return true;
+	if (file && isLedgerFile(file)) return true;
 	return fenceContainsLine(fences, lineIndex);
 }
 
@@ -203,9 +205,9 @@ export function isLedgerTextLine(
 export function editorLineIsLedger(
 	editor: { getValue(): string },
 	lineIndex: number,
-	file: LedgerFileRef | null | undefined
+	file: { extension?: string } | null | undefined
 ): boolean {
-	if (isLedgerExtension(file)) return true;
+	if (file && isLedgerFile(file)) return true;
 	return fenceContainsLine(extractBeancountFences(editor.getValue()), lineIndex);
 }
 

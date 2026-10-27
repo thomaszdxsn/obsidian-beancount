@@ -5,7 +5,15 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
-import { alignFencedDocument, alignmentRanges, alignText, blockRangeAt, computeAlignment, intersectRange } from './align';
+import {
+	alignFencedDocument,
+	alignmentRanges,
+	alignmentTarget,
+	alignText,
+	blockRangeAt,
+	computeAlignment,
+	intersectRange,
+} from './align';
 import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
@@ -52,7 +60,7 @@ import {
 import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
+import { buildFenceLedger, extractBeancountFences, isLedgerFile, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
@@ -71,7 +79,7 @@ import { BeancountProblemsView, revealProblemsView, VIEW_TYPE_PROBLEMS } from '.
 import { BeancountBalancesView, revealBalancesView, VIEW_TYPE_BALANCES } from './report-view';
 import { fileMtime, openValidationTarget, ProblemStore, toProblemRows } from './problems';
 import { instantAlignmentExtension } from './instant-alignment';
-import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
 import { CompletionUsage } from './completion-rank';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 
@@ -239,11 +247,6 @@ function editorLines(editor: Editor): string[] {
 	const lines: string[] = [];
 	for (let line = 0; line < editor.lineCount(); line += 1) lines.push(editor.getLine(line));
 	return lines;
-}
-
-/** 0-based floor for `computeAlignment`; `separatorColumn` 1 is today's tight layout. */
-function alignmentTarget(separatorColumn: number): number {
-	return Math.max(0, separatorColumn - 1);
 }
 
 /**
@@ -954,7 +957,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!file || !this.validateLive) return;
 		// `isLedgerFile` is a type predicate to `TFile`. Called on `file` it
 		// would narrow the false branch to `never`, so the check uses a copy.
-		const ledger = isLedgerFile({ path: file.path, extension: file.extension });
+		const ledger = isLedgerFile({ extension: file.extension });
 		if (!ledger && file.extension !== 'md') return;
 		const editor = ledger ? null : openEditorFor(this.app, file);
 		if (ledger || editor) {

@@ -15,8 +15,7 @@
  * a failure line for the target until a later run reports.
  */
 import type { BeanCheckError } from './bean-check';
-import { extractBeancountFences } from './fences';
-import { isLedgerFile } from './vault-index';
+import { extractBeancountFences, isLedgerFile } from './fences';
 
 /** One bean-check complaint, ready to render. `line` is 1-based, as printed. */
 export interface ProblemRow {

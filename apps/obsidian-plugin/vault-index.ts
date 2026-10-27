@@ -30,9 +30,6 @@ const MAX_VALUE_LENGTH = 256;
 /** File extensions whose text is read: scanned for names, rewritten on align. */
 export const TEXT_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
 
-/** File extensions bean-check parses: the ledger files validation checks. */
-export const LEDGER_EXTENSIONS: Record<string, true> = { beancount: true, bean: true };
-
 /** The shape `isTextFile` needs: a folder has no `extension`. */
 interface VaultEntry {
 	path: string;
@@ -47,14 +44,6 @@ export function isTextFile(file: VaultEntry): file is TFile {
 	// `=== true`, not truthiness: inherited keys such as `constructor` or
 	// `toString` resolve to functions on the prototype chain.
 	return typeof file.extension === 'string' && TEXT_EXTENSIONS[file.extension] === true;
-}
-
-/**
- * Whether a vault entry is one of the ledger files `bean-check` parses — the
- * only files whose saves are worth validating.
- */
-export function isLedgerFile(file: VaultEntry): file is TFile {
-	return typeof file.extension === 'string' && LEDGER_EXTENSIONS[file.extension] === true;
 }
 
 /** Per-file cache `registerVaultIndex` keeps in sync with vault events. */

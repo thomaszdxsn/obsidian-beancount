@@ -14,7 +14,7 @@ import type { Extension } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
-import { blockRangeInLedger, computeAlignment, isAmountDotInsert } from './align';
+import { alignmentTarget, blockRangeInLedger, computeAlignment, isAmountDotInsert } from './align';
 import type { LineEdit } from './align';
 import { docFences, isLedgerTextLine } from './fences';
 
@@ -104,7 +104,7 @@ export function instantAlignmentPlan(
 		working[line] = next;
 	}
 
-	const targetColumn = Math.max(0, separatorColumn - 1);
+	const targetColumn = alignmentTarget(separatorColumn);
 	const claimed = new Set<string>();
 	const edits: LineEdit[] = [];
 	for (const insert of inserts) {

@@ -24,8 +24,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { Notice, Platform, editorInfoField } from 'obsidian';
 import type { App, PaneType } from 'obsidian';
-import { docFences, extractBeancountFences } from './fences';
-import { isLedgerFile } from './vault-index';
+import { docFences, extractBeancountFences, isLedgerFile } from './fences';
 
 /** The CSS contract with `styles.css`: link color, underline on hover. */
 export const INCLUDE_LINK_CLASS = 'beancount-include-link';
