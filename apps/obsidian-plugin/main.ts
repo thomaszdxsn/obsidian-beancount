@@ -33,7 +33,7 @@ import {
 import {
 	FLAGGED_MESSAGE,
 	flagDiagnostics,
-	flagDiagnosticsFromFences,
+	flagDiagnosticsFromRegions,
 	flagOkayEdit,
 	insertOpenDirective,
 	mergeDiagnostics,
@@ -63,8 +63,8 @@ import {
 import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { buildFenceLedger, extractBeancountFences, isLedgerFile, isSafeIncludePath } from './fences';
-import type { BeancountFence } from './fences';
+import { isLedgerFile, isSafeIncludePath, ledgerDoc, ledgerKind } from './fences';
+import type { LedgerDoc } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
 import { PayeeSuggest } from './payee-suggest';
@@ -182,8 +182,9 @@ function openEditorFiles(app: App): Array<{ file: TFile; editor: Editor }> {
 	return found;
 }
 
-function flagsFor(path: string, text: string): LineDiagnostic[] {
-	return path.endsWith('.md') ? flagDiagnosticsFromFences(extractBeancountFences(text)) : flagDiagnostics(text);
+function flagsFor(file: { extension?: string }, text: string): LineDiagnostic[] {
+	if (ledgerKind(file) === 'ledger-file') return flagDiagnostics(text);
+	return flagDiagnosticsFromRegions(ledgerDoc('fenced', text).regions);
 }
 
 function beanDiagnosticsOn(editor: Editor): LineDiagnostic[] {
@@ -881,7 +882,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!diagnostic) return false;
 		const { editor, file } = located;
 		const lines = editor.getValue().split('\n');
-		const openFile = this.openFiles.bestFile() ?? (file.extension === 'md' ? null : file.path);
+		const openFile = this.openFiles.bestFile() ?? (isLedgerFile(file) ? file.path : null);
 		const fixes = quickFixesForLine({
 			lines,
 			line,
@@ -1047,7 +1048,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		for (const editor of openEditorsFor(this.app, file)) {
 			setEditorLineDiagnostics(
 				editor,
-				mergeDiagnostics(bean, flagsFor(file.path, editor.getValue())),
+				mergeDiagnostics(bean, flagsFor(file, editor.getValue())),
 			);
 		}
 	}
@@ -1085,7 +1086,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			if (!vaultFile) continue;
 			let leftFlags = false;
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
-				const flags = flagsFor(path, editor.getValue());
+				const flags = flagsFor(vaultFile, editor.getValue());
 				if (flags.length > 0) leftFlags = true;
 				setEditorLineDiagnostics(editor, flags);
 			}
@@ -1147,12 +1148,12 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			const seq = (this.validateSeq.get(target) ?? 0) + 1;
 			this.validateSeq.set(target, seq);
 
-			let fences: BeancountFence[] | undefined;
+			let note: LedgerDoc | undefined;
 			if (markdown) {
 				const text = await this.app.vault.read(file);
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
-				fences = extractBeancountFences(text);
-				if (fences.length === 0) {
+				note = ledgerDoc('fenced', text);
+				if (note.regions.length === 0) {
 					if (!this.markErrors(target, [], root)) this.noticesShown.delete(target);
 					return;
 				}
@@ -1213,9 +1214,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			let cleanup: (() => void) | undefined;
 			let hostLine: ((tempLine: number) => number | undefined) | undefined;
 			try {
-				if (markdown && fences) {
+				if (markdown && note) {
 					try {
-						const ledger = buildFenceLedger(fences, includePath);
+						const ledger = note.tempLedger(includePath);
 						const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
 						cleanup = () => rmSync(dir, { recursive: true, force: true });
 						const temp = join(dir, 'fences.bean');
@@ -1332,7 +1333,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
 				setEditorLineDiagnostics(
 					editor,
-					mergeDiagnostics(toLineDiagnostics(errorsByPath.get(path) ?? []), flagsFor(path, editor.getValue()))
+					mergeDiagnostics(toLineDiagnostics(errorsByPath.get(path) ?? []), flagsFor(vaultFile, editor.getValue()))
 				);
 			}
 		}
@@ -1340,7 +1341,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// ledger is never `target`, so it would otherwise stay unmarked.
 		for (const { file, editor } of openEditorFiles(this.app)) {
 			if (published.has(file.path)) continue;
-			const flags = flagsFor(file.path, editor.getValue());
+			const flags = flagsFor(file, editor.getValue());
 			if (flags.length === 0) {
 				if (!this.extraFlagged.has(file.path)) continue;
 				this.extraFlagged.delete(file.path);

@@ -17,6 +17,13 @@ UI/UX fixes from the architecture review (#75).
   text: `.bean` / `.beancount` files and the beancount fences of notes. Text
   outside fences is never changed, and a note without fences is not
   re-aligned on save.
+- On untitled buffers and `.txt` files, folding, inlay hints, include
+  links and flag markers apply only inside `beancount`/`bean` fence
+  bodies, matching completion. Include paths are underlined there, but
+  clicking one still needs a file path to resolve against, so untitled
+  buffers show the link and do not open it. A buffer without those
+  fences is not treated as a ledger. **Show account balances** still
+  only uses a `.bean` / `.beancount` file or a markdown note.
 - **Start Fava** opens the browser once Fava answers on its port instead of
   right after launching it, and says why when Fava exits (quoting the last
   line it printed) or does not answer within 30 seconds. A Fava that stops
@@ -57,6 +64,12 @@ UI/UX fixes from the architecture review (#75).
   community review's type-checked lint resolves `fs`, `path`,
   `child_process` and `process` instead of treating them as `any`
   (the `no-unsafe-*` and "Unresolved `error` type" findings).
+
+### Internal
+
+- Ledger regions (`ledgerDoc` / `editorLedger`) answer where ledger text
+  is; editor features no longer scan fences or inspect the file extension
+  to decide line-level context (#69).
 
 ## 0.2.2
 

@@ -12,7 +12,7 @@ import {
 	PairingIndex,
 	extractPairings,
 	flagDiagnostics,
-	flagDiagnosticsFromFences,
+	flagDiagnosticsFromRegions,
 	flagOkayEdit,
 	inferBalancingAccount,
 	insertOpenDirective,
@@ -542,8 +542,8 @@ describe('edge postings and residuals', () => {
 
 	it('maps flag markers onto markdown fence host lines and ignores prose bangs', () => {
 		expect(
-			flagDiagnosticsFromFences([
-				{ startLine: 2, lines: ['2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD'] },
+			flagDiagnosticsFromRegions([
+				{ hostStartLine: 2, hostIndent: 0, lines: ['2026-10-01 ! "Cafe"', '  Assets:Cash  10.00 USD'] },
 			])
 		).toEqual([{ line: 2, message: FLAGGED_MESSAGE }]);
 		expect(flagDiagnostics('Wow! not a flag\n!nope')).toEqual([]);
@@ -615,10 +615,10 @@ describe('edge postings and residuals', () => {
 		).toHaveLength(1);
 	});
 
-	it('returns false when OpenFileIndex rename misses, and maps empty fences to no flags', () => {
+	it('returns false when OpenFileIndex rename misses, and maps empty regions to no flags', () => {
 		const index = new OpenFileIndex();
 		expect(index.renameFile('gone.bean', 'x.bean')).toBe(false);
-		expect(flagDiagnosticsFromFences([])).toEqual([]);
+		expect(flagDiagnosticsFromRegions([])).toEqual([]);
 	});
 
 	it('pads from the posting when the residual text is not an amount', () => {

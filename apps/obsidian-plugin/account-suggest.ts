@@ -10,7 +10,7 @@
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { ACCOUNT_CHAR_RE, ACCOUNT_PREFIX_RE, describeAccount } from './account-index';
 import type { AccountIndex } from './account-index';
-import { editorLineIsLedger } from './fences';
+import { editorLedger } from './fences';
 import { COMMODITY_PREFIX_RE, LINK_PREFIX_RE, TAG_PREFIX_RE } from './token-index';
 import { inStringOrComment } from './token-suggest';
 import { IndexSuggest } from './suggest';
@@ -46,7 +46,7 @@ export class AccountSuggest extends IndexSuggest {
 		if (COMMODITY_PREFIX_RE.test(prefix)) return null;
 		const match = ACCOUNT_PREFIX_RE.exec(prefix);
 		if (!match) return null;
-		if (inStringOrComment(prefix) || !editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return this.triggerInfo(cursor, match[1]);
 	}
 }

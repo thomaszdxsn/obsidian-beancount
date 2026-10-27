@@ -5,42 +5,74 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type * as CMState from '@codemirror/state';
-import {
-	buildFenceLedger,
-	docFences,
-	editorLineIsLedger,
-	extractBeancountFences,
-	ledgerLinesOf,
-	isSafeIncludePath,
-	ledgerSource,
-} from '../fences';
+import { editorLedger, ledgerDoc, ledgerKind, ledgerKindFromPath, isSafeIncludePath } from '../fences';
 
 const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
 
-/** CodeMirror `Text` plus a countable `toString`, so a cache hit cannot rescan. */
+/** CodeMirror `Text` with separate `iterLines` / `toString` counters. */
 function cmDoc(lines: readonly string[]) {
 	const text = Text.of(lines);
-	let scans = 0;
+	let iters = 0;
+	let strings = 0;
 	return {
-		get scans() {
-			return scans;
+		get iters() {
+			return iters;
+		},
+		get strings() {
+			return strings;
 		},
 		toString() {
-			scans += 1;
+			strings += 1;
 			return text.toString();
 		},
-		iterLines: () => text.iterLines(),
+		iterLines() {
+			iters += 1;
+			return text.iterLines();
+		},
 	};
 }
 
-describe('ledgerSource', () => {
-	it('keeps a ledger file whole, prose and comments included', () => {
-		const text = 'PG_DATA_DIR:-x\n2020-01-01 open Assets:Cash\n';
-		expect(ledgerSource('main.bean', text)).toBe(text);
-		expect(ledgerSource('dir/x.beancount', text)).toBe(text);
+describe('ledgerKind', () => {
+	it('classifies bean and beancount as ledger-file and everything else as fenced', () => {
+		expect(ledgerKind({ extension: 'bean' })).toBe('ledger-file');
+		expect(ledgerKind({ extension: 'beancount' })).toBe('ledger-file');
+		expect(ledgerKind({ extension: 'md' })).toBe('fenced');
+		expect(ledgerKind({ extension: 'txt' })).toBe('fenced');
+		expect(ledgerKind({ extension: undefined })).toBe('fenced');
+		expect(ledgerKind(null)).toBe('fenced');
+		expect(ledgerKind(undefined)).toBe('fenced');
 	});
 
-	it('reduces a note to its ledger fence bodies, joined in document order', () => {
+	it('classifies a vault path by its basename extension including Windows separators', () => {
+		expect(ledgerKindFromPath('main.bean')).toBe('ledger-file');
+		expect(ledgerKindFromPath('dir/x.beancount')).toBe('ledger-file');
+		expect(ledgerKindFromPath('C:\\vault\\note.md')).toBe('fenced');
+		expect(ledgerKindFromPath('readme.txt')).toBe('fenced');
+	});
+});
+
+describe('ledgerDoc', () => {
+	it('treats a ledger file as one region of the whole buffer', () => {
+		const text = 'PG_DATA_DIR:-x\n; comment\n2020-01-01 open Assets:Cash\n';
+		const doc = ledgerDoc('ledger-file', text);
+		expect(doc.kind).toBe('ledger-file');
+		expect(doc.regions).toEqual([
+			{
+				hostStartLine: 0,
+				hostIndent: 0,
+				lines: ['PG_DATA_DIR:-x', '; comment', '2020-01-01 open Assets:Cash', ''],
+			},
+		]);
+		expect(doc.ledgerSource()).toBe(text);
+		expect(doc.lineIsLedger(0)).toBe(true);
+		expect(doc.lineIsLedger(2)).toBe(true);
+		const temp = doc.tempLedger();
+		expect(temp.text).toBe('PG_DATA_DIR:-x\n; comment\n2020-01-01 open Assets:Cash\n\n');
+		expect(temp.hostLine(1)).toBe(1);
+		expect(temp.hostLine(3)).toBe(3);
+	});
+
+	it('joins two fence bodies in ledgerSource and blanks between them in tempLedger', () => {
 		const note = [
 			'Prose Notes:Here',
 			'```beancount',
@@ -53,137 +85,227 @@ describe('ledgerSource', () => {
 			'  Expenses:Food  1 USD',
 			'~~~',
 		].join('\n');
-		expect(ledgerSource('note.md', note)).toBe('2020-01-01 open Assets:Cash\n  Expenses:Food  1 USD');
+		const doc = ledgerDoc('fenced', note);
+		expect(doc.ledgerSource()).toBe('2020-01-01 open Assets:Cash\n  Expenses:Food  1 USD');
+		const temp = doc.tempLedger();
+		expect(temp.text).toBe('2020-01-01 open Assets:Cash\n\n  Expenses:Food  1 USD\n');
+		expect(temp.hostLine(1)).toBe(3);
+		expect(temp.hostLine(2)).toBeUndefined();
+		expect(temp.hostLine(3)).toBe(9);
 	});
+
+	it('keeps an empty fence body as a region whose opener and closer are not ledger text', () => {
+		const doc = ledgerDoc('fenced', '```beancount\n```\n');
+		expect(doc.regions).toEqual([{ hostStartLine: 1, hostIndent: 0, lines: [] }]);
+		expect(doc.lineIsLedger(0)).toBe(false);
+		expect(doc.lineIsLedger(1)).toBe(false);
+		expect(doc.ledgerSource()).toBe('');
+	});
+
+	it('is not ledger text on the prose line after a closing fence', () => {
+		const text = ['```beancount', '2026-01-01 open Assets:Cash', '```', 'prose after'].join('\n');
+		const doc = ledgerDoc('fenced', text);
+		expect(doc.lineIsLedger(1)).toBe(true);
+		expect(doc.lineIsLedger(2)).toBe(false);
+		expect(doc.lineIsLedger(3)).toBe(false);
+	});
+
+	it('records opener indent 0–3 and rejects a four-space or tab opener', () => {
+		expect(ledgerDoc('fenced', '  ```beancount\n  2026-10-01 open Assets:Cash\n  ```\n').regions).toEqual([
+			{ hostStartLine: 1, hostIndent: 2, lines: ['2026-10-01 open Assets:Cash'] },
+		]);
+		expect(ledgerDoc('fenced', '   ```bean\n   2026-01-01 open Assets:Cash\n   ```').regions).toEqual([
+			{ hostStartLine: 1, hostIndent: 3, lines: ['2026-01-01 open Assets:Cash'] },
+		]);
+		expect(ledgerDoc('fenced', '    ```bean\n    2026-01-01 open Assets:Cash\n    ```').regions).toEqual([]);
+		expect(ledgerDoc('fenced', '\t```bean\n\t2026-01-01 open Assets:Cash\n\t```').regions).toEqual([]);
+	});
+
+	it('accepts bean/beancount info strings, tildes, unclosed fences, nested four-backtick, and inline ticks', () => {
+		const info = ['~~~bean linenums', '2026-10-01 * "A"', '~~~', '', '```Beancount', '2026-10-02 * "B"', '```'].join('\n');
+		expect(ledgerDoc('fenced', info).regions.map((region) => region.lines)).toEqual([
+			['2026-10-01 * "A"'],
+			['2026-10-02 * "B"'],
+		]);
+		expect(ledgerDoc('fenced', '```javascript\nconst x = 1\n```\n').regions).toEqual([]);
+		expect(ledgerDoc('fenced', '```beancounter\nnope\n```\n').regions).toEqual([]);
+		const nested = [
+			'````text',
+			'```bean',
+			'2026-01-01 balance Assets:Cash 12 USD',
+			'```',
+			'````',
+			'~~~bean',
+			'2026-01-02 balance Assets:Cash 14 USD',
+			'~~~',
+		].join('\n');
+		expect(ledgerDoc('fenced', nested).regions).toEqual([
+			{ hostStartLine: 6, hostIndent: 0, lines: ['2026-01-02 balance Assets:Cash 14 USD'] },
+		]);
+		expect(ledgerDoc('fenced', ['```x```', '```bean', '2026-01-01 balance Assets:Cash 1 USD', '```'].join('\n')).regions).toEqual([
+			{ hostStartLine: 2, hostIndent: 0, lines: ['2026-01-01 balance Assets:Cash 1 USD'] },
+		]);
+		const unclosed = ledgerDoc('fenced', '```beancount\n2026-10-01 * "Open"\n  Assets:Cash');
+		expect(unclosed.regions).toEqual([
+			{ hostStartLine: 1, hostIndent: 0, lines: ['2026-10-01 * "Open"', '  Assets:Cash'] },
+		]);
+		expect(unclosed.lineIsLedger(0)).toBe(false);
+		expect(unclosed.lineIsLedger(1)).toBe(true);
+		expect(
+			ledgerDoc('fenced', '````beancount\n2026-01-01 open Assets:Cash\n`````\n').regions
+		).toEqual([{ hostStartLine: 1, hostIndent: 0, lines: ['2026-01-01 open Assets:Cash'] }]);
+		expect(ledgerDoc('fenced', '````beancount\n2026-01-01 open Assets:Cash\n```').regions).toEqual([
+			{ hostStartLine: 1, hostIndent: 0, lines: ['2026-01-01 open Assets:Cash', '```'] },
+		]);
+	});
+
+	it('is true for containsPos only inside a fence body', () => {
+		const text = ['prose', '```beancount', '2026-01-01 open Assets:Cash', '```', 'after'].join('\n');
+		const doc = ledgerDoc('fenced', text);
+		expect(doc.containsPos(text.indexOf('prose'))).toBe(false);
+		expect(doc.containsPos(text.indexOf('```beancount'))).toBe(false);
+		expect(doc.containsPos(text.indexOf('2026-01-01'))).toBe(true);
+		expect(doc.containsPos(text.indexOf('```\nafter'))).toBe(false);
+		expect(doc.containsPos(text.indexOf('after'))).toBe(false);
+		expect(doc.containsPos(-1)).toBe(false);
+	});
+
+	it('masks fence bodies onto host lines and is null without a region', () => {
+		const text = ['# note', '```bean', '2026-01-01 open Assets:Cash', 'still body'].join('\n');
+		expect(ledgerDoc('fenced', text).masked()).toEqual(['', '', '2026-01-01 open Assets:Cash', 'still body']);
+		expect(ledgerDoc('fenced', 'prose only').masked()).toBeNull();
+		expect(ledgerDoc('fenced', '  ```beancount\n  2026-10-01 open Assets:Cash\n  ```').masked()).toEqual([
+			'',
+			'2026-10-01 open Assets:Cash',
+			'',
+		]);
+	});
+
+	it('reuses one LedgerDoc per CodeMirror document without toString', () => {
+		const text = Text.of(['```bean', 'open', '```']);
+		let iters = 0;
+		let strings = 0;
+		const doc = {
+			toString() {
+				strings += 1;
+				return text.toString();
+			},
+			iterLines() {
+				iters += 1;
+				return text.iterLines();
+			},
+		};
+		const once = ledgerDoc('fenced', doc);
+		expect(ledgerDoc('fenced', doc)).toBe(once);
+		expect(once.regions).toEqual([{ hostStartLine: 1, hostIndent: 0, lines: ['open'] }]);
+		expect(iters).toBe(1);
+		expect(strings).toBe(0);
+	});
+
+	it('keeps fenced and ledger-file docs of the same Text without rescanning', () => {
+		const text = Text.of(['```bean', 'open', '```']);
+		let iters = 0;
+		const doc = {
+			toString() {
+				return text.toString();
+			},
+			iterLines() {
+				iters += 1;
+				return text.iterLines();
+			},
+		};
+		const fenced = ledgerDoc('fenced', doc);
+		expect(iters).toBe(1);
+		const fileDoc = ledgerDoc('ledger-file', doc);
+		expect(iters).toBe(1);
+		expect(ledgerDoc('fenced', doc)).toBe(fenced);
+		expect(ledgerDoc('ledger-file', doc)).toBe(fileDoc);
+		expect(fileDoc.lineIsLedger(0)).toBe(true);
+		expect(iters).toBe(1);
+		expect(fileDoc.regions[0]?.lines).toEqual(['```bean', 'open', '```']);
+		expect(fileDoc.ledgerSource()).toBe('```bean\nopen\n```');
+		expect(fileDoc.masked()).toEqual(['```bean', 'open', '```']);
+		expect(fileDoc.tempLedger().text).toBe('```bean\nopen\n```\n');
+		expect(iters).toBe(2);
+		expect(fileDoc).not.toBe(fenced);
+	});
+
+	it('prepends a safe include in tempLedger and omits an unsafe path', () => {
+		const doc = ledgerDoc('fenced', '```beancount\noption "title" "X"\n```');
+		const included = doc.tempLedger('/vault/main.bean');
+		expect(included.text.startsWith('include "/vault/main.bean"\n\n')).toBe(true);
+		expect(included.hostLine(1)).toBeUndefined();
+		expect(included.hostLine(2)).toBeUndefined();
+		expect(included.hostLine(3)).toBe(2);
+		const windows = doc.tempLedger('C:\\vault\\main.bean');
+		expect(windows.text.startsWith('include "C:/vault/main.bean"\n\n')).toBe(true);
+		const unsafe = doc.tempLedger('/vault/main.bean\nplugin "os"');
+		expect(unsafe.text.startsWith('include ')).toBe(false);
+		expect(unsafe.hostLine(1)).toBe(2);
+		expect(ledgerDoc('fenced', 'prose').tempLedger().text).toBe('');
+	});
+});
+
+describe('editorLedger', () => {
+	it('reads kind from the file and fences from the live document when present', () => {
+		const editor = { getValue: () => '# n\n```beancount\nopen\n```' };
+		expect(editorLedger(editor, { extension: 'md' }).lineIsLedger(2)).toBe(true);
+		expect(editorLedger(editor, { extension: 'md' }).lineIsLedger(0)).toBe(false);
+		expect(editorLedger(editor, { extension: 'bean' }).lineIsLedger(0)).toBe(true);
+		const live = {
+			getValue: () => 'prose only',
+			cm: { state: { doc: cmDoc(['# n', '```bean', 'open', '```']) } },
+		};
+		expect(editorLedger(live, { extension: 'md' }).lineIsLedger(2)).toBe(true);
+		expect(editorLedger(live, { extension: 'md' }).lineIsLedger(0)).toBe(false);
+		expect(editorLedger(live, null).kind).toBe('fenced');
+	});
+});
+
+describe('ledgerDoc host mapping', () => {
+	it('returns no regions for prose without a fence', () => {
+		expect(ledgerDoc('fenced', '# Grocery\n\njust prose\n').regions).toEqual([]);
+	});
+
+	it('extracts a beancount body at its host start line', () => {
+		const text = ['# Grocery', '', '```beancount', '2026-10-01 * "Cafe"', '  Assets:Cash  -10.00 USD', '```', ''].join('\n');
+		expect(ledgerDoc('fenced', text).regions).toEqual([
+			{ hostStartLine: 3, hostIndent: 0, lines: ['2026-10-01 * "Cafe"', '  Assets:Cash  -10.00 USD'] },
+		]);
+	});
+
 
 	it('reduces a note without ledger fences to nothing', () => {
-		expect(ledgerSource('note.md', 'LangGraph长期记忆SDK:Semantic')).toBe('');
+		expect(ledgerDoc('fenced', 'LangGraph长期记忆SDK:Semantic').ledgerSource()).toBe('');
 	});
 });
 
-describe('extractBeancountFences', () => {
-	it('returns nothing for prose without a fence', () => {
-		expect(extractBeancountFences('# Grocery\n\njust prose\n')).toEqual([]);
-	});
-
-	it('extracts a ```beancount body at its host start line', () => {
-		const text = ['# Grocery', '', '```beancount', '2026-10-01 * "Cafe"', '  Assets:Cash  -10.00 USD', '```', ''].join(
-			'\n'
-		);
-
-		expect(extractBeancountFences(text)).toEqual([
-			{ startLine: 3, lines: ['2026-10-01 * "Cafe"', '  Assets:Cash  -10.00 USD'] },
-		]);
-	});
-
-	it('accepts the bean alias, tildes, and an info-string suffix', () => {
-		const text = ['~~~bean linenums', '2026-10-01 * "A"', '~~~', '', '```Beancount', '2026-10-02 * "B"', '```'].join(
-			'\n'
-		);
-
-		expect(extractBeancountFences(text)).toEqual([
-			{ startLine: 1, lines: ['2026-10-01 * "A"'] },
-			{ startLine: 5, lines: ['2026-10-02 * "B"'] },
-		]);
-	});
-
-	it('does not treat a different language as a ledger fence', () => {
-		expect(extractBeancountFences('```javascript\nconst x = 1\n```\n')).toEqual([]);
-		expect(extractBeancountFences('```beancounter\nnope\n```\n')).toEqual([]);
-	});
-
-	it('ignores ledger examples nested inside another fenced block', () => {
-		const text = ['````text', '```bean', '2026-01-01 balance Assets:Cash 12 USD', '```', '````',
-			'~~~bean', '2026-01-02 balance Assets:Cash 14 USD', '~~~'].join('\n');
-		expect(extractBeancountFences(text)).toEqual([
-			{ startLine: 6, lines: ['2026-01-02 balance Assets:Cash 14 USD'] },
-		]);
-	});
-
-	it('does not let inline backtick code swallow a following ledger fence', () => {
-		const text = ['```x```', '```bean', '2026-01-01 balance Assets:Cash 1 USD', '```'].join('\n');
-		expect(extractBeancountFences(text)).toEqual([
-			{ startLine: 2, lines: ['2026-01-01 balance Assets:Cash 1 USD'] },
-		]);
-	});
-
-	it('takes the rest of the file when the closing fence is missing', () => {
-		expect(extractBeancountFences('```beancount\n2026-10-01 * "Open"\n  Assets:Cash')).toEqual([
-			{ startLine: 1, lines: ['2026-10-01 * "Open"', '  Assets:Cash'] },
-		]);
-	});
-
+describe('ledgerDoc CodeMirror and CRLF', () => {
 	it('splits CRLF the same way as LF', () => {
-		expect(extractBeancountFences('```bean\r\n2026-10-01 * "A"\r\n```\r\n')).toEqual([
-			{ startLine: 1, lines: ['2026-10-01 * "A"'] },
+		expect(ledgerDoc('fenced', '```bean\r\n2026-10-01 * "A"\r\n```\r\n').regions).toEqual([
+			{ hostStartLine: 1, hostIndent: 0, lines: ['2026-10-01 * "A"'] },
 		]);
 	});
 
-	it('strips the opener indent from each body line', () => {
-		expect(extractBeancountFences('  ```beancount\n  2026-10-01 open Assets:Cash\n  ```\n')).toEqual([
-			{ startLine: 1, lines: ['2026-10-01 open Assets:Cash'] },
-		]);
+	it('strips trailing CR from non-last CodeMirror lines without toString', () => {
+		const doc = cmDoc(['```bean\r', '2026-10-01 * "A"\r', '```\r', 'after']);
+		const once = ledgerDoc('fenced', doc);
+		expect(once.regions).toEqual([{ hostStartLine: 1, hostIndent: 0, lines: ['2026-10-01 * "A"'] }]);
+		expect(once.masked()).toEqual(['', '2026-10-01 * "A"', '', '']);
+		expect(doc.strings).toBe(0);
+		expect(ledgerDoc('fenced', doc)).toBe(once);
 	});
 
-	it('accepts a three-space opener and rejects a four-space one', () => {
-		expect(extractBeancountFences('   ```bean\n   2026-01-01 open Assets:Cash\n   ```')).toEqual([
-			{ startLine: 1, lines: ['2026-01-01 open Assets:Cash'] },
-		]);
-		expect(extractBeancountFences('    ```bean\n    2026-01-01 open Assets:Cash\n    ```')).toEqual([]);
-	});
-});
-
-describe('buildFenceLedger', () => {
-	const fences = [
-		{ startLine: 3, lines: ['2026-10-01 * "Cafe"', '  Assets:Cash  -10.00 USD'] },
-		{ startLine: 10, lines: ['2026-10-02 * "Shop"'] },
-	];
-
-	it('concatenates fence bodies and maps temp lines onto the host', () => {
-		const ledger = buildFenceLedger(fences);
-
-		expect(ledger.text).toBe('2026-10-01 * "Cafe"\n  Assets:Cash  -10.00 USD\n\n2026-10-02 * "Shop"\n');
-		expect(ledger.hostLine(1)).toBe(4);
-		expect(ledger.hostLine(2)).toBe(5);
-		expect(ledger.hostLine(3)).toBeUndefined();
-		expect(ledger.hostLine(4)).toBe(11);
-		expect(ledger.hostLine(5)).toBeUndefined();
+	it('maps a blank fence body line in tempLedger without emitting a file', () => {
+		const temp = ledgerDoc('fenced', '```beancount\n\n```').tempLedger();
+		expect(temp.text).toBe('');
+		expect(temp.hostLine(1)).toBe(2);
+		expect(temp.hostLine(2)).toBeUndefined();
 	});
 
-	it('prepends an include of the entry ledger and skips those preamble lines', () => {
-		const ledger = buildFenceLedger(fences, '/vault/main.bean');
-
-		expect(ledger.text.startsWith('include "/vault/main.bean"\n\n')).toBe(true);
-		expect(ledger.hostLine(1)).toBeUndefined();
-		expect(ledger.hostLine(2)).toBeUndefined();
-		expect(ledger.hostLine(3)).toBe(4);
-		expect(ledger.hostLine(4)).toBe(5);
-	});
-
-	it('normalizes Windows include paths to forward slashes', () => {
-		const ledger = buildFenceLedger([{ startLine: 0, lines: ['option "title" "X"'] }], 'C:\\vault\\main.bean');
-
-		expect(ledger.text.startsWith('include "C:/vault/main.bean"\n\n')).toBe(true);
-		expect(ledger.hostLine(3)).toBe(1);
-	});
-
-	it('omits an include path that would break out of the string', () => {
-		const ledger = buildFenceLedger(fences, '/vault/main.bean\nplugin "os"');
-
-		expect(ledger.text.startsWith('include ')).toBe(false);
-		expect(ledger.hostLine(1)).toBe(4);
-	});
-
-	it('emits no trailing newline when there is no ledger text', () => {
-		const empty = buildFenceLedger([]);
-		expect(empty.text).toBe('');
-		expect(empty.hostLine(1)).toBeUndefined();
-
-		// A blank body line joins to '' — still not a non-empty file — but it is a host line.
-		const blank = buildFenceLedger([{ startLine: 4, lines: [''] }]);
-		expect(blank.text).toBe('');
-		expect(blank.hostLine(1)).toBe(5);
-		expect(blank.hostLine(2)).toBeUndefined();
+	it('reduces a .txt buffer to fence bodies, not the whole file', () => {
+		const text = 'prose\n```bean\nopen\n```\n';
+		expect(ledgerDoc(ledgerKind({ extension: 'txt' }), text).ledgerSource()).toBe('open');
 	});
 });
 
@@ -194,58 +316,5 @@ describe('isSafeIncludePath', () => {
 		expect(isSafeIncludePath('main.bean\ninclude "/etc/passwd"')).toBe(false);
 		expect(isSafeIncludePath('main.bean\0x')).toBe(false);
 		expect(isSafeIncludePath('')).toBe(false);
-	});
-});
-
-describe('docFences', () => {
-	it('strips trailing CR from non-last CodeMirror lines so fences match toString()', () => {
-		const doc = cmDoc(['```bean\r', '2026-10-01 * "A"\r', '```\r', 'after']);
-		const once = docFences(doc);
-		expect(once.fences).toEqual(extractBeancountFences(doc.toString()));
-		expect(once.masked).toEqual(['', '2026-10-01 * "A"', '', '']);
-		// Read from iterLines, not a joined copy, and reuse that result.
-		expect(doc.scans).toBe(1);
-		expect(docFences(doc)).toBe(once);
-		expect(doc.scans).toBe(1);
-	});
-
-	it('keeps an unclosed fence body at host indexes and does not share it with another document', () => {
-		const open = cmDoc(['# note', '```bean', '2026-01-01 open Assets:Cash', 'still body']);
-		const other = cmDoc(['prose only']);
-		const fences = docFences(open);
-		const none = docFences(other);
-		expect(fences.fences).toEqual([
-			{ startLine: 2, lines: ['2026-01-01 open Assets:Cash', 'still body'] },
-		]);
-		expect(fences.masked).toEqual(['', '', '2026-01-01 open Assets:Cash', 'still body']);
-		expect(none.fences).toEqual([]);
-		expect(none.masked).toBeNull();
-		expect(docFences(open)).toBe(fences);
-		expect(docFences(open).fences).not.toBe(none.fences);
-	});
-
-	it('answers whether a line is ledger text for a file or editor', () => {
-		const fences = extractBeancountFences('# n\n```bean\n  Assets:Cash\n```\nprose');
-		expect(ledgerLinesOf({ extension: 'bean' }, () => fences)).toBeUndefined();
-		const note = ledgerLinesOf({ extension: 'md' }, () => fences);
-		expect(note?.(0)).toBe(false);
-		expect(note?.(2)).toBe(true);
-		expect(ledgerLinesOf(null, () => fences)?.(2)).toBe(true);
-		const editor = { getValue: () => '# n\n```beancount\nopen\n```' };
-		expect(editorLineIsLedger(editor, 2, { extension: 'md' })).toBe(true);
-		expect(editorLineIsLedger(editor, 0, { extension: 'md' })).toBe(false);
-		expect(editorLineIsLedger(editor, 0, { extension: 'bean' })).toBe(true);
-		// An editor with a live CodeMirror document answers from that document.
-		const live = { getValue: () => 'prose only', cm: { state: { doc: cmDoc(['# n', '```bean', 'open', '```']) } } };
-		expect(editorLineIsLedger(live, 2, { extension: 'md' })).toBe(true);
-		expect(editorLineIsLedger(live, 0, { extension: 'md' })).toBe(false);
-	});
-
-	it('strips the opener indent in the masked body, not only in extractBeancountFences', () => {
-		const doc = cmDoc(['  ```beancount', '  2026-10-01 open Assets:Cash', '  ```']);
-		expect(docFences(doc)).toEqual({
-			fences: [{ startLine: 1, lines: ['2026-10-01 open Assets:Cash'] }],
-			masked: ['', '2026-10-01 open Assets:Cash', ''],
-		});
 	});
 });

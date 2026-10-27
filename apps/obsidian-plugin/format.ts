@@ -23,8 +23,8 @@
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import type { Directive, Posting } from '@repo/beancount-parser';
 import { alignLines, endsInString } from './align';
-import { extractBeancountFences, splitLines } from './fences';
-import type { BeancountFence } from './fences';
+import { ledgerDoc, splitLines } from './fences';
+import type { LedgerRegion } from './fences';
 
 /** Two spaces, matching posting auto-indent. */
 const POSTING_INDENT = '  ';
@@ -87,33 +87,33 @@ function formatLines(text: string, targetColumn?: number): { ok: true; split: Sp
  * the caller changes nothing.
  */
 export function formatFencedDocument(text: string, targetColumn?: number): FormatResult {
-	const fences = extractBeancountFences(text);
-	if (fences.length === 0) return { ok: true, text };
+	const regions = ledgerDoc('fenced', text).regions;
+	if (regions.length === 0) return { ok: true, text };
 	const split = splitDocument(text);
 	const bodies: string[][] = [];
-	for (const fence of fences) {
-		const indent = openerIndent(split.lines, fence);
+	for (const region of regions) {
+		const indent = region.hostIndent;
 		const floor = targetColumn === undefined ? undefined : Math.max(0, targetColumn - indent);
-		const formatted = formatFenceBody(fence, floor);
+		const formatted = formatFenceBody(region, floor);
 		if (!formatted.ok) {
 			const bodyIndex = formatted.error.line - 1;
 			return {
 				ok: false,
 				error: {
-					line: fence.startLine + formatted.error.line,
-					column: formatted.error.column + strippedPrefix(split.lines, fence, bodyIndex),
+					line: region.hostStartLine + formatted.error.line,
+					column: formatted.error.column + strippedPrefix(split.lines, region, bodyIndex),
 					message: formatted.error.message,
 				},
 			};
 		}
 		bodies.push(formatted.lines);
 	}
-	for (let f = 0; f < fences.length; f += 1) {
-		const fence = fences[f];
+	for (let f = 0; f < regions.length; f += 1) {
+		const region = regions[f];
 		const body = bodies[f];
-		const indent = openerIndent(split.lines, fence);
-		for (let i = 0; i < fence.lines.length; i += 1) {
-			const at = fence.startLine + i;
+		const indent = region.hostIndent;
+		for (let i = 0; i < region.lines.length; i += 1) {
+			const at = region.hostStartLine + i;
 			// An unclosed fence's body includes the empty element `split(/\r?\n/)`
 			// adds for a trailing newline; splitDocument already dropped that line.
 			if (at >= split.lines.length) break;
@@ -216,11 +216,11 @@ function joinDocument(lines: readonly string[], newline: '\n' | '\r\n', trailing
 	return trailing ? body + newline : body;
 }
 
-function formatFenceBody(fence: BeancountFence, targetColumn?: number): { ok: true; lines: string[] } | { ok: false; error: FormatError } {
-	if (fence.lines.length === 0) return { ok: true, lines: [] };
+function formatFenceBody(region: LedgerRegion, targetColumn?: number): { ok: true; lines: string[] } | { ok: false; error: FormatError } {
+	if (region.lines.length === 0) return { ok: true, lines: [] };
 	// A trailing newline keeps a one-line body distinct from empty text and
 	// matches how the parser counts the body's last line.
-	const result = formatLines(fence.lines.join('\n') + '\n', targetColumn);
+	const result = formatLines(region.lines.join('\n') + '\n', targetColumn);
 	if (!result.ok) return result;
 	const { lines, newline, trailing } = result.split;
 	// Joined with `\n` and split again on `\n`, the lines would come back as they are.
@@ -230,22 +230,15 @@ function formatFenceBody(fence: BeancountFence, targetColumn?: number): { ok: tr
 	return { ok: true, lines: relined };
 }
 
-function openerIndent(lines: readonly string[], fence: BeancountFence): number {
-	const opener = lines[fence.startLine - 1];
-	let n = 0;
-	while (n < opener.length && opener[n] === ' ') n += 1;
-	return n;
-}
-
 function countStripped(line: string, indent: number): number {
 	let start = 0;
 	while (start < indent && line[start] === ' ') start += 1;
 	return start;
 }
 
-function strippedPrefix(lines: readonly string[], fence: BeancountFence, bodyIndex: number): number {
-	if (bodyIndex < 0 || bodyIndex >= fence.lines.length) return 0;
-	return countStripped(lines[fence.startLine + bodyIndex] ?? '', openerIndent(lines, fence));
+function strippedPrefix(lines: readonly string[], region: LedgerRegion, bodyIndex: number): number {
+	if (bodyIndex < 0 || bodyIndex >= region.lines.length) return 0;
+	return countStripped(lines[region.hostStartLine + bodyIndex] ?? '', region.hostIndent);
 }
 
 function rewriteLines(lines: string[], directives: readonly Directive[]): void {

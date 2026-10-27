@@ -40,7 +40,8 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { BalanceLineCache, balanceHints } from './balance-hints';
 import type { BalanceHint } from './balance-hints';
-import { docFences, isLedgerFile } from './fences';
+import { isLedgerFile, ledgerDoc } from './fences';
+import type { LedgerKind } from './fences';
 import { postingHints } from './posting-hints';
 import type { PostingHint } from './posting-hints';
 
@@ -256,8 +257,8 @@ function appendPostingHints(
  */
 interface DocMemo {
 	doc: Text;
-	markdown: boolean;
-	/** Fence-masked lines of a markdown note (see `docFences`); null for a ledger file or a note without fences. */
+	kind: LedgerKind;
+	/** Fence-masked lines of a fenced buffer (see `ledgerDoc`); null for a ledger file or a buffer without regions. */
 	masked: readonly string[] | null;
 	/** Balance hints of the whole document, once computed. */
 	balance: readonly BalanceHint[] | null;
@@ -269,10 +270,15 @@ interface EditorMemo {
 	lines: BalanceLineCache;
 }
 
-function docMemo(memo: EditorMemo, doc: Text, markdown: boolean): DocMemo {
+function docMemo(memo: EditorMemo, doc: Text, kind: LedgerKind): DocMemo {
 	const last = memo.current;
-	if (last !== null && last.doc === doc && last.markdown === markdown) return last;
-	const next: DocMemo = { doc, markdown, masked: markdown ? docFences(doc).masked : null, balance: null };
+	if (last !== null && last.doc === doc && last.kind === kind) return last;
+	const next: DocMemo = {
+		doc,
+		kind,
+		masked: kind === 'fenced' ? ledgerDoc('fenced', doc).masked() : null,
+		balance: null,
+	};
 	memo.current = next;
 	return next;
 }
@@ -280,26 +286,15 @@ function docMemo(memo: EditorMemo, doc: Text, markdown: boolean): DocMemo {
 function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: EditorMemo): DecorationSet {
 	if (!host.settings.inlayHints) return Decoration.none;
 	const file = view.state.field(editorInfoField, false)?.file;
-	if (!file) return Decoration.none;
 	const doc = view.state.doc;
 	const ranges: Array<Range<Decoration>> = [];
 	const column = host.settings.separatorColumn;
 	const options = column === undefined ? undefined : { separatorColumn: column };
 	const localLedger = host.settings.entryLedger.trim() === '';
 	const visible = view.visibleRanges;
-	if (file.extension === 'md') {
-		// Fence state above the viewport is part of the mask, so this still
-		// reads the note. Posting hints below are limited to visible transactions.
-		const entry = docMemo(memo, doc, true);
-		const masked = entry.masked;
-		if (!masked) return Decoration.none;
-		const lineText = (index: number) => (index >= 0 && index < masked.length ? masked[index] : '');
-		if (localLedger) appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(masked, memo.lines)));
-		const spans = transactionSpans(doc.lines, lineText, doc, visible);
-		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
-	} else if (isLedgerFile(file)) {
+	if (file && isLedgerFile(file)) {
 		const lineText = (index: number) => doc.line(index + 1).text;
-		const entry = docMemo(memo, doc, false);
+		const entry = docMemo(memo, doc, 'ledger-file');
 		if (localLedger) {
 			if (entry.balance === null) {
 				// Sequential read: `doc.line(n)` per line walks the tree each time.
@@ -312,7 +307,13 @@ function balanceDecorations(view: EditorView, host: BalanceInlayHost, memo: Edit
 		const spans = transactionSpans(doc.lines, lineText, doc, visible);
 		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	} else {
-		return Decoration.none;
+		const entry = docMemo(memo, doc, 'fenced');
+		const masked = entry.masked;
+		if (!masked) return Decoration.none;
+		const lineText = (index: number) => (index >= 0 && index < masked.length ? masked[index] : '');
+		if (localLedger) appendBalanceHints(ranges, doc, (entry.balance ??= balanceHints(masked, memo.lines)));
+		const spans = transactionSpans(doc.lines, lineText, doc, visible);
+		appendPostingHints(ranges, doc, postingHintsInSpans(doc.lines, lineText, spans, options));
 	}
 	if (ranges.length === 0) return Decoration.none;
 	ranges.sort((a, b) => a.from - b.from);

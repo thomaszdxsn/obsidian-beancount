@@ -15,7 +15,7 @@
  * a failure line for the target until a later run reports.
  */
 import type { BeanCheckError } from './bean-check';
-import { extractBeancountFences, isLedgerFile } from './fences';
+import { isLedgerFile, ledgerDoc } from './fences';
 
 /** One bean-check complaint, ready to render. `line` is 1-based, as printed. */
 export interface ProblemRow {
@@ -93,7 +93,7 @@ export function openValidationTarget(input: OpenValidationInput): string | null 
 	const file = { path: input.path, extension: input.extension };
 	const ledger = isLedgerFile(file);
 	if (!ledger && input.extension !== 'md') return null;
-	if (!ledger && extractBeancountFences(input.text).length === 0) return null;
+	if (!ledger && ledgerDoc('fenced', input.text).regions.length === 0) return null;
 	const entry = input.entryLedger.trim();
 	const target = ledger ? entry || input.path : input.path;
 	if (

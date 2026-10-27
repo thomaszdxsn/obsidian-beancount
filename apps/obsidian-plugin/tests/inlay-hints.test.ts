@@ -327,6 +327,20 @@ describe('balance inlay editor lifecycle', () => {
 		expect(pane.labels()).toEqual([]);
 	});
 
+	it('shows posting and balance hints for fenced text in .txt and untitled buffers', () => {
+		const fenced = `\`\`\`beancount\n${ledger}\n\`\`\``;
+		const shift = '```beancount\n'.length;
+		const host = { settings: { inlayHints: true, entryLedger: '' } };
+		expect(editor(new BalanceInlayController(host), fenced, 'txt').labels()).toEqual([
+			residual('10.00', shift + residualAt),
+			{ at: shift + ledger.length, text: 'Δ +2.50 USD' },
+		]);
+		expect(editor(new BalanceInlayController(host), fenced, null).labels()).toEqual([
+			residual('10.00', shift + residualAt),
+			{ at: shift + ledger.length, text: 'Δ +2.50 USD' },
+		]);
+	});
+
 	it('draws nothing on a balanced transaction in a ledger file', () => {
 		const controller = new BalanceInlayController({ settings: { inlayHints: true, entryLedger: '' } });
 		const balanced = ['2026-01-01 * "Ok"', '  Assets:A  10.00 USD', '  Assets:B  -10.00 USD'].join('\n');

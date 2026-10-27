@@ -11,7 +11,7 @@
  * are ordinary prose elsewhere (headings, "Meeting with The", "10 US dollars").
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { editorLineIsLedger } from './fences';
+import { editorLedger } from './fences';
 import { COMMODITY_PREFIX_RE, LINK_PREFIX_RE, NARRATION_PREFIX_RE, TAG_PREFIX_RE } from './token-index';
 import type { CompletionIndex } from './suggest';
 import { IndexSuggest } from './suggest';
@@ -61,7 +61,7 @@ export class TagSuggest extends IndexSuggest {
 		if (match[1] === '' && new RegExp(`^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \\t]*#$`).test(prefix)) return null;
 		// The context scan reads the whole buffer, so it runs only for a line
 		// that has already matched its trigger shape.
-		if (inStringOrComment(prefix) || !editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return this.triggerInfo(cursor, `#${match[1]}`);
 	}
 }
@@ -74,7 +74,7 @@ export class LinkSuggest extends IndexSuggest {
 		const prefix = line.slice(0, cursor.ch);
 		const match = LINK_PREFIX_RE.exec(prefix);
 		if (!match) return null;
-		if (inStringOrComment(prefix) || !editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return this.triggerInfo(cursor, `^${match[1]}`);
 	}
 }
@@ -92,7 +92,7 @@ export class CommoditySuggest extends IndexSuggest {
 		const prefix = line.slice(0, cursor.ch);
 		const match = COMMODITY_PREFIX_RE.exec(prefix);
 		if (!match) return null;
-		if (inStringOrComment(prefix) || !editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return this.triggerInfo(cursor, match[1]);
 	}
 }
@@ -127,7 +127,7 @@ export class NarrationSuggest extends IndexSuggest {
 		if (after !== '' && after !== '"') return null;
 		const match = NARRATION_PREFIX_RE.exec(line.slice(0, cursor.ch));
 		if (!match) return null;
-		if (!editorLineIsLedger(editor, cursor.line, file)) return null;
+		if (!editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
 		return this.triggerInfo(cursor, match[1]);
 	}
 

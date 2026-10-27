@@ -445,14 +445,15 @@ describe('includeLinkMarks', () => {
 		expect(marks).toEqual([{ from: fenceLine.from + 8, to: fenceLine.from + 16 }]);
 	});
 
-	it('marks nothing when the editor has no file', () => {
-		const text = 'include "a.bean"';
-		expect(includeLinkMarks(docOf(text), text, null)).toEqual([]);
-	});
-
-	it('marks nothing in a non-ledger, non-markdown file', () => {
-		const text = 'include "a.bean"';
-		expect(includeLinkMarks(docOf(text), text, { path: 'notes/readme.txt', extension: 'txt' })).toEqual([]);
+	it('marks fence includes in untitled and .txt buffers, not bare include lines', () => {
+		const bare = 'include "a.bean"';
+		expect(includeLinkMarks(docOf(bare), bare, null)).toEqual([]);
+		expect(includeLinkMarks(docOf(bare), bare, { path: 'notes/readme.txt', extension: 'txt' })).toEqual([]);
+		const fenced = '```beancount\ninclude "a.bean"\n```';
+		const doc = docOf(fenced);
+		const mark = { from: doc.line(2).from + 8, to: doc.line(2).from + 16 };
+		expect(includeLinkMarks(doc, fenced, null)).toEqual([mark]);
+		expect(includeLinkMarks(doc, fenced, { path: 'notes/readme.txt', extension: 'txt' })).toEqual([mark]);
 	});
 });
 
@@ -614,7 +615,7 @@ describe('includeLinkMouseDown', () => {
 		expect(notices).toEqual([]);
 	});
 
-	it('ignores an include in a text file and in prose beside a fence', () => {
+	it('ignores a bare include in a text file and in prose beside a fence', () => {
 		const txt = click('include "a.bean"', { path: 'notes/readme.txt', extension: 'txt' }, 8, {
 			meta: true,
 			ctrl: true,
@@ -624,6 +625,11 @@ describe('includeLinkMouseDown', () => {
 		const prose = click(mixed, { path: 'notes/budget.md', extension: 'md' }, 8, { meta: true, ctrl: true });
 		expect(prose.handled).toBe(false);
 		expect(prose.opened).toEqual([]);
+		const fenced = '```beancount\ninclude "a.bean"\n```';
+		const quote = docOf(fenced).line(2).from + 8;
+		const inside = click(fenced, { path: 'notes/readme.txt', extension: 'txt' }, quote, { meta: true, ctrl: true });
+		expect(inside.handled).toBe(true);
+		expect(inside.opened).toEqual(['tab:notes/a.bean']);
 	});
 
 	it('resolves a fence include against the note and notices a multi-match glob', () => {
@@ -799,6 +805,19 @@ describe('includeLinksExtension', () => {
 		file = { path: 'notes/readme.txt', extension: 'txt' };
 		plugin.update({ docChanged: false, state: view.state, view });
 		expect(plugin.decorations).toEqual([]);
+
+		text = '```beancount\ninclude "other.bean"\n```';
+		plugin.update({ docChanged: true, state: view.state, view });
+		expect(plugin.decorations).toEqual([
+			expect.objectContaining({ from: docOf(text).line(2).from + 8, to: docOf(text).line(2).from + 20 }),
+		]);
+
+		file = null;
+		plugin.update({ docChanged: false, state: view.state, view });
+		expect(plugin.decorations).toEqual([
+			expect.objectContaining({ from: docOf(text).line(2).from + 8, to: docOf(text).line(2).from + 20 }),
+		]);
+
 
 		file = { path: 'ledger/main.bean', extension: 'bean' };
 		text = 'include "a.bean"';

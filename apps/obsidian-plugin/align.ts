@@ -36,7 +36,7 @@
 
  */
 
-import { extractBeancountFences } from './fences';
+import { ledgerDoc } from './fences';
 
 /** Minimum whitespace between the account (and its flag) and the amount. */
 const MIN_GAP = 1;
@@ -410,10 +410,10 @@ export function alignText(text: string, targetColumn?: number): string {
 export function alignmentRanges(lines: readonly string[], ledger: boolean): LineRange[] {
 	if (ledger) return lines.length === 0 ? [] : [{ from: 0, to: lines.length - 1 }];
 	const ranges: LineRange[] = [];
-	for (const fence of extractBeancountFences(lines.join('\n'))) {
-		if (fence.lines.length === 0) continue;
-		const from = fence.startLine;
-		const to = Math.min(lines.length - 1, from + fence.lines.length - 1);
+	for (const region of ledgerDoc('fenced', lines.join('\n')).regions) {
+		if (region.lines.length === 0) continue;
+		const from = region.hostStartLine;
+		const to = Math.min(lines.length - 1, from + region.lines.length - 1);
 		if (from >= 0 && from <= to) ranges.push({ from, to });
 	}
 	return ranges;

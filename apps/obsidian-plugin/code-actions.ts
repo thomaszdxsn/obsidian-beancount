@@ -14,6 +14,8 @@ import { blockRangeAt } from './align';
 import { clipText } from './bean-check';
 import type { LineDiagnostic } from './bean-check';
 import type { VaultCache } from './vault-index';
+import { ledgerKindFromPath } from './fences';
+import type { LedgerRegion } from './fences';
 
 /** Tooltip on a `!` transaction that bean-check does not itself report. */
 export const FLAGGED_MESSAGE = 'Transaction is flagged incomplete';
@@ -106,14 +108,12 @@ export function flagDiagnostics(text: string): LineDiagnostic[] {
 	return diagnostics;
 }
 
-/** Flag markers whose lines are host lines of `fences` (markdown notes). */
-export function flagDiagnosticsFromFences(
-	fences: readonly { startLine: number; lines: readonly string[] }[]
-): LineDiagnostic[] {
+/** Flag markers whose lines are host lines of ledger regions. */
+export function flagDiagnosticsFromRegions(regions: readonly LedgerRegion[]): LineDiagnostic[] {
 	const diagnostics: LineDiagnostic[] = [];
-	for (const fence of fences) {
-		for (const diagnostic of flagDiagnostics(fence.lines.join('\n'))) {
-			diagnostics.push({ line: fence.startLine + diagnostic.line, message: diagnostic.message });
+	for (const region of regions) {
+		for (const diagnostic of flagDiagnostics(region.lines.join('\n'))) {
+			diagnostics.push({ line: region.hostStartLine + diagnostic.line, message: diagnostic.message });
 		}
 	}
 	return diagnostics;
@@ -401,7 +401,7 @@ export class OpenFileIndex implements VaultCache {
 		let bestLedger = false;
 		for (const [path, accounts] of this.accountsByPath) {
 			const count = accounts.size;
-			const ledger = path.endsWith('.bean') || path.endsWith('.beancount');
+			const ledger = ledgerKindFromPath(path) === 'ledger-file';
 			if (best === null || (ledger && !bestLedger) || (ledger === bestLedger && count > bestCount)) {
 				best = path;
 				bestCount = count;

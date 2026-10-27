@@ -236,6 +236,11 @@ describe('BeancountBalancesView', () => {
 		expect(shownIn(view)).toContain('1 USD');
 		expect(shownIn(view)).not.toContain('8 USD');
 
+		box.file = { path: 'notes.txt', extension: 'txt' };
+		events[0].callback();
+		await Promise.resolve();
+		expect(shownIn(view)).toEqual(['Open a Beancount file to see account balances.']);
+
 		box.file = { path: 'pic.png', extension: 'png' };
 		events[0].callback();
 		await Promise.resolve();
