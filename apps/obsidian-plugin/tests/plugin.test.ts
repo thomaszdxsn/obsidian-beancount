@@ -1855,7 +1855,7 @@ describe('BeancountPlugin', () => {
 		expect(notices[0]).toContain('pip install beancount');
 		expect(editor.cm.dispatched).toEqual([]);
 		expect(await problemTexts(plugin)).toContain(
-			`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
+			`ledger.bean  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
 		);
 	});
 
@@ -2027,7 +2027,7 @@ describe('BeancountPlugin', () => {
 		expect(await problemTexts(plugin)).toEqual(
 			expect.arrayContaining([
 				'ledger.bean:1  oops',
-				`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}failed: Traceback (most recent call last):`,
+				`ledger.bean  ${VALIDATION_FAILURE_PREFIX}failed: Traceback (most recent call last):`,
 			]),
 		);
 
@@ -2055,7 +2055,34 @@ describe('BeancountPlugin', () => {
 
 		expect(notices).toEqual(['bean-check timed out']);
 		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
-		expect(await problemTexts(plugin)).toContain(`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}timed out`);
+		expect(await problemTexts(plugin)).toContain(`ledger.bean  ${VALIDATION_FAILURE_PREFIX}timed out`);
+	});
+
+	it('does not re-arm another target’s notice when a quiet run finishes', async () => {
+		const vault = new FakeVault();
+		const ledger = vault.write('ledger.bean', 'include "gone.bean"\n');
+		const note = vault.write('note.md', '```beancount\noption "title" "ok"\n```\n');
+		const { plugin } = await loadPlugin(vault);
+		plugin.beanCheckRunner = async (_command, args) => {
+			beanCheckRuns.push({ command: 'bean-check', args: [...args] });
+			if (String(args[0]).endsWith('fences.bean')) return { stderr: '', missing: false };
+			return {
+				stderr: '<load>:0:       File "/vault/gone.bean" does not exist\n',
+				missing: false,
+			};
+		};
+
+		await vault.emit('modify', ledger);
+		await delay(600);
+		expect(notices).toEqual(['bean-check: <load>: File "/vault/gone.bean" does not exist']);
+
+		await vault.emit('modify', note);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+
+		await vault.emit('modify', ledger);
+		await delay(600);
+		expect(notices).toHaveLength(1);
 	});
 
 	it('notices a missing bean-check again after a quiet run', async () => {
@@ -2080,7 +2107,7 @@ describe('BeancountPlugin', () => {
 		await delay(600);
 		expect(notices).toHaveLength(2);
 		expect(await problemTexts(plugin)).toContain(
-			`ledger.bean:0  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
+			`ledger.bean  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
 		);
 	});
 
@@ -2118,7 +2145,7 @@ describe('BeancountPlugin', () => {
 			expect(beanCheckRuns).toEqual([]);
 			expect(notices).toEqual(['bean-check could not write the temporary ledger']);
 			expect(await problemTexts(plugin)).toContain(
-				`note.md:0  ${VALIDATION_FAILURE_PREFIX}could not write the temporary ledger`,
+				`note.md  ${VALIDATION_FAILURE_PREFIX}could not write the temporary ledger`,
 			);
 		} finally {
 			if (previous === undefined) delete process.env.TMPDIR;

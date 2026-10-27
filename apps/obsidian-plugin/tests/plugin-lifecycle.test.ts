@@ -788,6 +788,12 @@ describe('stale validation', () => {
 		await delay(600);
 		expect(runs).toBe(2);
 		expect(published(editor)).toEqual([flag]);
+
+		editor.lines[0] = '2026-10-01 * "Cafe"';
+		await vault.emit('modify', journal);
+		await delay(600);
+		expect(runs).toBe(3);
+		expect(published(editor)).toEqual([]);
 	});
 });
 

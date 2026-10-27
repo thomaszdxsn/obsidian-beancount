@@ -113,9 +113,9 @@ export function problemCountLabel(count: number): string {
 	return count === 1 ? '1 problem' : `${count} problems`;
 }
 
-/** `file:line  message` — two spaces, 1-based line, as the Problems view prints a row. */
+/** `file:line  message` — two spaces, 1-based line. Line 0 (`<load>`, run failures) omits `:0`. */
 export function problemRowText(row: Pick<ProblemRow, 'file' | 'line' | 'message'>): string {
-	return `${row.file}:${row.line}  ${row.message}`;
+	return row.line === 0 ? `${row.file}  ${row.message}` : `${row.file}:${row.line}  ${row.message}`;
 }
 
 /** Prefix on a Problems row that is a run failure, not a bean-check error. */

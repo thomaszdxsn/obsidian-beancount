@@ -344,6 +344,16 @@ class FakeMount implements ProblemsMount {
 	}
 }
 
+describe('problemRowText', () => {
+	it('omits the line number when it is 0', () => {
+		expect(problemRowText(row('<load>', 0, 'does not exist'))).toBe('<load>  does not exist');
+		expect(problemRowText(row('ledger.bean', 0, `${VALIDATION_FAILURE_PREFIX}timed out`))).toBe(
+			`ledger.bean  ${VALIDATION_FAILURE_PREFIX}timed out`,
+		);
+		expect(problemRowText(row('child.bean', 2, 'unknown account'))).toBe('child.bean:2  unknown account');
+	});
+});
+
 describe('drawProblems', () => {
 	it('shows the count and leaves unmapped rows unclickable', () => {
 		const mount = new FakeMount();
@@ -379,6 +389,32 @@ describe('drawProblems', () => {
 		expect(mount.children[2].clicks).toEqual([]);
 		mount.children[4].clicks[0]();
 		expect(opened).toEqual(['child.bean']);
+	});
+
+	it('does not make a line-0 row clickable even when it names a vault file', () => {
+		const mount = new FakeMount();
+		drawProblems(
+			mount,
+			[
+				{
+					file: 'ledger.bean',
+					vaultPath: 'ledger.bean',
+					rows: [row('ledger.bean', 0, `${VALIDATION_FAILURE_PREFIX}timed out`, 'ledger.bean')],
+				},
+			],
+			() => {
+				throw new Error('opened');
+			},
+		);
+		expect(mount.children.map((child) => ({ className: child.className, text: child.text, clicks: child.clicks.length }))).toEqual([
+			{ className: 'beancount-problems-header', text: '1 problem', clicks: 0 },
+			{ className: 'beancount-problems-file', text: 'ledger.bean', clicks: 0 },
+			{
+				className: 'beancount-problems-row beancount-problems-unmapped',
+				text: `ledger.bean  ${VALIDATION_FAILURE_PREFIX}timed out`,
+				clicks: 0,
+			},
+		]);
 	});
 
 	it('uses a singular header and an empty sentence', () => {
@@ -620,9 +656,9 @@ describe('open-triggered validation', () => {
 		const texts = children.map((child) => child.text);
 		expect(created.getViewType()).toBe(VIEW_TYPE_PROBLEMS);
 		expect(texts[0]).toBe('2 problems');
-		expect(texts).toContain('<load>:0  File "/vault/gone.bean" does not exist');
+		expect(texts).toContain('<load>  File "/vault/gone.bean" does not exist');
 		expect(texts).toContain("child.bean:2  Invalid reference to unknown account 'Assets:Cash'");
-		const unmapped = children.find((child) => child.text.startsWith('<load>:'));
+		const unmapped = children.find((child) => child.text.startsWith('<load>  '));
 		expect(unmapped?.clicks).toEqual([]);
 		expect(unmapped?.className).toContain('beancount-problems-unmapped');
 	});

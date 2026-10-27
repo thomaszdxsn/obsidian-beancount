@@ -1,9 +1,9 @@
 /**
  * Sidebar list of the latest bean-check report. Obsidian's editor markers
  * cannot show an error in a file that is not open; this view can. Rows are
- * `file:line  message`, grouped by file, with the count in the header.
- * Clicking a vault row opens that file and puts the cursor on the line.
- * `<load>` and outside-vault paths stay visible and do not click.
+ * `file:line  message` (line 0 omits `:0`), grouped by file, with the count
+ * in the header. Clicking a vault row on a real line opens that file.
+ * Line 0, `<load>`, and outside-vault paths stay visible and do not click.
  */
 import { ItemView } from 'obsidian';
 import type { App, MarkdownView, TFile, WorkspaceLeaf } from 'obsidian';
@@ -37,7 +37,7 @@ export function drawProblems(
 	for (const group of groups) {
 		mount.createDiv({ cls: 'beancount-problems-file', text: group.file });
 		for (const row of group.rows) {
-			const clickable = Boolean(row.vaultPath);
+			const clickable = Boolean(row.vaultPath) && row.line > 0;
 			const el = mount.createDiv({
 				cls: clickable
 					? 'beancount-problems-row'
@@ -135,3 +135,4 @@ export class BeancountProblemsView extends ItemView {
 		});
 	}
 }
+

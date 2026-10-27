@@ -444,10 +444,12 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	/** bean-check path the notice dedupe was last reset under. */
 	private problemsBeanCheckPath = '';
 	/**
-	 * Notice texts shown since the last quiet run (or a settings reset).
-	 * Autosave must not stack the same toast; a later clean run may show it again.
+	 * Notice texts shown per run target since that target's last quiet run.
+	 * Autosave must not stack the same toast; another target's quiet run
+	 * must not re-arm this one. A bean-check-path or entry-ledger change
+	 * clears every target.
 	 */
-	private readonly noticesShown = new Set<string>();
+	private readonly noticesShown = new Map<string, Set<string>>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
 	private readonly balanceInlays = new BalanceInlayController(this);
 	/** Transaction-flag markers; refreshed when flagWarnings change. */
@@ -1053,9 +1055,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		for (const path of owned) {
 			const vaultFile = filesByPath.get(path);
 			if (!vaultFile) continue;
+			let leftFlags = false;
 			for (const editor of openEditorsFor(this.app, vaultFile)) {
-				setEditorLineDiagnostics(editor, flagsFor(path, editor.getValue()));
+				const flags = flagsFor(path, editor.getValue());
+				if (flags.length > 0) leftFlags = true;
+				setEditorLineDiagnostics(editor, flags);
 			}
+			if (leftFlags) this.extraFlagged.add(path);
+			else this.extraFlagged.delete(path);
 		}
 	}
 
@@ -1118,7 +1125,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 				fences = extractBeancountFences(text);
 				if (fences.length === 0) {
-					if (!this.markErrors(target, [], root)) this.noticesShown.clear();
+					if (!this.markErrors(target, [], root)) this.noticesShown.delete(target);
 					return;
 				}
 			}
@@ -1219,7 +1226,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 						return [{ ...error, file: root + file.path, line }];
 					});
 				}
-				if (!this.markErrors(target, errors, root)) this.noticesShown.clear();
+				if (!this.markErrors(target, errors, root)) this.noticesShown.delete(target);
 			} finally {
 				cleanup?.();
 			}
@@ -1277,7 +1284,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// must not pass for a clean run, so the first of it becomes a notice.
 		if (unmapped.length > 0) {
 			this.notify(
-				`bean-check: ${clipText(unmapped[0].file)}: ${clipText(unmapped[0].message)}`
+				target,
+				`bean-check: ${clipText(unmapped[0].file)}: ${clipText(unmapped[0].message)}`,
 			);
 		}
 		const reported = new Set(errorsByPath.keys());
@@ -1334,17 +1342,19 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private recordRunFailure(target: string, notice: string, reason: string): void {
 		if (!this.validateLive) return;
 		this.problems.fail(target, reason);
-		this.notify(notice);
+		this.notify(target, notice);
 	}
 
 	/**
-	 * Show a notice once per quiet-run window per text: with autosave, the
+	 * Show a notice once per target per quiet-run window: with autosave, the
 	 * same problem re-arms every few seconds and must not stack toasts.
 	 */
-	private notify(text: string): void {
+	private notify(target: string, text: string): void {
 		if (!this.validateLive) return;
-		if (this.noticesShown.has(text)) return;
-		this.noticesShown.add(text);
+		const shown = this.noticesShown.get(target) ?? new Set<string>();
+		if (shown.has(text)) return;
+		shown.add(text);
+		this.noticesShown.set(target, shown);
 		new Notice(text);
 	}
 
