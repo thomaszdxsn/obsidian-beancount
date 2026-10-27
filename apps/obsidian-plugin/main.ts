@@ -12,6 +12,7 @@ import {
 	alignText,
 	blockRangeAt,
 	computeAlignment,
+	inRanges,
 	intersectRange,
 } from './align';
 import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
@@ -251,11 +252,10 @@ function editorLines(editor: Editor): string[] {
 
 /**
  * What the command aligns: the selected lines when there is a selection,
- * otherwise the transaction block the cursor sits in. A non-ledger buffer
- * only contributes fence-body ranges, and a block never crosses a fence.
+ * otherwise the transaction block the cursor sits in — both cut to
+ * `bodies`, the lines alignment may touch, so a block never crosses a fence.
  */
-function commandScope(editor: Editor, lines: readonly string[], ledger: boolean): LineRange[] {
-	const bodies = alignmentRanges(lines, ledger);
+function commandScope(editor: Editor, lines: readonly string[], bodies: readonly LineRange[]): LineRange[] {
 	if (!editor.somethingSelected()) {
 		const line = editor.getCursor().line;
 		const block = blockRangeAt(lines, line);
@@ -289,14 +289,20 @@ function commandScope(editor: Editor, lines: readonly string[], ledger: boolean)
 /**
  * Rewrite the gaps in `scope` (the whole buffer when omitted) so the decimal
  * points of each transaction block line up. Several ranges are one
- * transaction so undo is still one step.
+ * transaction so undo is still one step. `ledgerLine` marks a note's fence
+ * lines; without it the whole buffer is ledger text.
  */
-function alignInEditor(editor: Editor, scope?: readonly LineRange[], targetColumn?: number): void {
+function alignInEditor(
+	editor: Editor,
+	scope?: readonly LineRange[],
+	targetColumn?: number,
+	ledgerLine?: (line: number) => boolean
+): void {
 	const lines = editorLines(editor);
 	const edits =
 		scope === undefined
-			? computeAlignment(lines, undefined, targetColumn)
-			: scope.flatMap((range) => computeAlignment(lines, range, targetColumn));
+			? computeAlignment(lines, undefined, targetColumn, ledgerLine)
+			: scope.flatMap((range) => computeAlignment(lines, range, targetColumn, ledgerLine));
 	if (edits.length === 0) return;
 	const changes = edits.map((edit) => ({
 		from: { line: edit.line, ch: edit.from },
@@ -332,9 +338,11 @@ function alignCommand(
 	separatorColumn: number
 ): void {
 	const lines = editorLines(editor);
-	const scopes = commandScope(editor, lines, file !== null && isLedgerFile(file));
+	const ledger = file !== null && isLedgerFile(file);
+	const bodies = alignmentRanges(lines, ledger);
+	const scopes = commandScope(editor, lines, bodies);
 	if (scopes.length === 0) return;
-	alignInEditor(editor, scopes, alignmentTarget(separatorColumn));
+	alignInEditor(editor, scopes, alignmentTarget(separatorColumn), ledger ? undefined : inRanges(bodies));
 }
 
 /** On-save: a ledger file is the whole buffer; anything else is fence bodies. */
@@ -343,10 +351,12 @@ function alignOpenEditor(
 	file: { path: string; extension: string },
 	targetColumn: number
 ): void {
-	const scopes = alignmentRanges(editorLines(editor), isLedgerFile(file));
+	const ledger = isLedgerFile(file);
+	const scopes = alignmentRanges(editorLines(editor), ledger);
 	if (scopes.length === 0) return;
-	alignInEditor(editor, scopes, targetColumn);
+	alignInEditor(editor, scopes, targetColumn, ledger ? undefined : inRanges(scopes));
 }
+
 /**
  * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger. Any other
  * file, including an untitled buffer, formats each ```beancount / ```bean

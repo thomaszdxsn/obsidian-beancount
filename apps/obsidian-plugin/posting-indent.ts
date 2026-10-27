@@ -20,7 +20,7 @@ import type { EditorView } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { blockRangeInLedger } from './align';
 import { DATED_ENTRY_RE } from './beancount-mode';
-import { docFences, isLedgerTextLine } from './fences';
+import { docFences, ledgerLinesOf } from './fences';
 
 /** The text Enter inserts where an entry continues: newline plus its indent. */
 const ENTRY_INDENT = '\n  ';
@@ -128,12 +128,11 @@ export function postingIndentExtension(suggests: readonly SuggestState[]): Exten
 		if (suggests.some((suggest) => suggest.context !== null)) return false;
 		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
 		const file = view.state.field(editorInfoField, false)?.file;
-		const fences = docFences(view.state.doc).fences;
-		const ledgerLine = (lineIndex: number) => isLedgerTextLine(file, lineIndex, fences);
+		// A ledger file needs no fence scan: every line is ledger text.
+		const ledgerLine = ledgerLinesOf(file, () => docFences(view.state.doc).fences);
 		if (
-			!carets.every((caret) =>
-				ledgerLine(view.state.doc.lineAt(Math.min(caret.anchor, caret.head)).number - 1)
-			)
+			ledgerLine &&
+			!carets.every((caret) => ledgerLine(view.state.doc.lineAt(Math.min(caret.anchor, caret.head)).number - 1))
 		) {
 			return false;
 		}

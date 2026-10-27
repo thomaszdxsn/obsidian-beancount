@@ -784,6 +784,17 @@ describe('BeancountPlugin', () => {
 		expect(editor.lines).toEqual(lines);
 	});
 
+	it('aligns a fence below prose holding an unmatched quote', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = ['a 27" monitor', '```beancount', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD', '```'];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 3, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines.slice(2, 4)).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
+	});
+
 	it('does not let a fence-body block extend into prose', async () => {
 		const { plugin } = await loadPlugin();
 		const lines = [

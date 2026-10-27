@@ -366,6 +366,17 @@ describe('alignFencedDocument', () => {
 		expect(alignFencedDocument(aligned, 49)).toBe(aligned);
 	});
 
+	it('aligns a fence below prose holding an unmatched quote', () => {
+		// The `"` of `27"` opens no string for the fence: each fence starts
+		// outside any string, as Format ledger already treats it.
+		const note = ['a 27" monitor', '```beancount', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD', '```', ''].join(
+			'\n'
+		);
+		expect(alignFencedDocument(note)).toBe(
+			['a 27" monitor', '```beancount', '  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD', '```', ''].join('\n')
+		);
+	});
+
 	it('aligns an unclosed fence through EOF the way a closed body would', () => {
 		expect(alignFencedDocument('intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n')).toBe(
 			'intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n'

@@ -10,7 +10,7 @@ import {
 	docFences,
 	editorLineIsLedger,
 	extractBeancountFences,
-	isLedgerTextLine,
+	ledgerLinesOf,
 	isSafeIncludePath,
 	ledgerSource,
 } from '../fences';
@@ -226,14 +226,19 @@ describe('docFences', () => {
 
 	it('answers whether a line is ledger text for a file or editor', () => {
 		const fences = extractBeancountFences('# n\n```bean\n  Assets:Cash\n```\nprose');
-		expect(isLedgerTextLine({ extension: 'bean' }, 0, [])).toBe(true);
-		expect(isLedgerTextLine({ extension: 'md' }, 0, fences)).toBe(false);
-		expect(isLedgerTextLine({ extension: 'md' }, 2, fences)).toBe(true);
-		expect(isLedgerTextLine(null, 2, fences)).toBe(true);
+		expect(ledgerLinesOf({ extension: 'bean' }, () => fences)).toBeUndefined();
+		const note = ledgerLinesOf({ extension: 'md' }, () => fences);
+		expect(note?.(0)).toBe(false);
+		expect(note?.(2)).toBe(true);
+		expect(ledgerLinesOf(null, () => fences)?.(2)).toBe(true);
 		const editor = { getValue: () => '# n\n```beancount\nopen\n```' };
 		expect(editorLineIsLedger(editor, 2, { extension: 'md' })).toBe(true);
 		expect(editorLineIsLedger(editor, 0, { extension: 'md' })).toBe(false);
 		expect(editorLineIsLedger(editor, 0, { extension: 'bean' })).toBe(true);
+		// An editor with a live CodeMirror document answers from that document.
+		const live = { getValue: () => 'prose only', cm: { state: { doc: cmDoc(['# n', '```bean', 'open', '```']) } } };
+		expect(editorLineIsLedger(live, 2, { extension: 'md' })).toBe(true);
+		expect(editorLineIsLedger(live, 0, { extension: 'md' })).toBe(false);
 	});
 
 	it('strips the opener indent in the masked body, not only in extractBeancountFences', () => {

@@ -281,4 +281,13 @@ describe('instantAlignmentExtension', () => {
 		expect(next.split('\n')[1]).toBe('  Assets:Cash 34 USD');
 		expect(next.split('\n')[3]).toContain('12.');
 	});
+
+	it('aligns in a fence below prose holding an unmatched quote', () => {
+		const text = ['a 27" monitor', '```beancount', '  Assets:Cash 34.00 USD', '  Expenses:Food 12', '```'].join('\n');
+		const caret = text.indexOf('12') + 2;
+		const view = attachFile(createView(text, [{ anchor: caret }]), NOTE_FILE);
+		expect(runOf(host)(view as unknown as EditorView)).toBe(true);
+		const next = apply(text, view.dispatched[0]).split('\n');
+		expect(next[2].indexOf('.')).toBe(next[3].indexOf('.'));
+	});
 });

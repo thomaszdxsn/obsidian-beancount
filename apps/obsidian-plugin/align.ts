@@ -241,14 +241,20 @@ function blockRole(line: string): BlockRole {
  * column 0 opens a block of its own; indented lines join the open one, or
  * open a run of loose postings when none is open. Ids are only compared, so
  * a scan starting mid-file groups the lines of its range exactly as a scan
- * from line 0 would.
+ * from line 0 would. With `ledgerLine`, a line outside ledger text (note
+ * prose, a fence marker) closes the block like a blank line.
  */
-function scanBlocks(lines: readonly string[], from = 0, to = lines.length - 1): number[] {
+function scanBlocks(
+	lines: readonly string[],
+	from = 0,
+	to = lines.length - 1,
+	ledgerLine?: (line: number) => boolean
+): number[] {
 	const blockOfLine: number[] = [];
 	let block = -1;
 	let next = 0;
 	for (let i = Math.max(0, from); i <= to && i < lines.length; i += 1) {
-		const role = blockRole(lines[i]);
+		const role = ledgerLine !== undefined && !ledgerLine(i) ? BlockRole.Close : blockRole(lines[i]);
 		if (role === BlockRole.Close) {
 			block = -1;
 		} else if (role === BlockRole.Open || block === -1) {
@@ -280,23 +286,29 @@ export function blockRangeAt(lines: readonly string[], line: number): LineRange 
 }
 
 /**
- * `blockRangeAt` clipped to the contiguous run of ledger lines around
- * `line`, so a header above a fence opener cannot pull a fence body into
- * its entry and an entry that started outside cannot claim fence lines.
- * Without `ledgerLine`, the range is the same as `blockRangeAt`.
+ * `blockRangeAt` cut down to the ledger lines around `line`, so a header
+ * above a fence opener cannot pull a fence body into its entry and an entry
+ * that started outside cannot claim fence lines. Only the block's own lines
+ * are visited. Without `ledgerLine` (a ledger file), the range is the same
+ * as `blockRangeAt`.
  */
 export function blockRangeInLedger(
 	lines: readonly string[],
 	line: number,
 	ledgerLine: ((lineIndex: number) => boolean) | undefined
 ): LineRange {
-	if (ledgerLine === undefined) return blockRangeAt(lines, line);
-	let lo = line;
-	while (lo > 0 && ledgerLine(lo - 1)) lo -= 1;
-	let hi = line;
-	while (hi + 1 < lines.length && ledgerLine(hi + 1)) hi += 1;
-	const local = blockRangeAt(lines.slice(lo, hi + 1), line - lo);
-	return { from: lo + local.from, to: lo + local.to };
+	const block = blockRangeAt(lines, line);
+	if (ledgerLine === undefined) return block;
+	let from = line;
+	while (from > block.from && ledgerLine(from - 1)) from -= 1;
+	let to = line;
+	while (to < block.to && ledgerLine(to + 1)) to += 1;
+	return { from, to };
+}
+
+/** Whether a line falls inside one of `ranges`: the ledger lines of a note. */
+export function inRanges(ranges: readonly LineRange[]): (line: number) => boolean {
+	return (line) => ranges.some((range) => line >= range.from && line <= range.to);
 }
 
 /**
@@ -306,19 +318,27 @@ export function blockRangeInLedger(
  * 0-based display width at which the decimal point should sit, so a
  * 1-based separator column of 50 is `49`. Lines that are not postings are
  * ignored; a line whose gap already lands on its block's column produces no
- * edit, so the result of one pass is a fixed point of the next.
+ * edit, so the result of one pass is a fixed point of the next. With
+ * `ledgerLine` (a note), only ledger lines can be postings, and each run of
+ * them starts outside any string: a `"` in prose above a fence does not
+ * swallow the fence.
  */
 export function computeAlignment(
 	lines: readonly string[],
 	range?: LineRange,
-	targetColumn?: number
+	targetColumn?: number,
+	ledgerLine?: (line: number) => boolean
 ): LineEdit[] {
-	const blockOfLine = range ? scanBlocks(lines, range.from, range.to) : scanBlocks(lines);
+	const blockOfLine = scanBlocks(lines, range?.from, range?.to, ledgerLine);
 	const postings: Posting[] = [];
 	let inString = false;
 	// String state is carried from line 0; past the range nothing reads it.
 	const last = range ? Math.min(lines.length - 1, range.to) : lines.length - 1;
 	for (let line = 0; line <= last; line += 1) {
+		if (ledgerLine !== undefined && !ledgerLine(line)) {
+			inString = false;
+			continue;
+		}
 		const continuation = inString;
 		inString = endsInString(lines[line], inString);
 		if (range && line < range.from) continue;
@@ -415,20 +435,16 @@ export function alignFencedDocument(text: string, targetColumn?: number): string
 	const lines = text.split('\n');
 	const ranges = alignmentRanges(lines, false);
 	if (ranges.length === 0) return text;
-	let changed = false;
-	for (const range of ranges) {
-		if (applyAlignment(lines, range, targetColumn)) changed = true;
-	}
-	return changed ? lines.join('\n') : text;
+	return applyAlignment(lines, targetColumn, inRanges(ranges)) ? lines.join('\n') : text;
 }
 
 /** `computeAlignment` applied in place to every line; false when nothing changed. */
 export function alignLines(lines: string[], targetColumn?: number): boolean {
-	return applyAlignment(lines, undefined, targetColumn);
+	return applyAlignment(lines, targetColumn);
 }
 
-function applyAlignment(lines: string[], range?: LineRange, targetColumn?: number): boolean {
-	const edits = computeAlignment(lines, range, targetColumn);
+function applyAlignment(lines: string[], targetColumn?: number, ledgerLine?: (line: number) => boolean): boolean {
+	const edits = computeAlignment(lines, undefined, targetColumn, ledgerLine);
 	for (const edit of edits) {
 		const line = lines[edit.line];
 		lines[edit.line] = line.slice(0, edit.from) + edit.text + line.slice(edit.to);
