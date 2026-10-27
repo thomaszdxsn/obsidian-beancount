@@ -115,9 +115,8 @@ async function loadPlugin(
 		opened.push(url);
 	};
 	plugin.favaReadyProbe = async () => 200;
-	plugin.favaReadyDelay = async () => {};
+	plugin.favaDelay = async () => {};
 	plugin.favaCloseTimeoutMs = 0;
-	plugin.favaCloseDelay = async () => {};
 	plugin.loadData = async () => loadedData;
 	beforeLoad?.(plugin);
 	await plugin.onload();
@@ -252,10 +251,10 @@ describe('waitForFavaReady', () => {
 				return 403;
 			},
 			{
-				delay: async () => {},
+				// Never resolves: only the child's 'close' may end the wait.
+				delay: () => new Promise(() => {}),
 				timeoutMs: 30_000,
 				closeTimeoutMs: 30_000,
-				closeDelay: () => new Promise(() => {}),
 			}
 		);
 		await Promise.resolve();
@@ -470,7 +469,7 @@ describe('Start Fava / Stop Fava', () => {
 		nextChild = child;
 		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
 		plugin.favaCloseTimeoutMs = 30_000;
-		plugin.favaCloseDelay = () => new Promise(() => {});
+		plugin.favaDelay = () => new Promise(() => {});
 		plugin.favaReadyProbe = async () => {
 			fakeChild(child).emitExit(1);
 			return 403;

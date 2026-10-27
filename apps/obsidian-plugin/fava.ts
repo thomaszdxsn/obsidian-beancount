@@ -157,7 +157,6 @@ export async function waitForFavaReady(
 		delay?: (ms: number) => Promise<void>;
 		now?: () => number;
 		closeTimeoutMs?: number;
-		closeDelay?: (ms: number) => Promise<void>;
 	} = {}
 ): Promise<FavaReadyOutcome> {
 	const timeoutMs = options.timeoutMs ?? FAVA_READY_TIMEOUT_MS;
@@ -179,7 +178,7 @@ export async function waitForFavaReady(
 		await waitForChildClose(child, {
 			alreadyClosed: closed,
 			timeoutMs: options.closeTimeoutMs ?? FAVA_CLOSE_TIMEOUT_MS,
-			delay: options.closeDelay ?? options.delay ?? defaultDelay,
+			delay,
 		});
 		return 'exited';
 	};

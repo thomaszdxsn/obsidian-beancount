@@ -32,6 +32,9 @@ UI/UX fixes from the architecture review (#75).
   posting quick fix and the file chosen for a new `open` directive ignore
   text outside a note's fences, as account, commodity, tag and link
   completion already did.
+- In a note, a `"` in prose above a fence (`a 27" monitor`) no longer stops
+  **Align decimal points**, **Align amounts on save** or typing `.` from
+  aligning the postings in that fence.
 - Quick fixes understand account names with non-ASCII segments such as
   `Expenses:餐饮`: the file holding their `open` directives is found, the
   balancing posting is inferred from their history, and **Open account**
