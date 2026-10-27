@@ -18,12 +18,27 @@ import type {
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
+import { alignLines, alignText } from '../align';
 import { FLAG_OKAY_TITLE, FLAGGED_MESSAGE, PAD_TRANSACTION_TITLE, openAccountTitle } from '../code-actions';
 import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+
+const LEDGER_CTX = { file: { extension: 'bean' } };
+const NOTE_CTX = { file: { extension: 'md' } };
+
+/** Command / on-save output at the default separator column. */
+function alignedLines(lines: readonly string[], separatorColumn = 50): string[] {
+	const copy = [...lines];
+	alignLines(copy, Math.max(0, separatorColumn - 1));
+	return copy;
+}
+
+function alignedText(text: string, separatorColumn = 50): string {
+	return alignText(text, Math.max(0, separatorColumn - 1));
+}
 
 // Obsidian injects `CodeMirror` onto the global at startup; tests install a
 // fake registry there to observe plugin registration and teardown.
@@ -466,19 +481,16 @@ describe('BeancountPlugin', () => {
 
 	it('aligns the transaction block at the cursor from the command', async () => {
 		const { plugin } = await loadPlugin();
-		const editor = createEditor([
+		const lines = [
 			'2026-10-01 * "Store"',
 			'  Expenses:Food 12.5 USD',
 			'  Assets:Cash -12.5 USD',
-		]);
+		];
+		const editor = createEditor(lines);
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		expect(editor.lines).toEqual([
-			'2026-10-01 * "Store"',
-			'  Expenses:Food 12.5 USD',
-			'  Assets:Cash  -12.5 USD',
-		]);
+		expect(editor.lines).toEqual(alignedLines(lines));
 		expect(editor.transactions).toHaveLength(1);
 	});
 
@@ -499,7 +511,7 @@ describe('BeancountPlugin', () => {
 
 	it('aligns only the transaction block at the cursor', async () => {
 		const { plugin } = await loadPlugin();
-		const editor = createEditor([
+		const lines = [
 			'2026-10-01 * "A"',
 			'  Expenses:Food 12.5 CNY',
 			'  Assets:Cash -12.5 CNY',
@@ -507,22 +519,15 @@ describe('BeancountPlugin', () => {
 			'2026-10-02 * "B"',
 			'  Expenses:Food:Rest 1234.5 CNY',
 			'  Assets:Cash -1234.5 CNY',
-		]);
+		];
+		const editor = createEditor(lines);
 		editor.setCursor({ line: 6, ch: 1 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		// The first transaction is outside the cursor's block and stays as
 		// written — including its own unaligned-looking gap.
-		expect(editor.lines).toEqual([
-			'2026-10-01 * "A"',
-			'  Expenses:Food 12.5 CNY',
-			'  Assets:Cash -12.5 CNY',
-			'',
-			'2026-10-02 * "B"',
-			'  Expenses:Food:Rest 1234.5 CNY',
-			'  Assets:Cash       -1234.5 CNY',
-		]);
+		expect(editor.lines).toEqual([...lines.slice(0, 4), ...alignedLines(lines.slice(4))]);
 	});
 
 	it('aligns the selection only, not the block around it', async () => {
@@ -537,14 +542,12 @@ describe('BeancountPlugin', () => {
 			'  Assets:Cash -1234.5 CNY',
 		]);
 		// One posting line of the second transaction — a strict subset of its
-		// block, whose own column needs no padding.
+		// block. The rest of the block, and the first transaction, stay put.
 		editor.selections = [{ anchor: { line: 6, ch: 0 }, head: { line: 6, ch: 23 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		// Aligning the whole block instead would have padded line 6 to seven
-		// spaces; the selection's own column leaves everything in place.
-		expect(editor.lines).toEqual([
+		const expected = [
 			'2026-10-01 * "A"',
 			'  Expenses:Food 12.5 CNY',
 			'  Assets:Cash -12.5 CNY',
@@ -552,7 +555,9 @@ describe('BeancountPlugin', () => {
 			'2026-10-02 * "B"',
 			'  Expenses:Food:Rest 1234.5 CNY',
 			'  Assets:Cash -1234.5 CNY',
-		]);
+		];
+		expected[6] = alignedLines([expected[6]])[0];
+		expect(editor.lines).toEqual(expected);
 	});
 
 	it('aligns the selected lines to their block column', async () => {
@@ -568,24 +573,22 @@ describe('BeancountPlugin', () => {
 		]);
 		editor.selections = [{ anchor: { line: 5, ch: 0 }, head: { line: 6, ch: 23 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.lines).toEqual([
 			'2026-10-01 * "A"',
 			'  Expenses:Food 12.5 CNY',
 			'  Assets:Cash -12.5 CNY',
 			'',
-			'2026-10-02 * "B"',
-			'  Expenses:Food:Rest 1234.5 CNY',
-			'  Assets:Cash       -1234.5 CNY',
+			...alignedLines(['2026-10-02 * "B"', '  Expenses:Food:Rest 1234.5 CNY', '  Assets:Cash -1234.5 CNY']),
 		]);
 	});
 
 	it('leaves an already aligned file untouched from the command', async () => {
 		const { plugin } = await loadPlugin();
-		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		const editor = createEditor(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.transactions).toEqual([]);
 	});
@@ -593,12 +596,12 @@ describe('BeancountPlugin', () => {
 	it('keeps a lone caret before its amount when the gap moves', async () => {
 		const { plugin } = await loadPlugin();
 		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
-		// Past the gap end on the line whose gap widens (1 → 2 spaces).
+		// Past the gap end on the line whose gap widens to the separator column.
 		editor.setCursor({ line: 1, ch: 15 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		expect(editor.getCursor()).toEqual({ line: 1, ch: 16 });
+		expect(editor.getCursor()).toEqual({ line: 1, ch: 47 });
 	});
 
 	it('rides a caret inside the gap to the amount', async () => {
@@ -606,10 +609,10 @@ describe('BeancountPlugin', () => {
 		const editor = createEditor(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY']);
 		editor.setCursor({ line: 0, ch: 14 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		// The gap grows from 2 to 7 spaces; the caret lands at its new end.
-		expect(editor.getCursor()).toEqual({ line: 0, ch: 20 });
+		// The gap grows to the separator column; the caret lands at its new end.
+		expect(editor.getCursor()).toEqual({ line: 0, ch: 47 });
 	});
 
 	it('keeps a caret before the gap in place', async () => {
@@ -617,7 +620,7 @@ describe('BeancountPlugin', () => {
 		const editor = createEditor(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY']);
 		editor.setCursor({ line: 0, ch: 5 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.getCursor()).toEqual({ line: 0, ch: 5 });
 	});
@@ -630,9 +633,9 @@ describe('BeancountPlugin', () => {
 			{ anchor: { line: 1, ch: 5 }, head: { line: 1, ch: 5 } },
 		];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		expect(editor.lines[0]).toBe('  Assets:Cash       12.5 CNY');
+		expect(editor.lines[0]).toBe(alignedLines(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY'])[0]);
 		// The plugin must not force a single caret over the user's carets.
 		expect(editor.selections).toEqual([
 			{ anchor: { line: 0, ch: 14 }, head: { line: 0, ch: 14 } },
@@ -650,13 +653,12 @@ describe('BeancountPlugin', () => {
 		// Selecting whole lines by dragging to the next line's start.
 		editor.selections = [{ anchor: { line: 0, ch: 0 }, head: { line: 2, ch: 0 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		// Line 2 holds no selected characters: untouched, and its width does
 		// not widen the column of the selected lines either.
 		expect(editor.lines).toEqual([
-			'  Expenses:Food 12.5 CNY',
-			'  Assets:Cash  -12.5 CNY',
+			...alignedLines(['  Expenses:Food 12.5 CNY', '  Assets:Cash -12.5 CNY']),
 			'  Expenses:Food:Rest 1.00 USD',
 		]);
 	});
@@ -668,7 +670,7 @@ describe('BeancountPlugin', () => {
 		// gap widens; the account side keeps the caret.
 		editor.setCursor({ line: 1, ch: 13 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.getCursor()).toEqual({ line: 1, ch: 13 });
 	});
@@ -680,14 +682,119 @@ describe('BeancountPlugin', () => {
 		// before retyping it.
 		editor.selections = [{ anchor: { line: 0, ch: 15 }, head: { line: 0, ch: 19 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		// The selection is the scope, so the line drops to its own column
-		// instead of the block's — and the range itself must survive.
-		expect(editor.lines[0]).toBe('  Assets:Cash 12.5 CNY');
+		// The selection is the scope, so only this line moves to the
+		// separator column — and the range itself must survive.
+		expect(editor.lines[0]).toBe(alignedLines(['  Assets:Cash  12.5 CNY'])[0]);
 		// Forcing a caret here would make the next keystroke insert instead
 		// of replacing the selection.
 		expect(editor.selections).toEqual([{ anchor: { line: 0, ch: 15 }, head: { line: 0, ch: 19 } }]);
+	});
+
+	it('aligns only fence bodies in a note and leaves posting-shaped prose', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'2026-10-01 * "Cafe"',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+		];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 4, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines).toEqual([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			...alignedLines(['2026-10-01 * "Cafe"', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+			'```',
+			'  Assets:Cash -12.5 USD',
+		]);
+	});
+
+	it('does nothing in a note when the caret is outside a fence', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Assets:Cash -12.5 USD',
+			'```',
+		];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 0, ch: 2 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.transactions).toEqual([]);
+		expect(editor.lines).toEqual(lines);
+	});
+
+	it('does not let a fence-body block extend into prose', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Assets:Cash -12.5 USD',
+			'```',
+		];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 2, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines[0]).toBe('  Expenses:Food 12.5 USD');
+		expect(editor.lines[2]).toBe(alignedLines(['  Assets:Cash -12.5 USD'])[0]);
+	});
+
+	it('aligns only selected fence-body lines in a note', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+		];
+		const editor = createEditor(lines);
+		editor.selections = [{ anchor: { line: 0, ch: 0 }, head: { line: 5, ch: 10 } }];
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines).toEqual([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			...alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+			'```',
+			'  Assets:Cash -12.5 USD',
+		]);
+	});
+
+	it('keeps a column-50 block at 50 from Align decimal points', async () => {
+		const { plugin } = await loadPlugin();
+		const padded = alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const editor = createEditor(padded);
+
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
+
+		expect(editor.lines).toEqual(padded);
+		expect(editor.transactions).toEqual([]);
+	});
+
+	it('reproduces tight alignment when separatorColumn is 1', async () => {
+		const { plugin } = await loadPlugin();
+		plugin.settings.separatorColumn = 1;
+		const lines = ['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD'];
+		const editor = createEditor(lines);
+
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
+
+		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
 	});
 
 	it('skips on-save alignment while the setting is off', async () => {
@@ -710,13 +817,118 @@ describe('BeancountPlugin', () => {
 		await delay(600);
 
 		expect(vault.contents.get('ledger.bean')).toBe(
-			'  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD'
+			alignedText('  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD')
 		);
 		expect(vault.writes).toEqual(['ledger.bean']);
 
 		// The rewrite fires `modify` again; aligned text must not rewrite.
 		await delay(600);
 		expect(vault.writes).toEqual(['ledger.bean']);
+	});
+
+	it('aligns only fence bodies on save and does not write a note without fences', async () => {
+		const vault = new FakeVault();
+		const fenced = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+			'',
+		].join('\n');
+		const note = vault.write('note.md', fenced);
+		const prose = vault.write('plain.md', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n');
+		await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', note);
+		await vault.emit('modify', prose);
+		await delay(600);
+
+		expect(vault.contents.get('note.md')).toBe(
+			[
+				'  Expenses:Food 12.5 USD',
+				'```beancount',
+				...alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+				'```',
+				'  Assets:Cash -12.5 USD',
+				'',
+			].join('\n')
+		);
+		expect(vault.contents.get('plain.md')).toBe('  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n');
+		expect(vault.writes).toEqual(['note.md']);
+	});
+
+	it('keeps indented-fence indent on save and leaves a column-50 fence at 50', async () => {
+		const vault = new FakeVault();
+		const padded = alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const at50 = vault.write(
+			'at50.md',
+			['```beancount', ...padded, '```', ''].join('\n')
+		);
+		const indented = vault.write(
+			'indent.md',
+			['  ```beancount', '    Expenses:Food 12.5 USD', '    Assets:Cash -12.5 USD', '  ```', ''].join('\n')
+		);
+		await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', at50);
+		await vault.emit('modify', indented);
+		await delay(600);
+
+		expect(vault.contents.get('at50.md')).toBe(['```beancount', ...padded, '```', ''].join('\n'));
+		expect(vault.writes).not.toContain('at50.md');
+		const indentLines = vault.contents.get('indent.md')!.split('\n');
+		expect(indentLines[0]).toBe('  ```beancount');
+		expect(indentLines[1].startsWith('    ')).toBe(true);
+		expect(indentLines[2].startsWith('    ')).toBe(true);
+		expect(indentLines[1]).toBe(alignedLines(['    Expenses:Food 12.5 USD', '    Assets:Cash -12.5 USD'])[0]);
+		expect(indentLines[3]).toBe('  ```');
+	});
+
+	it('aligns an open note through its editor on save without touching prose', async () => {
+		const vault = new FakeVault();
+		const content = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'',
+		].join('\n');
+		const file = vault.write('note.md', content);
+		const editor = createEditor(content.split('\n'));
+		await loadPlugin(vault, { alignOnSave: true }, [{ view: { file, editor } }]);
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(editor.lines).toEqual([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			...alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+			'```',
+			'',
+		]);
+		expect(vault.writes).toEqual([]);
+	});
+
+	it('keeps a column-50 ledger at 50 on save and with separatorColumn 1 uses a tight gap', async () => {
+		const vault = new FakeVault();
+		const padded = alignedText('  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		const at50 = vault.write('wide.bean', padded);
+		const tight = vault.write('tight.bean', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		const { plugin } = await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', at50);
+		await delay(600);
+		expect(vault.contents.get('wide.bean')).toBe(padded);
+		expect(vault.writes).toEqual([]);
+
+		plugin.settings.separatorColumn = 1;
+		await vault.emit('modify', tight);
+		await delay(600);
+		expect(vault.contents.get('tight.bean')).toBe('  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD');
 	});
 
 	it('debounces a burst of saves into one rewrite', async () => {
@@ -765,15 +977,17 @@ describe('BeancountPlugin', () => {
 		// Obsidian autosaves, so a vault write would just be clobbered. The
 		// walk covers every block, not just the caret's: block B aligns even
 		// though the cursor sits in block A.
-		expect(editor.lines).toEqual([
-			'2026-10-01 * "A"',
-			'  Expenses:Food 12.5 CNY',
-			'  Assets:Cash  -12.5 CNY',
-			'',
-			'2026-10-02 * "B"',
-			'  Expenses:Food:Rest 1234.5 CNY',
-			'  Assets:Cash       -1234.5 CNY',
-		]);
+		expect(editor.lines).toEqual(
+			alignedLines([
+				'2026-10-01 * "A"',
+				'  Expenses:Food 12.5 CNY',
+				'  Assets:Cash -12.5 CNY',
+				'',
+				'2026-10-02 * "B"',
+				'  Expenses:Food:Rest 1234.5 CNY',
+				'  Assets:Cash -1234.5 CNY',
+			])
+		);
 		expect(vault.writes).toEqual([]);
 		// Autosaving the aligned buffer fires `modify` again; nothing is left.
 		await vault.emit('modify', file);
@@ -790,7 +1004,7 @@ describe('BeancountPlugin', () => {
 		await vault.emit('modify', file);
 		await delay(600);
 
-		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(editor.lines).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 		expect(vault.writes).toEqual([]);
 	});
 
@@ -810,7 +1024,7 @@ describe('BeancountPlugin', () => {
 		await vault.emit('modify', file);
 		await delay(600);
 
-		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(editor.lines).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 		expect(vault.writes).toEqual([]);
 	});
 
@@ -897,7 +1111,7 @@ describe('BeancountPlugin', () => {
 		await delay(1100);
 
 		// The editor buffer owns it now — no vault write to be clobbered.
-		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(editor.lines).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 		expect(vault.writes).toEqual([]);
 	});
 
@@ -2061,7 +2275,7 @@ describe('BeancountPlugin', () => {
 		const other = createEditor([...lines]);
 		other.setCursor({ line: 1, ch: 4 });
 		command?.editorCallback?.(other, { file: { extension: 'bean' } });
-		expect(other.lines[2]).toBe('  Assets:Cash  -12.5 USD');
+		expect(other.lines[2]).toBe(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD'])[1]);
 		expect(other.getCursor()).toEqual({ line: 1, ch: 4 });
 
 		const many = createEditor([...lines]);
@@ -2100,6 +2314,29 @@ describe('BeancountPlugin', () => {
 		const fenced = createEditor(['note  ', '```beancount', loose, '```']);
 		command?.editorCallback?.(fenced, { file: null });
 		expect(fenced.lines).toEqual(['note  ', '```beancount', '2022-01-01 open Assets:A', '```']);
+	});
+
+	it('formats postings to the separator column in a ledger and a fenced note', async () => {
+		const { plugin } = await loadPlugin();
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'format-ledger');
+		const padded = alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const bean = createEditor(['2026-10-01 * "Store"', ...padded]);
+		command?.editorCallback?.(bean, { file: { extension: 'bean' } });
+		expect(bean.lines.slice(1)).toEqual(padded);
+		expect(bean.transactions).toEqual([]);
+
+		const note = createEditor(['prose', '```beancount', '2026-10-01 * "Store"', ...padded, '```']);
+		command?.editorCallback?.(note, { file: { extension: 'md' } });
+		expect(note.lines.slice(3, 5)).toEqual(padded);
+
+		plugin.settings.separatorColumn = 1;
+		const tight = createEditor([
+			'2026-10-01 * "Store"',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+		]);
+		command?.editorCallback?.(tight, { file: { extension: 'bean' } });
+		expect(tight.lines[2]).toBe('  Assets:Cash  -12.5 USD');
 	});
 
 

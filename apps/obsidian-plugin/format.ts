@@ -58,15 +58,15 @@ export function formatErrorNotice(error: FormatError): string {
  * Format one ledger. On a syntax error nothing is rewritten: the result is
  * the first error and no text. Any other exception propagates.
  */
-export function formatLedger(text: string): FormatResult {
-	const formatted = formatLines(text);
+export function formatLedger(text: string, targetColumn?: number): FormatResult {
+	const formatted = formatLines(text, targetColumn);
 	if (!formatted.ok) return formatted;
 	const { lines, newline, trailing } = formatted.split;
 	return { ok: true, text: joinDocument(lines, newline, trailing) };
 }
 
 /** `formatLedger` before the lines are joined back into text. */
-function formatLines(text: string): { ok: true; split: SplitDoc } | { ok: false; error: FormatError } {
+function formatLines(text: string, targetColumn?: number): { ok: true; split: SplitDoc } | { ok: false; error: FormatError } {
 	let directives: Directive[];
 	try {
 		directives = BeancountParser.parse(text).directives;
@@ -76,7 +76,7 @@ function formatLines(text: string): { ok: true; split: SplitDoc } | { ok: false;
 	}
 	const split = splitDocument(text);
 	rewriteLines(split.lines, directives);
-	alignLines(split.lines);
+	alignLines(split.lines, targetColumn);
 	return { ok: true, split };
 }
 
@@ -86,13 +86,15 @@ function formatLines(text: string): { ok: true; split: SplitDoc } | { ok: false;
  * mapped onto the host document; a failure in any fence yields no text, so
  * the caller changes nothing.
  */
-export function formatFencedDocument(text: string): FormatResult {
+export function formatFencedDocument(text: string, targetColumn?: number): FormatResult {
 	const fences = extractBeancountFences(text);
 	if (fences.length === 0) return { ok: true, text };
 	const split = splitDocument(text);
 	const bodies: string[][] = [];
 	for (const fence of fences) {
-		const formatted = formatFenceBody(fence);
+		const indent = openerIndent(split.lines, fence);
+		const floor = targetColumn === undefined ? undefined : Math.max(0, targetColumn - indent);
+		const formatted = formatFenceBody(fence, floor);
 		if (!formatted.ok) {
 			const bodyIndex = formatted.error.line - 1;
 			return {
@@ -214,11 +216,11 @@ function joinDocument(lines: readonly string[], newline: '\n' | '\r\n', trailing
 	return trailing ? body + newline : body;
 }
 
-function formatFenceBody(fence: BeancountFence): { ok: true; lines: string[] } | { ok: false; error: FormatError } {
+function formatFenceBody(fence: BeancountFence, targetColumn?: number): { ok: true; lines: string[] } | { ok: false; error: FormatError } {
 	if (fence.lines.length === 0) return { ok: true, lines: [] };
 	// A trailing newline keeps a one-line body distinct from empty text and
 	// matches how the parser counts the body's last line.
-	const result = formatLines(fence.lines.join('\n') + '\n');
+	const result = formatLines(fence.lines.join('\n') + '\n', targetColumn);
 	if (!result.ok) return result;
 	const { lines, newline, trailing } = result.split;
 	// Joined with `\n` and split again on `\n`, the lines would come back as they are.

@@ -36,6 +36,8 @@
 
  */
 
+import { extractBeancountFences } from './fences';
+
 /** Minimum whitespace between the account (and its flag) and the amount. */
 const MIN_GAP = 1;
 
@@ -347,14 +349,39 @@ export function isAmountDotInsert(line: string, ch: number): boolean {
 }
 
 /** `computeAlignment` applied to a whole document's text. */
-export function alignText(text: string): string {
+export function alignText(text: string, targetColumn?: number): string {
 	const lines = text.split('\n');
-	return alignLines(lines) ? lines.join('\n') : text;
+	return alignLines(lines, targetColumn) ? lines.join('\n') : text;
+}
+
+/**
+ * Align each ```beancount / ```bean fence body on the host lines. Prose and
+ * fence markers stay as written. A note with no ledger fence is unchanged,
+ * so a save must not rewrite it. Indented openers keep the indent they
+ * still carry on the host line.
+ */
+export function alignFencedDocument(text: string, targetColumn?: number): string {
+	const fences = extractBeancountFences(text);
+	if (fences.length === 0) return text;
+	const lines = text.split('\n');
+	let changed = false;
+	for (const fence of fences) {
+		if (fence.lines.length === 0) continue;
+		const from = fence.startLine;
+		const to = Math.min(lines.length - 1, from + fence.lines.length - 1);
+		if (from > to) continue;
+		if (applyAlignment(lines, { from, to }, targetColumn)) changed = true;
+	}
+	return changed ? lines.join('\n') : text;
 }
 
 /** `computeAlignment` applied in place to every line; false when nothing changed. */
-export function alignLines(lines: string[]): boolean {
-	const edits = computeAlignment(lines);
+export function alignLines(lines: string[], targetColumn?: number): boolean {
+	return applyAlignment(lines, undefined, targetColumn);
+}
+
+function applyAlignment(lines: string[], range?: LineRange, targetColumn?: number): boolean {
+	const edits = computeAlignment(lines, range, targetColumn);
 	for (const edit of edits) {
 		const line = lines[edit.line];
 		lines[edit.line] = line.slice(0, edit.from) + edit.text + line.slice(edit.to);

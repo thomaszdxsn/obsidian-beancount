@@ -3,7 +3,7 @@
  * column is computed, and that the rewrite is idempotent and surgical.
  */
 import { describe, expect, it } from 'vitest';
-import { alignText, blockRangeAt, computeAlignment, displayWidth, isAmountDotInsert } from '../align';
+import { alignFencedDocument, alignLines, alignText, blockRangeAt, computeAlignment, displayWidth, isAmountDotInsert } from '../align';
 
 /** Align a document given as lines; return the document as lines. */
 function align(lines: string[]): string[] {
@@ -254,6 +254,17 @@ describe('alignText', () => {
 		expect(computeAlignment(once.split('\n'))).toEqual([]);
 	});
 
+	it('keeps today’s tight column when called without a target, and pads when given one', () => {
+		const src = '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n';
+		const tight = '  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n';
+		expect(alignText(src)).toBe(tight);
+		expect(alignText(src, 0)).toBe(tight);
+		const lines = src.split('\n');
+		alignLines(lines, 49);
+		expect(lines[1].indexOf('.')).toBe(49);
+		expect(alignText(lines.join('\n'), 49)).toBe(lines.join('\n'));
+	});
+
 	it('changes nothing in documents without postings', () => {
 		const prose = 'just a note\n  indented prose 12.5 USD-ish\n';
 		expect(alignText(prose)).toBe(prose);
@@ -305,6 +316,50 @@ describe('alignText', () => {
 		]);
 	});
 
+});
+
+describe('alignFencedDocument', () => {
+	it('aligns fence bodies and leaves posting-shaped prose, including no-fence notes', () => {
+		const note = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+			'',
+		].join('\n');
+		expect(alignFencedDocument(note)).toBe(
+			[
+				'  Expenses:Food 12.5 USD',
+				'```beancount',
+				'  Expenses:Food 12.5 USD',
+				'  Assets:Cash  -12.5 USD',
+				'```',
+				'  Assets:Cash -12.5 USD',
+				'',
+			].join('\n')
+		);
+		const prose = '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n';
+		expect(alignFencedDocument(prose)).toBe(prose);
+	});
+
+	it('keeps an indented fence’s indent and pads to a target column', () => {
+		const note = ['  ```beancount', '    Expenses:Food 12.5 USD', '    Assets:Cash -12.5 USD', '  ```', ''].join('\n');
+		const aligned = alignFencedDocument(note, 49);
+		const lines = aligned.split('\n');
+		expect(lines[0]).toBe('  ```beancount');
+		expect(lines[1].startsWith('    ')).toBe(true);
+		expect(lines[1].indexOf('.')).toBe(49);
+		expect(lines[3]).toBe('  ```');
+		expect(alignFencedDocument(aligned, 49)).toBe(aligned);
+	});
+
+	it('aligns an unclosed fence through EOF the way a closed body would', () => {
+		expect(alignFencedDocument('intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n')).toBe(
+			'intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n'
+		);
+	});
 });
 
 describe('computeAlignment', () => {

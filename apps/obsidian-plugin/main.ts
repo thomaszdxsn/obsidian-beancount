@@ -5,7 +5,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
-import { alignText, blockRangeAt, computeAlignment } from './align';
+import { alignFencedDocument, alignText, blockRangeAt, computeAlignment } from './align';
 import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
@@ -238,12 +238,45 @@ function editorLines(editor: Editor): string[] {
 	return lines;
 }
 
+/** 0-based floor for `computeAlignment`; `separatorColumn` 1 is today's tight layout. */
+function alignmentTarget(separatorColumn: number): number {
+	return Math.max(0, separatorColumn - 1);
+}
+
+/** Host line span of a fence body, clipped to the buffer. */
+function fenceBodyRange(fence: BeancountFence, lineCount: number): LineRange | null {
+	if (fence.lines.length === 0) return null;
+	const from = fence.startLine;
+	const to = Math.min(lineCount - 1, from + fence.lines.length - 1);
+	if (from < 0 || from > to) return null;
+	return { from, to };
+}
+
+function intersectRange(a: LineRange, b: LineRange): LineRange | null {
+	const from = Math.max(a.from, b.from);
+	const to = Math.min(a.to, b.to);
+	return from <= to ? { from, to } : null;
+}
+
 /**
  * What the command aligns: the selected lines when there is a selection,
- * otherwise the transaction block the cursor sits in.
+ * otherwise the transaction block the cursor sits in. `fences` non-null
+ * means the buffer is not a ledger file: only fence-body lines, and a
+ * block never crosses a fence.
  */
-function commandScope(editor: Editor, lines: readonly string[]): LineRange {
-	if (!editor.somethingSelected()) return blockRangeAt(lines, editor.getCursor().line);
+function commandScope(editor: Editor, lines: readonly string[], fences: readonly BeancountFence[] | null): LineRange[] {
+	if (!editor.somethingSelected()) {
+		const line = editor.getCursor().line;
+		const block = blockRangeAt(lines, line);
+		if (fences === null) return [block];
+		for (const fence of fences) {
+			const body = fenceBodyRange(fence, lines.length);
+			if (body === null || line < body.from || line > body.to) continue;
+			const clipped = intersectRange(block, body);
+			return clipped === null ? [] : [clipped];
+		}
+		return [];
+	}
 	let from = Number.MAX_SAFE_INTEGER;
 	let to = 0;
 	for (const selection of editor.listSelections()) {
@@ -255,16 +288,29 @@ function commandScope(editor: Editor, lines: readonly string[]): LineRange {
 		// characters, so the last selected line is the one before it.
 		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
 	}
-	return { from, to };
+	const selected = { from, to };
+	if (fences === null) return [selected];
+	const scopes: LineRange[] = [];
+	for (const fence of fences) {
+		const body = fenceBodyRange(fence, lines.length);
+		if (body === null) continue;
+		const clipped = intersectRange(selected, body);
+		if (clipped !== null) scopes.push(clipped);
+	}
+	return scopes;
 }
 
 /**
  * Rewrite the gaps in `scope` (the whole buffer when omitted) so the decimal
- * points of each transaction block line up.
+ * points of each transaction block line up. Several ranges are one
+ * transaction so undo is still one step.
  */
-function alignInEditor(editor: Editor, scope?: LineRange): void {
+function alignInEditor(editor: Editor, scope?: readonly LineRange[], targetColumn?: number): void {
 	const lines = editorLines(editor);
-	const edits = computeAlignment(lines, scope);
+	const edits =
+		scope === undefined
+			? computeAlignment(lines, undefined, targetColumn)
+			: scope.flatMap((range) => computeAlignment(lines, range, targetColumn));
 	if (edits.length === 0) return;
 	const changes = edits.map((edit) => ({
 		from: { line: edit.line, ch: edit.from },
@@ -294,8 +340,39 @@ function alignInEditor(editor: Editor, scope?: LineRange): void {
 }
 
 /** The `Align decimal points` command. */
-function alignCommand(editor: Editor): void {
-	alignInEditor(editor, commandScope(editor, editorLines(editor)));
+function alignCommand(
+	editor: Editor,
+	file: { path: string; extension: string } | null,
+	separatorColumn: number
+): void {
+	const lines = editorLines(editor);
+	const ledger = file !== null && isLedgerFile(file);
+	const scopes = commandScope(
+		editor,
+		lines,
+		ledger ? null : extractBeancountFences(editor.getValue())
+	);
+	if (scopes.length === 0) return;
+	alignInEditor(editor, scopes, alignmentTarget(separatorColumn));
+}
+
+/** On-save: a ledger file is the whole buffer; anything else is fence bodies. */
+function alignOpenEditor(
+	editor: Editor,
+	file: { path: string; extension: string },
+	targetColumn: number
+): void {
+	if (isLedgerFile(file)) {
+		alignInEditor(editor, undefined, targetColumn);
+		return;
+	}
+	const scopes: LineRange[] = [];
+	for (const fence of extractBeancountFences(editor.getValue())) {
+		const range = fenceBodyRange(fence, editor.lineCount());
+		if (range !== null) scopes.push(range);
+	}
+	if (scopes.length === 0) return;
+	alignInEditor(editor, scopes, targetColumn);
 }
 /**
  * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger. Any other
@@ -304,11 +381,16 @@ function alignCommand(editor: Editor): void {
  * changes nothing. No notice when the text is already formatted — same as
  * alignment finding nothing to do.
  */
-function formatInEditor(editor: Editor, file: { path: string; extension: string } | null): void {
+function formatInEditor(
+	editor: Editor,
+	file: { path: string; extension: string } | null,
+	separatorColumn: number
+): void {
+	const targetColumn = alignmentTarget(separatorColumn);
 	const result =
 		file !== null && isLedgerFile(file)
-			? formatLedger(editor.getValue())
-			: formatFencedDocument(editor.getValue());
+			? formatLedger(editor.getValue(), targetColumn)
+			: formatFencedDocument(editor.getValue(), targetColumn);
 	if (!result.ok) {
 		new Notice(formatErrorNotice(result.error));
 		return;
@@ -529,12 +611,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
-			editorCallback: alignCommand,
+			editorCallback: (editor, ctx) =>
+				alignCommand(editor, ctx?.file ?? null, this.settings.separatorColumn),
 		});
 		this.addCommand({
 			id: 'format-ledger',
 			name: 'Format ledger',
-			editorCallback: (editor, ctx) => formatInEditor(editor, ctx.file),
+			editorCallback: (editor, ctx) =>
+				formatInEditor(editor, ctx?.file ?? null, this.settings.separatorColumn),
 		});
 		this.addCommand({
 			id: 'insert-today-date',
@@ -1233,13 +1317,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// by the next autosave from the still-unaligned buffer. Files not open
 		// in any leaf have no buffer to fight with.
 		const editor = openEditorFor(this.app, file);
+		const column = alignmentTarget(this.settings.separatorColumn);
 		if (editor) {
 			// The on-save walk aligns every transaction block of the buffer.
-			alignInEditor(editor);
+			alignOpenEditor(editor, file, column);
 			return;
 		}
 		const text = await this.app.vault.read(file);
-		const aligned = alignText(text);
+		const aligned = isLedgerFile(file) ? alignText(text, column) : alignFencedDocument(text, column);
 		if (aligned === text) return;
 		// The file may have been opened — or edited — while the read was in
 		// flight. An open one is the editor's business again, and a changed
@@ -1248,7 +1333,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// text back and re-arm the debounce forever.
 		const live = openEditorFor(this.app, file);
 		if (live) {
-			alignInEditor(live);
+			alignOpenEditor(live, file, column);
 			return;
 		}
 		if ((await this.app.vault.read(file)) !== text) return;
