@@ -14,7 +14,7 @@ import {
 	DEFAULT_FAVA_PORT,
 	favaExitReason,
 	favaUrl,
-	firstMeaningfulStderrLine,
+	lastMeaningfulStderrLine,
 	isFavaBinary,
 	normalizeFavaPort,
 	openFavaUrl,
@@ -39,10 +39,9 @@ afterEach(() => {
 	notices.length = 0;
 });
 
-function liveChild(exitCode: number | null = null, stderrText = ''): ChildProcess {
+function liveChild(exitCode: number | null = null): ChildProcess {
 	const listeners: Array<(code: number | null) => void> = [];
 	const stderr = new PassThrough();
-	if (stderrText) stderr.write(stderrText);
 	const child = {
 		exitCode,
 		stderr,
@@ -65,10 +64,16 @@ function liveChild(exitCode: number | null = null, stderrText = ''): ChildProces
 	return child as unknown as ChildProcess;
 }
 
+function writeChildStderr(child: ChildProcess, text: string): void {
+	const stream = child.stderr as PassThrough | null;
+	stream?.write(text);
+}
+
 async function loadPlugin(
 	vault: FakeVault = new FakeVault(),
 	loadedData: unknown = null,
-	activePath: string | null = null
+	activePath: string | null = null,
+	beforeLoad?: (plugin: BeancountPlugin & RecordingPlugin) => void
 ): Promise<BeancountPlugin & RecordingPlugin> {
 	const plugin = new BeancountPlugin(
 		{
@@ -98,6 +103,7 @@ async function loadPlugin(
 	plugin.favaReadyProbe = async () => 200;
 	plugin.favaReadyDelay = async () => {};
 	plugin.loadData = async () => loadedData;
+	beforeLoad?.(plugin);
 	await plugin.onload();
 	return plugin;
 }
@@ -213,13 +219,23 @@ describe('waitForFavaReady', () => {
 	});
 });
 
-describe('firstMeaningfulStderrLine', () => {
-	it('skips traceback frames and falls back to the exit code', () => {
+describe('lastMeaningfulStderrLine', () => {
+	it('takes the last line of a Python traceback, not the first source line', () => {
 		expect(
-			firstMeaningfulStderrLine(
-				'Traceback (most recent call last):\n  File "fava", line 1, in <module>\nModuleNotFoundError: No module named \'pkg_resources\'\n'
-			)
+			lastMeaningfulStderrLine(`Traceback (most recent call last):
+  File "/opt/homebrew/bin/fava", line 5, in <module>
+    from fava.cli import main
+  File "/opt/homebrew/lib/python3.9/site-packages/fava/__init__.py", line 4, in <module>
+    from pkg_resources import DistributionNotFound
+ModuleNotFoundError: No module named 'pkg_resources'
+`)
 		).toBe("ModuleNotFoundError: No module named 'pkg_resources'");
+		expect(
+			lastMeaningfulStderrLine(
+				'Usage: fava [OPTIONS] FILENAME\nError: Invalid value for \'-p\': 5000 is already in use.\n'
+			)
+		).toBe("Error: Invalid value for '-p': 5000 is already in use.");
+		expect(lastMeaningfulStderrLine('broken\n^^^^\n')).toBe('broken');
 		expect(favaExitReason('', 1)).toBe('1');
 	});
 });
@@ -381,12 +397,23 @@ describe('Start Fava / Stop Fava', () => {
 	it('notices an early exit from stderr and opens nothing', async () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', '');
-		nextChild = liveChild(
-			1,
-			"Traceback (most recent call last):\nModuleNotFoundError: No module named 'pkg_resources'\n"
-		);
+		const child = liveChild();
+		nextChild = child;
 		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
-		plugin.favaReadyProbe = async () => 403;
+		plugin.favaReadyProbe = async () => {
+			writeChildStderr(
+				child,
+				`Traceback (most recent call last):
+  File "/opt/homebrew/bin/fava", line 5, in <module>
+    from fava.cli import main
+  File "/opt/homebrew/lib/python3.9/site-packages/fava/__init__.py", line 4, in <module>
+    from pkg_resources import DistributionNotFound
+ModuleNotFoundError: No module named 'pkg_resources'
+`
+			);
+			child.kill(1);
+			return 403;
+		};
 		await plugin.registrations.commands.find((entry) => entry.id === 'start-fava')?.callback?.();
 		expect(opened).toEqual([]);
 		expect(notices).toEqual(["Fava exited: ModuleNotFoundError: No module named 'pkg_resources'"]);
@@ -460,10 +487,20 @@ describe('Start Fava / Stop Fava', () => {
 	it('reports a failed silent start on activate without opening the UI', async () => {
 		const vault = new FakeVault();
 		vault.write('ledger.bean', '2026-10-01 * "A"\n');
-		nextChild = liveChild(1, 'Address already in use\n');
-		await loadPlugin(vault, { runFavaOnActivate: true }, 'ledger.bean');
+		const child = liveChild();
+		nextChild = child;
+		await loadPlugin(vault, { runFavaOnActivate: true }, 'ledger.bean', (plugin) => {
+			plugin.favaReadyProbe = async () => {
+				writeChildStderr(child, 'Error: [Errno 48] Address already in use\n');
+				child.kill(1);
+				return 403;
+			};
+		});
+		// onload fires launchFava without awaiting it; drain the probe/exit turn.
+		await Promise.resolve();
+		await Promise.resolve();
 		expect(opened).toEqual([]);
-		expect(notices).toEqual(['Fava exited: Address already in use']);
+		expect(notices).toEqual(['Fava exited: Error: [Errno 48] Address already in use']);
 	});
 
 	it('tells the user to set an entry ledger or open a bean file', async () => {

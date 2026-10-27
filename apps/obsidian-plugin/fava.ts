@@ -86,42 +86,33 @@ export const probeFavaUrl: FavaReadyProbe = (url) =>
 /**
  * Drain `child.stderr` for as long as the process lives and keep a small
  * tail. Call this as soon as spawn returns so an immediate crash is not lost.
+ * A `data` listener puts the stream in flowing mode, which is the drain.
  */
 export function captureFavaStderr(child: ChildProcess): () => string {
 	let tail = '';
 	const stream = child.stderr;
 	if (stream) {
-		const append = (chunk: string) => {
-			tail = (tail + chunk).slice(-STDERR_TAIL);
-		};
 		stream.setEncoding('utf8');
-		for (;;) {
-			const pulled: unknown = stream.read();
-			if (pulled == null) break;
-			if (typeof pulled === 'string') append(pulled);
-			else if (Buffer.isBuffer(pulled)) append(pulled.toString('utf8'));
-		}
-		stream.on('data', append);
-		stream.resume();
+		stream.on('data', (chunk: string) => {
+			tail = (tail + chunk).slice(-STDERR_TAIL);
+		});
 	}
 	return () => tail;
 }
 
-/** First stderr line that is not a Python traceback frame or blank. */
-export function firstMeaningfulStderrLine(stderr: string): string | null {
+/** Last non-blank stderr line, skipping caret markers (`^^^^`). Python puts the exception last. */
+export function lastMeaningfulStderrLine(stderr: string): string | null {
+	let last: string | null = null;
 	for (const raw of stderr.split(/\r?\n/)) {
 		const line = raw.trim();
-		if (!line) continue;
-		if (line.startsWith('Traceback ')) continue;
-		if (/^File "|^File /.test(line)) continue;
-		if (/^\^+$/.test(line)) continue;
-		return line;
+		if (!line || /^\^+$/.test(line)) continue;
+		last = line;
 	}
-	return null;
+	return last;
 }
 
 export function favaExitReason(stderr: string, code: number | null | undefined): string {
-	return firstMeaningfulStderrLine(stderr) ?? String(code ?? 'unknown');
+	return lastMeaningfulStderrLine(stderr) ?? String(code ?? 'unknown');
 }
 
 export type FavaReadyOutcome = 'ready' | 'exited' | 'timeout';

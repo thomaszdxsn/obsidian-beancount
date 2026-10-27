@@ -416,6 +416,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private favaServing = false;
 	/** True when Stop Fava or unload is the reason the child will exit. */
 	private favaExpectExit = false;
+	/** Stderr tail of the live child; captured once at spawn. */
+	private favaStderr: () => string = () => '';
 	/** In-flight start so a second command cannot spawn another process. */
 	private favaStart: Promise<boolean> | null = null;
 	/** Completion pick counts persisted beside settings in data.json. */
@@ -594,9 +596,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			this.ledgerFile.destroy();
 			this.favaExpectExit = true;
 			this.favaChild?.kill();
-			this.favaChild = null;
-			this.favaBoundPort = null;
-			this.favaServing = false;
+			this.clearFavaChild();
 		});
 		if (this.settings.runFavaOnActivate) {
 			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
@@ -650,11 +650,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		return this.favaChild != null && this.favaChild.exitCode === null;
 	}
 
-	private favaWaitOptions(): {
-		timeoutMs: number;
-		delay: (ms: number) => Promise<void>;
-	} {
-		return { timeoutMs: this.favaReadyTimeoutMs, delay: this.favaReadyDelay };
+	private clearFavaChild(): void {
+		this.favaChild = null;
+		this.favaBoundPort = null;
+		this.favaServing = false;
+		this.favaStderr = () => '';
 	}
 
 	private revealFava(announce: boolean): void {
@@ -674,17 +674,13 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 
 	private stopFava(): void {
 		if (!this.isFavaRunning()) {
-			this.favaChild = null;
-			this.favaBoundPort = null;
-			this.favaServing = false;
+			this.clearFavaChild();
 			new Notice('Fava is not running.');
 			return;
 		}
 		this.favaExpectExit = true;
 		this.favaChild?.kill();
-		this.favaChild = null;
-		this.favaBoundPort = null;
-		this.favaServing = false;
+		this.clearFavaChild();
 		new Notice('Fava stopped.');
 	}
 
@@ -713,10 +709,12 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	}
 
 	private async waitUntilFavaServes(child: ChildProcess): Promise<boolean> {
-		const port = this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort);
-		const url = favaUrl(port);
-		const getStderr = captureFavaStderr(child);
-		const outcome = await waitForFavaReady(child, url, this.favaReadyProbe, this.favaWaitOptions());
+		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
+		const getStderr = this.favaStderr;
+		const outcome = await waitForFavaReady(child, url, this.favaReadyProbe, {
+			timeoutMs: this.favaReadyTimeoutMs,
+			delay: this.favaReadyDelay,
+		});
 		if (outcome === 'ready') {
 			this.favaServing = true;
 			return true;
@@ -728,11 +726,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!this.favaExpectExit) {
 			new Notice(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
 		}
-		if (this.favaChild === child) {
-			this.favaChild = null;
-			this.favaBoundPort = null;
-			this.favaServing = false;
-		}
+		if (this.favaChild === child) this.clearFavaChild();
 		return false;
 	}
 
@@ -763,40 +757,20 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		const child = result.child ?? null;
 		if (!child) return false;
-		const getStderr = captureFavaStderr(child);
+		this.favaStderr = captureFavaStderr(child);
 		this.favaExpectExit = false;
 		this.favaServing = false;
 		this.favaChild = child;
 		this.favaBoundPort = port;
 		child.once('exit', (code) => {
 			const unexpected = !this.favaExpectExit && this.favaServing && this.favaChild === child;
-			if (this.favaChild === child) {
-				this.favaChild = null;
-				this.favaBoundPort = null;
-				this.favaServing = false;
-			}
+			const stderr = this.favaStderr();
+			if (this.favaChild === child) this.clearFavaChild();
 			if (unexpected) {
-				new Notice(`Fava exited: ${favaExitReason(getStderr(), code)}`);
+				new Notice(`Fava exited: ${favaExitReason(stderr, code)}`);
 			}
 		});
-		const outcome = await waitForFavaReady(child, favaUrl(port), this.favaReadyProbe, this.favaWaitOptions());
-		if (outcome === 'ready') {
-			this.favaServing = true;
-			return true;
-		}
-		if (outcome === 'timeout') {
-			new Notice(`Fava did not answer at ${favaUrl(port)}`);
-			return false;
-		}
-		if (!this.favaExpectExit) {
-			new Notice(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
-		}
-		if (this.favaChild === child) {
-			this.favaChild = null;
-			this.favaBoundPort = null;
-			this.favaServing = false;
-		}
-		return false;
+		return this.waitUntilFavaServes(child);
 	}
 
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
