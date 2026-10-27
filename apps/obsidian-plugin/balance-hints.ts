@@ -19,6 +19,10 @@
  * module already refuses. Org headings, comments and metadata are not
  * postings. Automatic legs (`__automatic__`) are not inferred.
  */
+import { ACCOUNT_SHAPE, classifyLine, parsePostingLine, stripComment } from './scan';
+
+export { stripComment };
+
 export interface BalanceHint {
 	/** Zero-based line of the `balance` directive in `lines`. */
 	line: number;
@@ -60,19 +64,12 @@ interface Balance {
 }
 
 const MAX_SAFE = 9007199254740991;
-const FLAG_CHARS = '*!&#?%A-Z';
-const ACCOUNT_SRC = '[A-Z][a-z]+(?::[^\\s:]+)+';
 const NUMBER_SRC = '[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\\.[0-9]*)?';
-export const TXN_RE = new RegExp(
-	'^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})[ \\t]*(?:txn|[' + FLAG_CHARS + '])(?![A-Za-z0-9])'
-);
 const DATED_RE = /^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})[ \t]+([a-z][a-z0-9]*)(?![A-Za-z0-9])(.*)$/;
-export const ACCOUNT_EXACT = new RegExp('^' + ACCOUNT_SRC + '$');
 const NUMBER_EXACT = new RegExp('^' + NUMBER_SRC + '$');
-const ACCOUNT_START = new RegExp('^' + ACCOUNT_SRC);
+const ACCOUNT_START = new RegExp('^' + ACCOUNT_SHAPE, 'u');
 const NUMBER_START = new RegExp('^' + NUMBER_SRC);
-export const FLAG_EXACT = new RegExp('^[' + FLAG_CHARS + ']$');
-export const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
+const META_RE = /^[a-z][A-Za-z0-9\-_]+:/;
 
 /**
  * Dated keywords this module knows. Anything else dated is unsupported:
@@ -150,21 +147,19 @@ const ANCESTOR_LIMIT = 4096;
 function lineInfo(raw: string, cache: Map<string, LineInfo>): LineInfo {
 	let info = cache.get(raw);
 	if (info === undefined) {
-		info = classifyLine(stripCarriage(raw));
+		info = describeLine(stripCarriage(raw));
 		cache.set(raw, info);
 	}
 	return info;
 }
 
-function classifyLine(line: string): LineInfo {
-	if (/^[ \t]*$/.test(line) || isComment(line)) return IGNORE;
-	if (isOrgHeading(line)) return CLOSE;
-	// A metadata key (`include:`) is not the directive. Indented forms
-	// still count: the syntax mode accepts leading whitespace.
+function describeLine(line: string): LineInfo {
 	if (/^[ \t]*(include|plugin)(?![A-Za-z0-9_])(?:[ \t]|"|$)/.test(line)) return REFUSE;
-	if (line.charAt(0) === ' ' || line.charAt(0) === '\t') return { kind: 'indented', posting: parsePosting(line) };
-	const txn = TXN_RE.exec(line);
-	if (txn !== null) return { kind: 'txn', date: txn[1] + '-' + txn[2] + '-' + txn[3] };
+	const kind = classifyLine(line);
+	if (kind === 'blank' || kind === 'comment') return IGNORE;
+	if (kind === 'org') return CLOSE;
+	if (line.charAt(0) === ' ' || line.charAt(0) === '\t') return { kind: 'indented', posting: postingUnits(line) };
+	if (kind === 'txn-header') return { kind: 'txn', date: line.slice(0, 10).replace(/\//g, '-') };
 	const dated = DATED_RE.exec(line);
 	if (dated === null) return CLOSE;
 	const keyword = dated[4];
@@ -179,9 +174,6 @@ function classifyLine(line: string): LineInfo {
 		const accounts = parsePad(rest);
 		return accounts === null ? REFUSE : { kind: 'pad', date, accounts };
 	}
-	// A dated keyword we recognized but do not classify must not be
-	// treated as a zero posting. `open`/`price`/`custom` and the rest
-	// of NO_UNIT are the only dated directives that add nothing.
 	return NO_UNIT[keyword] === true ? CLOSE : REFUSE;
 }
 
@@ -390,25 +382,20 @@ type PostingParse =
  * An account line whose units are not a plain number plus commodity taints
  * that account — including a missing amount, which beancount would fill in.
  */
-function parsePosting(line: string): PostingParse {
-	const body = stripComment(line).trim();
-	if (body === '' || META_RE.test(body)) return { kind: 'skip' };
-	const tokens = body.split(/[ \t]+/);
-	let at = 0;
-	if (FLAG_EXACT.test(tokens[0]) && tokens.length > 1) at = 1;
-	const account = tokens[at];
-	if (account === undefined || !ACCOUNT_EXACT.test(account)) return { kind: 'skip' };
-	at++;
-	if (at < tokens.length && FLAG_EXACT.test(tokens[at])) at++;
-	const rest = tokens.slice(at);
-	if (rest.length === 2) {
-		const qty = toQty(rest[0]);
-		const commodity = commodityOf(rest[1]);
-		if (qty !== null && commodity !== null) {
-			return { kind: 'amount', account, qty, commodity: commodity.id };
-		}
+function postingUnits(line: string): PostingParse {
+	const parsed = parsePostingLine(line);
+	if (parsed?.account === undefined) {
+		const body = stripComment(line).trim();
+		if (body === '' || META_RE.test(body)) return { kind: 'skip' };
+		return { kind: 'skip' };
 	}
-	return { kind: 'taint', account };
+	if (parsed.hasCost || parsed.hasPrice || parsed.number === undefined || parsed.commodity === undefined) {
+		return { kind: 'taint', account: parsed.account.text };
+	}
+	const qty = toQty(line.slice(parsed.number.from, parsed.number.to));
+	const commodity = commodityOf(line.slice(parsed.commodity.from, parsed.commodity.to));
+	if (qty === null || commodity === null) return { kind: 'taint', account: parsed.account.text };
+	return { kind: 'amount', account: parsed.account.text, qty, commodity: commodity.id };
 }
 
 function readAccount(text: string, i: number): { account: string; end: number } | null {
@@ -535,26 +522,5 @@ function stripCarriage(line: string): string {
 	return line.charAt(line.length - 1) === '\r' ? line.slice(0, -1) : line;
 }
 
-export function stripComment(line: string): string {
-	let quote = false;
-	for (let i = 0; i < line.length; i++) {
-		const ch = line.charAt(i);
-		if (ch === '\\' && quote) {
-			i++;
-			continue;
-		}
-		if (ch === '"') quote = !quote;
-		else if (ch === ';' && !quote) return line.slice(0, i);
-	}
-	return line;
-}
 
-
-function isComment(line: string): boolean {
-	return /^[ \t]*;/.test(line);
-}
-
-function isOrgHeading(line: string): boolean {
-	return /^\*+/.test(line);
-}
 

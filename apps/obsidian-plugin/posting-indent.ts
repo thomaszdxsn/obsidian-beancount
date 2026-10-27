@@ -19,8 +19,8 @@ import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { blockRangeInLedger } from './align';
-import { DATED_ENTRY_RE } from './beancount-mode';
 import { ledgerDoc, ledgerKind } from './fences';
+import { classifyLine } from './scan';
 
 /** The text Enter inserts where an entry continues: newline plus its indent. */
 const ENTRY_INDENT = '\n  ';
@@ -59,10 +59,12 @@ export function wantsIndent(
 ): boolean {
 	if (ledgerLine !== undefined && !ledgerLine(line)) return false;
 	const text = lines[line] ?? '';
-	if (DATED_ENTRY_RE.test(text)) return true;
+	const kind = classifyLine(text);
+	if (kind === 'txn-header' || kind === 'directive') return true;
 	if (!/^[ \t]/.test(text) || text.trim() === '') return false;
 	const { from } = blockRangeInLedger(lines, line, ledgerLine);
-	return DATED_ENTRY_RE.test(lines[from] ?? '');
+	const open = classifyLine(lines[from] ?? '');
+	return open === 'txn-header' || open === 'directive';
 }
 
 /**

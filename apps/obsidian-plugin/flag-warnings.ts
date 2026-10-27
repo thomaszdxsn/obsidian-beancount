@@ -11,6 +11,7 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS } from './diagnostics';
 import { isLedgerFile, ledgerDoc } from './fences';
+import { canonicalTxnFlag, classifyLine, scanLedger } from './scan';
 
 /** The CSS contract between these markers and `styles.css`. */
 export const WARNING_LINE_CLASS = 'cm-beancount-warning-line';
@@ -55,12 +56,7 @@ export interface FlagWarningHost {
 /** Asks every tracked view to rebuild without touching the document. */
 const refreshFlagWarnings = StateEffect.define<null>();
 
-/**
- * A dated transaction header: date, then `txn` or a one-character flag.
- * Org-mode `*` headings have no date and never match.
- */
-const TXN_FLAG_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]*(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
+
 
 /**
  * Flagged transaction lines in `text` whose configured level is error or
@@ -80,12 +76,12 @@ function flagDiagnosticsOfLines(
 	const diagnostics: FlagDiagnostic[] = [];
 	for (let line = 0; line < lines.length; line++) {
 		const text = lines[line] ?? '';
-		// A header opens with its date: skip the regex for every other line.
 		const head = text.charCodeAt(0);
 		if (!(head >= 0x30 && head <= 0x39)) continue;
-		const match = TXN_FLAG_RE.exec(text);
-		if (!match) continue;
-		const flag = match[2] === 'txn' ? '*' : match[2];
+		if (classifyLine(text) !== 'txn-header') continue;
+		const flagToken = scanLedger(text).entries[0]?.header?.flag;
+		if (flagToken === undefined) continue;
+		const flag = canonicalTxnFlag(flagToken);
 		const severity = flagWarnings[flag];
 		if (severity !== 'error' && severity !== 'warning') continue;
 		diagnostics.push({

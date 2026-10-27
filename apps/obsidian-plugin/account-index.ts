@@ -7,9 +7,11 @@
  */
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
+import { ACCOUNT_SHAPE } from './scan';
 import { VaultIndex } from './vault-index';
 import type { VaultCache } from './vault-index';
 
+export { ACCOUNT_SHAPE };
 /**
  * A complete account name: a capitalized root segment plus one or more
  * `:segment` parts, e.g. `Assets:Cash:Wallet` or `Expenses:餐饮:午饭`.
@@ -29,8 +31,6 @@ import type { VaultCache } from './vault-index';
  */
 const SEGMENT_CHARS = String.raw`\p{L}\p{N}\p{M}_\-·・`;
 const SEGMENT = `[${SEGMENT_CHARS}]`;
-const NAME_END = String.raw`(?<=[\p{L}\p{N}\p{M}_])`;
-export const ACCOUNT_SHAPE = String.raw`[A-Z]${SEGMENT}*(?::${SEGMENT}+)+${NAME_END}`;
 const ACCOUNT_RE = new RegExp(`(?<![${SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
 
 /** The same shape while typing, where the last segment may be partial. */
