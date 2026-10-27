@@ -199,7 +199,7 @@ describe('payee completion after txn', () => {
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(new Date(2026, 9, 4));
 		const vault = new FakeVault();
-		vault.write('a.md', '2026-09-30 * "Whole Foods" "Groceries"');
+		vault.write('a.bean', '2026-09-30 * "Whole Foods" "Groceries"');
 		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
 		const index = new VaultIndex(extractPayees);
 		registerVaultIndex(plugin as unknown as Plugin, index);

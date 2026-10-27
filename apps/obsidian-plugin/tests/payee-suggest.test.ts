@@ -10,7 +10,7 @@ const manifest = { id: 'beancount-obsidian' } as PluginManifest;
 
 /** A vault with completable payees, for trigger expectations. */
 const PAYEES = {
-	'a.md': ['2026-09-30 * "Whole Foods" "Groceries"', '2026-10-01 * "Shell" "Fuel"'].join('\n'),
+	'a.bean': ['2026-09-30 * "Whole Foods" "Groceries"', '2026-10-01 * "Shell" "Fuel"'].join('\n'),
 };
 
 const LEDGER_FILE = { path: 'ledger.bean', extension: 'bean' } as TFile;

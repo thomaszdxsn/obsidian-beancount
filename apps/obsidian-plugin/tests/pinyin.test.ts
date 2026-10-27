@@ -11,6 +11,9 @@ import { extractNarrations } from '../token-index';
 import { VaultIndex } from '../vault-index';
 import { createEditor } from './fakes';
 
+/** Completion only triggers in ledger text; these cases are about matching. */
+const LEDGER_FILE = { path: 'ledger.bean', extension: 'bean' } as TFile;
+
 describe('pinyinInitials', () => {
 	it('keeps ASCII and punctuation lowercased and maps CJK to initials', () => {
 		expect(pinyinInitials('Expenses:餐饮')).toBe('expenses:cy');
@@ -157,7 +160,7 @@ describe('account and payee pinyin completion', () => {
 		const suggest = new AccountSuggest({} as App, index);
 		const line = '  Expenses:cy';
 		const editor = createEditor([line]);
-		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, null);
+		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, LEDGER_FILE);
 		expect(info).toEqual({
 			start: { line: 0, ch: 2 },
 			end: { line: 0, ch: line.length },
@@ -182,7 +185,7 @@ describe('account and payee pinyin completion', () => {
 		index.setFileContent('a.bean', '2020-01-01 open Expenses:餐饮 USD');
 		const suggest = new AccountSuggest({} as App, index);
 		const line = '  Expenses:cy';
-		expect(suggest.onTrigger({ line: 0, ch: line.length }, createEditor([line]) as unknown as Editor, null)).toBeNull();
+		expect(suggest.onTrigger({ line: 0, ch: line.length }, createEditor([line]) as unknown as Editor, LEDGER_FILE)).toBeNull();
 	});
 
 	it('completes a payee from its initials and replaces the typed query', () => {
@@ -191,7 +194,7 @@ describe('account and payee pinyin completion', () => {
 		const suggest = new PayeeSuggest({} as App, index);
 		const line = '2026-09-30 * "cy';
 		const editor = createEditor([line]);
-		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, null);
+		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, LEDGER_FILE);
 		expect(info).toMatchObject({ query: 'cy', start: { line: 0, ch: 14 } });
 		expect(suggest.getSuggestions({ query: 'cy' } as EditorSuggestContext)).toEqual(['餐饮']);
 		suggest.context = {
@@ -214,7 +217,7 @@ describe('account and payee pinyin completion', () => {
 		index.setFileContent('a.bean', '2026-09-30 * "餐饮" "午饭"');
 		const suggest = new PayeeSuggest({} as App, index);
 		const line = '2026-09-30 * "cy';
-		expect(suggest.onTrigger({ line: 0, ch: line.length }, createEditor([line]) as unknown as Editor, null)).toBeNull();
+		expect(suggest.onTrigger({ line: 0, ch: line.length }, createEditor([line]) as unknown as Editor, LEDGER_FILE)).toBeNull();
 		expect(index.match('cy')).toEqual([]);
 	});
 
@@ -224,7 +227,7 @@ describe('account and payee pinyin completion', () => {
 		const suggest = new NarrationSuggest({} as App, index, () => true);
 		const line = '2026-09-30 * "Shell" "wf';
 		const editor = createEditor([line]);
-		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, null);
+		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, LEDGER_FILE);
 		expect(info).toMatchObject({ query: 'wf' });
 		expect(suggest.getSuggestions({ query: 'wf' } as EditorSuggestContext)).toEqual(['午饭']);
 		suggest.context = {
