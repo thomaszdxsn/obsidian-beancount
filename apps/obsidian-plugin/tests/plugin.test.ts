@@ -1,6 +1,8 @@
 import type { App, PluginManifest } from 'obsidian';
 import { Plugin } from 'obsidian';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BeanCheckRun, LineDiagnostic } from '../bean-check';
@@ -18,12 +20,29 @@ import type {
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
 import { createEditor, FakeVault, flush } from './fakes';
+import { alignLines, alignText } from '../align';
 import { FLAG_OKAY_TITLE, FLAGGED_MESSAGE, PAD_TRANSACTION_TITLE, openAccountTitle } from '../code-actions';
 import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
+import { VALIDATION_FAILURE_PREFIX } from '../problems';
+import { BeancountProblemsView, VIEW_TYPE_PROBLEMS } from '../problems-view';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+
+const LEDGER_CTX = { file: { extension: 'bean' } };
+const NOTE_CTX = { file: { extension: 'md' } };
+
+/** Command / on-save output at the default separator column. */
+function alignedLines(lines: readonly string[], separatorColumn = 50): string[] {
+	const copy = [...lines];
+	alignLines(copy, Math.max(0, separatorColumn - 1));
+	return copy;
+}
+
+function alignedText(text: string, separatorColumn = 50): string {
+	return alignText(text, Math.max(0, separatorColumn - 1));
+}
 
 // Obsidian injects `CodeMirror` onto the global at startup; tests install a
 // fake registry there to observe plugin registration and teardown.
@@ -110,6 +129,23 @@ function published(editor: FakeEditor): LineDiagnostic[] {
 	const last = editor.cm.dispatched[editor.cm.dispatched.length - 1];
 	const effect = last?.effects[0] as { value?: unknown; is(spec: unknown): boolean } | undefined;
 	return effect?.is(setLineDiagnostics) ? (effect.value as LineDiagnostic[]) : [];
+}
+
+async function problemTexts(plugin: BeancountPlugin & RecordingPlugin): Promise<string[]> {
+	const creator = plugin.registrations.views.find((entry) => entry.type === VIEW_TYPE_PROBLEMS);
+	const created = creator?.creator({ app: plugin.app });
+	if (!(created instanceof BeancountProblemsView)) throw new Error('missing problems view');
+	await created.onOpen();
+	const el: unknown = created.contentEl;
+	if (!el || typeof el !== 'object' || !('children' in el) || !Array.isArray(el.children)) {
+		throw new Error('problems view has no mount');
+	}
+	return el.children.map((child) => {
+		if (!child || typeof child !== 'object' || !('text' in child) || typeof child.text !== 'string') {
+			throw new Error('problems row has no text');
+		}
+		return child.text;
+	});
 }
 
 function clickDiagnostic(
@@ -261,22 +297,31 @@ describe('BeancountPlugin', () => {
 		await flush();
 
 		const narrations = plugin.registrations.editorSuggests[5] as {
-			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+			onTrigger(
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: { path: string; extension: string } | null
+			): unknown;
 		};
 		const line = createEditor(['2026-09-30 * "Shell" "Fu']);
 		const cursor = { line: 0, ch: line.lines[0].length };
+		const ledger = { path: 'ledger.bean', extension: 'bean' };
 		// Default settings leave the field alone…
-		expect(narrations.onTrigger(cursor, line, null)).toBeNull();
+		expect(narrations.onTrigger(cursor, line, ledger)).toBeNull();
 		// …the toggle turns it on…
 		plugin.settings.completeNarration = true;
-		expect(narrations.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
+		expect(narrations.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
 		// …and a stored true loads enabled.
 		const loaded = await loadPlugin(vault, { completeNarration: true });
 		await flush();
 		const enabled = loaded.plugin.registrations.editorSuggests[5] as {
-			onTrigger(cursor: { line: number; ch: number }, editor: unknown, file: null): unknown;
+			onTrigger(
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: { path: string; extension: string } | null
+			): unknown;
 		};
-		expect(enabled.onTrigger(cursor, line, null)).toMatchObject({ query: 'Fu' });
+		expect(enabled.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
 	});
 
 	it('leaves the payee field to the payee suggest', async () => {
@@ -288,17 +333,22 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault);
 		await flush();
 		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
-			onTrigger: (cursor: { line: number; ch: number }, editor: unknown, file: null) => unknown;
+			onTrigger: (
+				cursor: { line: number; ch: number },
+				editor: unknown,
+				file: { path: string; extension: string } | null
+			) => unknown;
 		}>;
 		// `"Ex` prefixes both the payee `Exxon` and the account
 		// `Expenses:Food`; the payee field must show payees, not accounts.
 		const payeeLine = createEditor(['2026-10-02 * "Ex']);
 		const cursor = { line: 0, ch: payeeLine.lines[0].length };
-		expect(accounts.onTrigger(cursor, payeeLine, null)).toBeNull();
-		expect(payees.onTrigger(cursor, payeeLine, null)).toMatchObject({ query: 'Ex' });
+		const ledger = { path: 'ledger.bean', extension: 'bean' };
+		expect(accounts.onTrigger(cursor, payeeLine, ledger)).toBeNull();
+		expect(payees.onTrigger(cursor, payeeLine, ledger)).toMatchObject({ query: 'Ex' });
 		// …while account completion still answers on posting lines.
 		const postingLine = createEditor(['  Expenses:Fo']);
-		expect(accounts.onTrigger({ line: 0, ch: 13 }, postingLine, null)).toMatchObject({
+		expect(accounts.onTrigger({ line: 0, ch: 13 }, postingLine, ledger)).toMatchObject({
 			query: 'Expenses:Fo',
 		});
 	});
@@ -431,12 +481,18 @@ describe('BeancountPlugin', () => {
 			// A popup is open: Enter accepts the suggestion, never indents.
 			suggest.context = {};
 			const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+			(open.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+				file: { path: 'ledger.bean', extension: 'bean' },
+			});
 			expect(run(open)).toBe(false);
 			expect(open.dispatched).toEqual([]);
 
 			suggest.context = null;
 		}
 		const closed = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		(closed.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(closed)).toBe(true);
 		expect(closed.dispatched).toHaveLength(1);
 	});
@@ -449,16 +505,25 @@ describe('BeancountPlugin', () => {
 		const text = '  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;
 		const view = createView(text, [{ anchor: caret }]);
+		(view.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(view)).toBe(true);
 		expect(view.dispatched).toHaveLength(1);
 		// Default separator column 50: the inserted `.` sits at 0-based index 49.
 		expect(view.dispatched[0].changes[0].insert.indexOf('.')).toBe(49);
 		plugin.settings.separatorColumn = 40;
 		const col40 = createView(text, [{ anchor: caret }]);
+		(col40.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(col40)).toBe(true);
 		expect(col40.dispatched[0].changes[0].insert.indexOf('.')).toBe(39);
 		plugin.settings.instantAlignment = false;
 		const silenced = createView(text, [{ anchor: caret }]);
+		(silenced.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
 		expect(run(silenced)).toBe(false);
 		expect(silenced.dispatched).toEqual([]);
 	});
@@ -466,19 +531,16 @@ describe('BeancountPlugin', () => {
 
 	it('aligns the transaction block at the cursor from the command', async () => {
 		const { plugin } = await loadPlugin();
-		const editor = createEditor([
+		const lines = [
 			'2026-10-01 * "Store"',
 			'  Expenses:Food 12.5 USD',
 			'  Assets:Cash -12.5 USD',
-		]);
+		];
+		const editor = createEditor(lines);
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		expect(editor.lines).toEqual([
-			'2026-10-01 * "Store"',
-			'  Expenses:Food 12.5 USD',
-			'  Assets:Cash  -12.5 USD',
-		]);
+		expect(editor.lines).toEqual(alignedLines(lines));
 		expect(editor.transactions).toHaveLength(1);
 	});
 
@@ -499,7 +561,7 @@ describe('BeancountPlugin', () => {
 
 	it('aligns only the transaction block at the cursor', async () => {
 		const { plugin } = await loadPlugin();
-		const editor = createEditor([
+		const lines = [
 			'2026-10-01 * "A"',
 			'  Expenses:Food 12.5 CNY',
 			'  Assets:Cash -12.5 CNY',
@@ -507,22 +569,15 @@ describe('BeancountPlugin', () => {
 			'2026-10-02 * "B"',
 			'  Expenses:Food:Rest 1234.5 CNY',
 			'  Assets:Cash -1234.5 CNY',
-		]);
+		];
+		const editor = createEditor(lines);
 		editor.setCursor({ line: 6, ch: 1 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		// The first transaction is outside the cursor's block and stays as
 		// written — including its own unaligned-looking gap.
-		expect(editor.lines).toEqual([
-			'2026-10-01 * "A"',
-			'  Expenses:Food 12.5 CNY',
-			'  Assets:Cash -12.5 CNY',
-			'',
-			'2026-10-02 * "B"',
-			'  Expenses:Food:Rest 1234.5 CNY',
-			'  Assets:Cash       -1234.5 CNY',
-		]);
+		expect(editor.lines).toEqual([...lines.slice(0, 4), ...alignedLines(lines.slice(4))]);
 	});
 
 	it('aligns the selection only, not the block around it', async () => {
@@ -537,14 +592,12 @@ describe('BeancountPlugin', () => {
 			'  Assets:Cash -1234.5 CNY',
 		]);
 		// One posting line of the second transaction — a strict subset of its
-		// block, whose own column needs no padding.
+		// block. The rest of the block, and the first transaction, stay put.
 		editor.selections = [{ anchor: { line: 6, ch: 0 }, head: { line: 6, ch: 23 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		// Aligning the whole block instead would have padded line 6 to seven
-		// spaces; the selection's own column leaves everything in place.
-		expect(editor.lines).toEqual([
+		const expected = [
 			'2026-10-01 * "A"',
 			'  Expenses:Food 12.5 CNY',
 			'  Assets:Cash -12.5 CNY',
@@ -552,7 +605,9 @@ describe('BeancountPlugin', () => {
 			'2026-10-02 * "B"',
 			'  Expenses:Food:Rest 1234.5 CNY',
 			'  Assets:Cash -1234.5 CNY',
-		]);
+		];
+		expected[6] = alignedLines([expected[6]])[0];
+		expect(editor.lines).toEqual(expected);
 	});
 
 	it('aligns the selected lines to their block column', async () => {
@@ -568,24 +623,22 @@ describe('BeancountPlugin', () => {
 		]);
 		editor.selections = [{ anchor: { line: 5, ch: 0 }, head: { line: 6, ch: 23 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.lines).toEqual([
 			'2026-10-01 * "A"',
 			'  Expenses:Food 12.5 CNY',
 			'  Assets:Cash -12.5 CNY',
 			'',
-			'2026-10-02 * "B"',
-			'  Expenses:Food:Rest 1234.5 CNY',
-			'  Assets:Cash       -1234.5 CNY',
+			...alignedLines(['2026-10-02 * "B"', '  Expenses:Food:Rest 1234.5 CNY', '  Assets:Cash -1234.5 CNY']),
 		]);
 	});
 
 	it('leaves an already aligned file untouched from the command', async () => {
 		const { plugin } = await loadPlugin();
-		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		const editor = createEditor(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.transactions).toEqual([]);
 	});
@@ -593,12 +646,12 @@ describe('BeancountPlugin', () => {
 	it('keeps a lone caret before its amount when the gap moves', async () => {
 		const { plugin } = await loadPlugin();
 		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
-		// Past the gap end on the line whose gap widens (1 → 2 spaces).
+		// Past the gap end on the line whose gap widens to the separator column.
 		editor.setCursor({ line: 1, ch: 15 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		expect(editor.getCursor()).toEqual({ line: 1, ch: 16 });
+		expect(editor.getCursor()).toEqual({ line: 1, ch: 47 });
 	});
 
 	it('rides a caret inside the gap to the amount', async () => {
@@ -606,10 +659,10 @@ describe('BeancountPlugin', () => {
 		const editor = createEditor(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY']);
 		editor.setCursor({ line: 0, ch: 14 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		// The gap grows from 2 to 7 spaces; the caret lands at its new end.
-		expect(editor.getCursor()).toEqual({ line: 0, ch: 20 });
+		// The gap grows to the separator column; the caret lands at its new end.
+		expect(editor.getCursor()).toEqual({ line: 0, ch: 47 });
 	});
 
 	it('keeps a caret before the gap in place', async () => {
@@ -617,7 +670,7 @@ describe('BeancountPlugin', () => {
 		const editor = createEditor(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY']);
 		editor.setCursor({ line: 0, ch: 5 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.getCursor()).toEqual({ line: 0, ch: 5 });
 	});
@@ -630,9 +683,9 @@ describe('BeancountPlugin', () => {
 			{ anchor: { line: 1, ch: 5 }, head: { line: 1, ch: 5 } },
 		];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		expect(editor.lines[0]).toBe('  Assets:Cash       12.5 CNY');
+		expect(editor.lines[0]).toBe(alignedLines(['  Assets:Cash  12.5 CNY', '  Expenses:A:B:C -1234.5 CNY'])[0]);
 		// The plugin must not force a single caret over the user's carets.
 		expect(editor.selections).toEqual([
 			{ anchor: { line: 0, ch: 14 }, head: { line: 0, ch: 14 } },
@@ -650,13 +703,12 @@ describe('BeancountPlugin', () => {
 		// Selecting whole lines by dragging to the next line's start.
 		editor.selections = [{ anchor: { line: 0, ch: 0 }, head: { line: 2, ch: 0 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		// Line 2 holds no selected characters: untouched, and its width does
 		// not widen the column of the selected lines either.
 		expect(editor.lines).toEqual([
-			'  Expenses:Food 12.5 CNY',
-			'  Assets:Cash  -12.5 CNY',
+			...alignedLines(['  Expenses:Food 12.5 CNY', '  Assets:Cash -12.5 CNY']),
 			'  Expenses:Food:Rest 1.00 USD',
 		]);
 	});
@@ -668,7 +720,7 @@ describe('BeancountPlugin', () => {
 		// gap widens; the account side keeps the caret.
 		editor.setCursor({ line: 1, ch: 13 });
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
 		expect(editor.getCursor()).toEqual({ line: 1, ch: 13 });
 	});
@@ -680,14 +732,130 @@ describe('BeancountPlugin', () => {
 		// before retyping it.
 		editor.selections = [{ anchor: { line: 0, ch: 15 }, head: { line: 0, ch: 19 } }];
 
-		plugin.registrations.commands[0].editorCallback?.(editor);
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
 
-		// The selection is the scope, so the line drops to its own column
-		// instead of the block's — and the range itself must survive.
-		expect(editor.lines[0]).toBe('  Assets:Cash 12.5 CNY');
+		// The selection is the scope, so only this line moves to the
+		// separator column — and the range itself must survive.
+		expect(editor.lines[0]).toBe(alignedLines(['  Assets:Cash  12.5 CNY'])[0]);
 		// Forcing a caret here would make the next keystroke insert instead
 		// of replacing the selection.
 		expect(editor.selections).toEqual([{ anchor: { line: 0, ch: 15 }, head: { line: 0, ch: 19 } }]);
+	});
+
+	it('aligns only fence bodies in a note and leaves posting-shaped prose', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'2026-10-01 * "Cafe"',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+		];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 4, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines).toEqual([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			...alignedLines(['2026-10-01 * "Cafe"', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+			'```',
+			'  Assets:Cash -12.5 USD',
+		]);
+	});
+
+	it('does nothing in a note when the caret is outside a fence', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Assets:Cash -12.5 USD',
+			'```',
+		];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 0, ch: 2 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.transactions).toEqual([]);
+		expect(editor.lines).toEqual(lines);
+	});
+
+	it('aligns a fence below prose holding an unmatched quote', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = ['a 27" monitor', '```beancount', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD', '```'];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 3, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines.slice(2, 4)).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
+	});
+
+	it('does not let a fence-body block extend into prose', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Assets:Cash -12.5 USD',
+			'```',
+		];
+		const editor = createEditor(lines);
+		editor.setCursor({ line: 2, ch: 1 });
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines[0]).toBe('  Expenses:Food 12.5 USD');
+		expect(editor.lines[2]).toBe(alignedLines(['  Assets:Cash -12.5 USD'])[0]);
+	});
+
+	it('aligns only selected fence-body lines in a note', async () => {
+		const { plugin } = await loadPlugin();
+		const lines = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+		];
+		const editor = createEditor(lines);
+		editor.selections = [{ anchor: { line: 0, ch: 0 }, head: { line: 5, ch: 10 } }];
+
+		plugin.registrations.commands[0].editorCallback?.(editor, NOTE_CTX);
+
+		expect(editor.lines).toEqual([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			...alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+			'```',
+			'  Assets:Cash -12.5 USD',
+		]);
+	});
+
+	it('keeps a column-50 block at 50 from Align decimal points', async () => {
+		const { plugin } = await loadPlugin();
+		const padded = alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const editor = createEditor(padded);
+
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
+
+		expect(editor.lines).toEqual(padded);
+		expect(editor.transactions).toEqual([]);
+	});
+
+	it('reproduces tight alignment when separatorColumn is 1', async () => {
+		const { plugin } = await loadPlugin();
+		plugin.settings.separatorColumn = 1;
+		const lines = ['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD'];
+		const editor = createEditor(lines);
+
+		plugin.registrations.commands[0].editorCallback?.(editor, LEDGER_CTX);
+
+		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
 	});
 
 	it('skips on-save alignment while the setting is off', async () => {
@@ -710,13 +878,118 @@ describe('BeancountPlugin', () => {
 		await delay(600);
 
 		expect(vault.contents.get('ledger.bean')).toBe(
-			'  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD'
+			alignedText('  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD')
 		);
 		expect(vault.writes).toEqual(['ledger.bean']);
 
 		// The rewrite fires `modify` again; aligned text must not rewrite.
 		await delay(600);
 		expect(vault.writes).toEqual(['ledger.bean']);
+	});
+
+	it('aligns only fence bodies on save and does not write a note without fences', async () => {
+		const vault = new FakeVault();
+		const fenced = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+			'',
+		].join('\n');
+		const note = vault.write('note.md', fenced);
+		const prose = vault.write('plain.md', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n');
+		await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', note);
+		await vault.emit('modify', prose);
+		await delay(600);
+
+		expect(vault.contents.get('note.md')).toBe(
+			[
+				'  Expenses:Food 12.5 USD',
+				'```beancount',
+				...alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+				'```',
+				'  Assets:Cash -12.5 USD',
+				'',
+			].join('\n')
+		);
+		expect(vault.contents.get('plain.md')).toBe('  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n');
+		expect(vault.writes).toEqual(['note.md']);
+	});
+
+	it('keeps indented-fence indent on save and leaves a column-50 fence at 50', async () => {
+		const vault = new FakeVault();
+		const padded = alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const at50 = vault.write(
+			'at50.md',
+			['```beancount', ...padded, '```', ''].join('\n')
+		);
+		const indented = vault.write(
+			'indent.md',
+			['  ```beancount', '    Expenses:Food 12.5 USD', '    Assets:Cash -12.5 USD', '  ```', ''].join('\n')
+		);
+		await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', at50);
+		await vault.emit('modify', indented);
+		await delay(600);
+
+		expect(vault.contents.get('at50.md')).toBe(['```beancount', ...padded, '```', ''].join('\n'));
+		expect(vault.writes).not.toContain('at50.md');
+		const indentLines = vault.contents.get('indent.md')!.split('\n');
+		expect(indentLines[0]).toBe('  ```beancount');
+		expect(indentLines[1].startsWith('    ')).toBe(true);
+		expect(indentLines[2].startsWith('    ')).toBe(true);
+		expect(indentLines[1]).toBe(alignedLines(['    Expenses:Food 12.5 USD', '    Assets:Cash -12.5 USD'])[0]);
+		expect(indentLines[3]).toBe('  ```');
+	});
+
+	it('aligns an open note through its editor on save without touching prose', async () => {
+		const vault = new FakeVault();
+		const content = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'',
+		].join('\n');
+		const file = vault.write('note.md', content);
+		const editor = createEditor(content.split('\n'));
+		await loadPlugin(vault, { alignOnSave: true }, [{ view: { file, editor } }]);
+
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(editor.lines).toEqual([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			...alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']),
+			'```',
+			'',
+		]);
+		expect(vault.writes).toEqual([]);
+	});
+
+	it('keeps a column-50 ledger at 50 on save and with separatorColumn 1 uses a tight gap', async () => {
+		const vault = new FakeVault();
+		const padded = alignedText('  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		const at50 = vault.write('wide.bean', padded);
+		const tight = vault.write('tight.bean', '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD');
+		const { plugin } = await loadPlugin(vault, { alignOnSave: true });
+
+		await vault.emit('modify', at50);
+		await delay(600);
+		expect(vault.contents.get('wide.bean')).toBe(padded);
+		expect(vault.writes).toEqual([]);
+
+		plugin.settings.separatorColumn = 1;
+		await vault.emit('modify', tight);
+		await delay(600);
+		expect(vault.contents.get('tight.bean')).toBe('  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD');
 	});
 
 	it('debounces a burst of saves into one rewrite', async () => {
@@ -765,15 +1038,17 @@ describe('BeancountPlugin', () => {
 		// Obsidian autosaves, so a vault write would just be clobbered. The
 		// walk covers every block, not just the caret's: block B aligns even
 		// though the cursor sits in block A.
-		expect(editor.lines).toEqual([
-			'2026-10-01 * "A"',
-			'  Expenses:Food 12.5 CNY',
-			'  Assets:Cash  -12.5 CNY',
-			'',
-			'2026-10-02 * "B"',
-			'  Expenses:Food:Rest 1234.5 CNY',
-			'  Assets:Cash       -1234.5 CNY',
-		]);
+		expect(editor.lines).toEqual(
+			alignedLines([
+				'2026-10-01 * "A"',
+				'  Expenses:Food 12.5 CNY',
+				'  Assets:Cash -12.5 CNY',
+				'',
+				'2026-10-02 * "B"',
+				'  Expenses:Food:Rest 1234.5 CNY',
+				'  Assets:Cash -1234.5 CNY',
+			])
+		);
 		expect(vault.writes).toEqual([]);
 		// Autosaving the aligned buffer fires `modify` again; nothing is left.
 		await vault.emit('modify', file);
@@ -790,7 +1065,7 @@ describe('BeancountPlugin', () => {
 		await vault.emit('modify', file);
 		await delay(600);
 
-		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(editor.lines).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 		expect(vault.writes).toEqual([]);
 	});
 
@@ -810,7 +1085,7 @@ describe('BeancountPlugin', () => {
 		await vault.emit('modify', file);
 		await delay(600);
 
-		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(editor.lines).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 		expect(vault.writes).toEqual([]);
 	});
 
@@ -897,7 +1172,7 @@ describe('BeancountPlugin', () => {
 		await delay(1100);
 
 		// The editor buffer owns it now — no vault write to be clobbered.
-		expect(editor.lines).toEqual(['  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD']);
+		expect(editor.lines).toEqual(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']));
 		expect(vault.writes).toEqual([]);
 	});
 
@@ -1577,7 +1852,7 @@ describe('BeancountPlugin', () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '2026-10-01 * "Broken"\n');
 		const editor = createEditor(['2026-10-01 * "Broken"']);
-		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
 		beanCheckResult = { stderr: '', missing: true };
 
 		await vault.emit('modify', file);
@@ -1590,6 +1865,9 @@ describe('BeancountPlugin', () => {
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain('pip install beancount');
 		expect(editor.cm.dispatched).toEqual([]);
+		expect(await problemTexts(plugin)).toContain(
+			`ledger.bean  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
+		);
 	});
 
 	it('announces reports no editor can place', async () => {
@@ -1739,7 +2017,7 @@ describe('BeancountPlugin', () => {
 		const vault = new FakeVault();
 		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
 		const editor = createEditor(['2026-10-01 * "A"']);
-		await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
 		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
 
 		await vault.emit('modify', file);
@@ -1757,6 +2035,134 @@ describe('BeancountPlugin', () => {
 
 		expect(notices).toEqual(['bean-check failed: Traceback (most recent call last):']);
 		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
+		expect(await problemTexts(plugin)).toEqual(
+			expect.arrayContaining([
+				'ledger.bean:1  oops',
+				`ledger.bean  ${VALIDATION_FAILURE_PREFIX}failed: Traceback (most recent call last):`,
+			]),
+		);
+
+		beanCheckResult = { stderr: '', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(published(editor)).toEqual([]);
+		expect(await problemTexts(plugin)).toEqual(['No problems.']);
+	});
+
+	it('keeps marks when bean-check times out and lists the failure', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const editor = createEditor(['2026-10-01 * "A"']);
+		const { plugin } = await loadPlugin(vault, null, [{ view: { file, editor } }]);
+		beanCheckResult = { stderr: '/vault/ledger.bean:1:       oops\n', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+
+		beanCheckResult = { stderr: '', missing: false, failure: 'timed out' };
+		await vault.emit('modify', file);
+		await delay(600);
+		await vault.emit('modify', file);
+		await delay(600);
+
+		expect(notices).toEqual(['bean-check timed out']);
+		expect(published(editor)).toEqual([{ line: 0, message: 'oops' }]);
+		expect(await problemTexts(plugin)).toContain(`ledger.bean  ${VALIDATION_FAILURE_PREFIX}timed out`);
+	});
+
+	it('does not re-arm another target’s notice when a quiet run finishes', async () => {
+		const vault = new FakeVault();
+		const ledger = vault.write('ledger.bean', 'include "gone.bean"\n');
+		const note = vault.write('note.md', '```beancount\noption "title" "ok"\n```\n');
+		const { plugin } = await loadPlugin(vault);
+		plugin.beanCheckRunner = async (_command, args) => {
+			beanCheckRuns.push({ command: 'bean-check', args: [...args] });
+			if (String(args[0]).endsWith('fences.bean')) return { stderr: '', missing: false };
+			return {
+				stderr: '<load>:0:       File "/vault/gone.bean" does not exist\n',
+				missing: false,
+			};
+		};
+
+		await vault.emit('modify', ledger);
+		await delay(600);
+		expect(notices).toEqual(['bean-check: <load>: File "/vault/gone.bean" does not exist']);
+
+		await vault.emit('modify', note);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+
+		await vault.emit('modify', ledger);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+	});
+
+	it('notices a missing bean-check again after a quiet run', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		beanCheckResult = { stderr: '', missing: true };
+
+		await vault.emit('modify', file);
+		await delay(600);
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+
+		beanCheckResult = { stderr: '', missing: false };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(await problemTexts(plugin)).toEqual(['No problems.']);
+
+		beanCheckResult = { stderr: '', missing: true };
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(2);
+		expect(await problemTexts(plugin)).toContain(
+			`ledger.bean  ${VALIDATION_FAILURE_PREFIX}not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.`,
+		);
+	});
+
+	it('notices a missing bean-check again after the bean-check path changes', async () => {
+		const vault = new FakeVault();
+		const file = vault.write('ledger.bean', '2026-10-01 * "A"\n');
+		const { plugin } = await loadPlugin(vault);
+		beanCheckResult = { stderr: '', missing: true };
+
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(1);
+
+		plugin.settings.beanCheckPath = '/opt/bean-check';
+		await plugin.saveSettings();
+		await vault.emit('modify', file);
+		await delay(600);
+		expect(notices).toHaveLength(2);
+	});
+
+	it('notices when the temporary fence ledger cannot be written', async () => {
+		const note = ['```beancount', 'option "title" "ok"', '```'].join('\n');
+		const vault = new FakeVault();
+		const file = vault.write('note.md', note);
+		const { plugin } = await loadPlugin(vault);
+		const dir = mkdtempSync(join(tmpdir(), 'bean-tmp-'));
+		const blocked = join(dir, 'not-a-dir');
+		writeFileSync(blocked, 'x');
+		const previous = process.env.TMPDIR;
+		process.env.TMPDIR = blocked;
+		try {
+			await vault.emit('modify', file);
+			await delay(600);
+
+			expect(beanCheckRuns).toEqual([]);
+			expect(notices).toEqual(['bean-check could not write the temporary ledger']);
+			expect(await problemTexts(plugin)).toContain(
+				`note.md  ${VALIDATION_FAILURE_PREFIX}could not write the temporary ledger`,
+			);
+		} finally {
+			if (previous === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = previous;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it('refuses a bean-check path that is not the validator', async () => {
@@ -2061,7 +2467,7 @@ describe('BeancountPlugin', () => {
 		const other = createEditor([...lines]);
 		other.setCursor({ line: 1, ch: 4 });
 		command?.editorCallback?.(other, { file: { extension: 'bean' } });
-		expect(other.lines[2]).toBe('  Assets:Cash  -12.5 USD');
+		expect(other.lines[2]).toBe(alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD'])[1]);
 		expect(other.getCursor()).toEqual({ line: 1, ch: 4 });
 
 		const many = createEditor([...lines]);
@@ -2100,6 +2506,29 @@ describe('BeancountPlugin', () => {
 		const fenced = createEditor(['note  ', '```beancount', loose, '```']);
 		command?.editorCallback?.(fenced, { file: null });
 		expect(fenced.lines).toEqual(['note  ', '```beancount', '2022-01-01 open Assets:A', '```']);
+	});
+
+	it('formats postings to the separator column in a ledger and a fenced note', async () => {
+		const { plugin } = await loadPlugin();
+		const command = plugin.registrations.commands.find((entry) => entry.id === 'format-ledger');
+		const padded = alignedLines(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
+		const bean = createEditor(['2026-10-01 * "Store"', ...padded]);
+		command?.editorCallback?.(bean, { file: { extension: 'bean' } });
+		expect(bean.lines.slice(1)).toEqual(padded);
+		expect(bean.transactions).toEqual([]);
+
+		const note = createEditor(['prose', '```beancount', '2026-10-01 * "Store"', ...padded, '```']);
+		command?.editorCallback?.(note, { file: { extension: 'md' } });
+		expect(note.lines.slice(3, 5)).toEqual(padded);
+
+		plugin.settings.separatorColumn = 1;
+		const tight = createEditor([
+			'2026-10-01 * "Store"',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+		]);
+		command?.editorCallback?.(tight, { file: { extension: 'bean' } });
+		expect(tight.lines[2]).toBe('  Assets:Cash  -12.5 USD');
 	});
 
 

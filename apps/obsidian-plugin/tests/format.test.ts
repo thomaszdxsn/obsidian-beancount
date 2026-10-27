@@ -676,6 +676,55 @@ const FORMAT_CORPUS = [
 	'2022-01-01 open Assets:A\r\n  name: "Main  "\r\n',
 ];
 
+describe('formatLedger separator column', () => {
+	it('keeps today’s tight column without a target, and pads when given one', () => {
+		const src = '2026-10-01 * "A"\n  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n';
+		const tight = '2026-10-01 * "A"\n  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n';
+		expect(formatLedger(src)).toEqual({ ok: true, text: tight });
+		expect(formatLedger(src, 0)).toEqual({ ok: true, text: tight });
+		const wide = formatLedger(src, 49);
+		expect(wide.ok).toBe(true);
+		if (!wide.ok) return;
+		expect(wide.text.split('\n')[2].indexOf('.')).toBe(49);
+		expect(formatLedger(wide.text, 49)).toEqual({ ok: true, text: wide.text });
+	});
+
+	it('pads fence bodies to the target column and restores opener indent', () => {
+		const note = [
+			'prose  ',
+			'  ```beancount',
+			'  2026-10-01 * "Cafe"',
+			'    Expenses:Food 12.5 USD',
+			'    Assets:Cash -12.5 USD',
+			'  ```',
+			'  Expenses:Food 12.5 USD',
+			'',
+		].join('\n');
+		const result = formatFencedDocument(note, 49);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const lines = result.text.split('\n');
+		expect(lines[0]).toBe('prose  ');
+		expect(lines[1]).toBe('  ```beancount');
+		expect(lines[6]).toBe('  Expenses:Food 12.5 USD');
+		expect(lines[3].startsWith('    ')).toBe(true);
+		expect(lines[3].indexOf('.')).toBe(49);
+		expect(formatFencedDocument(note)).toEqual({
+			ok: true,
+			text: [
+				'prose  ',
+				'  ```beancount',
+				'  2026-10-01 * "Cafe"',
+				'    Expenses:Food 12.5 USD',
+				'    Assets:Cash  -12.5 USD',
+				'  ```',
+				'  Expenses:Food 12.5 USD',
+				'',
+			].join('\n'),
+		});
+	});
+});
+
 describe('formatLedger stability', () => {
 	it('preserves the parsed model and is idempotent on a seeded corpus', () => {
 		const rand = mulberry32(0x5eed2026);

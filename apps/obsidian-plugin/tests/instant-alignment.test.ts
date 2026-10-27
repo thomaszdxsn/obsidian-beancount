@@ -10,8 +10,18 @@ import {
 	instantAlignmentPlan,
 } from '../instant-alignment';
 import type { InstantPlan } from '../instant-alignment';
-import type { MockKeymapExtension } from './mocks/codemirror';
+import type { MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
+
+const BEAN_FILE = { path: 'ledger.bean', extension: 'bean' };
+const NOTE_FILE = { path: 'note.md', extension: 'md' };
+
+function attachFile(view: MockView, file: { path: string; extension: string }): MockView {
+	(view.state as { field?: (spec?: unknown, required?: boolean) => { file: typeof file } }).field = () => ({
+		file,
+	});
+	return view;
+}
 
 type Host = { settings: { instantAlignment: boolean; separatorColumn: number } };
 type Run = (view: EditorView) => boolean;
@@ -215,7 +225,7 @@ describe('instantAlignmentExtension', () => {
 	it('dispatches the insert and alignment as one transaction', () => {
 		const text = '  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;
-		const view = createView(text, [{ anchor: caret }]);
+		const view = attachFile(createView(text, [{ anchor: caret }]), BEAN_FILE);
 		expect(runOf(host)(view as unknown as EditorView)).toBe(true);
 		expect(view.dispatched).toHaveLength(1);
 		const next = apply(text, view.dispatched[0]);
@@ -226,7 +236,7 @@ describe('instantAlignmentExtension', () => {
 	});
 
 	it('hands the key back to the editor outside an amount', () => {
-		const view = createView('prose', [{ anchor: 5 }]);
+		const view = attachFile(createView('prose', [{ anchor: 5 }]), BEAN_FILE);
 		expect(runOf(host)(view as unknown as EditorView)).toBe(false);
 		expect(view.dispatched).toEqual([]);
 	});
@@ -234,12 +244,50 @@ describe('instantAlignmentExtension', () => {
 	it('stays out of the way while the setting is off', () => {
 		const text = '  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;
-		const view = createView(text, [{ anchor: caret }]);
+		const view = attachFile(createView(text, [{ anchor: caret }]), BEAN_FILE);
 		expect(
 			runOf({ settings: { instantAlignment: false, separatorColumn: COLUMN } })(
 				view as unknown as EditorView
 			)
 		).toBe(false);
 		expect(view.dispatched).toEqual([]);
+	});
+
+	it('hands the key back in a markdown note outside fences', () => {
+		const text = '  Expenses:Food 12';
+		const caret = text.length;
+		const view = attachFile(createView(text, [{ anchor: caret }]), NOTE_FILE);
+		expect(runOf(host)(view as unknown as EditorView)).toBe(false);
+		expect(view.dispatched).toEqual([]);
+	});
+
+	it('aligns inside a beancount fence and not from a header above the opener', () => {
+		const inside = ['# note', '```beancount', '2026-10-01 * "S"', '  Expenses:Food 12', '```'].join('\n');
+		const caret = inside.indexOf('12') + 2;
+		const view = attachFile(createView(inside, [{ anchor: caret }]), NOTE_FILE);
+		expect(runOf(host)(view as unknown as EditorView)).toBe(true);
+
+		const crossed = [
+			'2026-10-01 * "A"',
+			'  Assets:Cash 34 USD',
+			'   ```beancount',
+			'  Expenses:Food 12',
+			'```',
+		].join('\n');
+		const food = crossed.indexOf('12') + 2;
+		const isolated = attachFile(createView(crossed, [{ anchor: food }]), NOTE_FILE);
+		expect(runOf(host)(isolated as unknown as EditorView)).toBe(true);
+		const next = apply(crossed, isolated.dispatched[0]);
+		expect(next.split('\n')[1]).toBe('  Assets:Cash 34 USD');
+		expect(next.split('\n')[3]).toContain('12.');
+	});
+
+	it('aligns in a fence below prose holding an unmatched quote', () => {
+		const text = ['a 27" monitor', '```beancount', '  Assets:Cash 34.00 USD', '  Expenses:Food 12', '```'].join('\n');
+		const caret = text.indexOf('12') + 2;
+		const view = attachFile(createView(text, [{ anchor: caret }]), NOTE_FILE);
+		expect(runOf(host)(view as unknown as EditorView)).toBe(true);
+		const next = apply(text, view.dispatched[0]).split('\n');
+		expect(next[2].indexOf('.')).toBe(next[3].indexOf('.'));
 	});
 });

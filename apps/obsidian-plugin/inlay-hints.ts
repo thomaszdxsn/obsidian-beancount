@@ -40,10 +40,9 @@ import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { BalanceLineCache, balanceHints } from './balance-hints';
 import type { BalanceHint } from './balance-hints';
-import { docFences } from './fences';
+import { docFences, isLedgerFile } from './fences';
 import { postingHints } from './posting-hints';
 import type { PostingHint } from './posting-hints';
-import { isLedgerFile } from './vault-index';
 
 /** The CSS contract between the widgets and `styles.css`. */
 export const BALANCE_HINT_CLASS = 'cm-beancount-balance-hint';

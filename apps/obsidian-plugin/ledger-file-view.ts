@@ -30,7 +30,7 @@ import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { beancountMode } from './beancount-mode';
 import type { BeancountState } from './beancount-mode';
-import { isLedgerFile } from './vault-index';
+import { isLedgerFile } from './fences';
 
 /** Class on `.cm-editor` while a ledger file is open. `styles.css` keys off it. */
 export const LEDGER_FILE_CLASS = 'beancount-ledger-file';

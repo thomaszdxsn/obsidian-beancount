@@ -350,6 +350,9 @@ describe('fava start without a process', () => {
 		plugin.favaOpener = (url) => {
 			opened.push(url);
 		};
+		plugin.favaReadyProbe = async () => 200;
+		plugin.favaDelay = async () => {};
+		plugin.favaCloseTimeoutMs = 0;
 
 		await command(plugin, 'start-fava')();
 		await command(plugin, 'start-fava')();
@@ -749,38 +752,49 @@ describe('stale validation', () => {
 		expect(await problemTexts(plugin)).toEqual(['No problems.']);
 	});
 
-	it('keeps another target’s bean-check mark when a stale flag is cleared', async () => {
+	it('clears bean-check markers when entryLedger changes, keeps flags, and does not run', async () => {
 		const vault = new FakeVault();
 		vault.write('main.bean', 'include "journal.bean"\n');
 		const journal = vault.write('journal.bean', '2026-10-01 ! "Cafe"\n  Assets:Cash  1.00 USD\n');
 		const editor = createEditor(['2026-10-01 ! "Cafe"', '  Assets:Cash  1.00 USD']);
 		const { plugin, leaves } = await loadPlugin(vault, null);
 		leaves.push({ view: { file: journal, editor } });
-		plugin.beanCheckRunner = async () => ({
-			stderr: "/vault/journal.bean:2:       Invalid reference to unknown account 'Assets:Cash'\n",
-			missing: false,
-		});
+		let runs = 0;
+		plugin.beanCheckRunner = async () => {
+			runs += 1;
+			return {
+				stderr: "/vault/journal.bean:2:       Invalid reference to unknown account 'Assets:Cash'\n",
+				missing: false,
+			};
+		};
 
 		await vault.emit('modify', journal);
 		await delay(600);
 		const bean = { line: 1, message: "Invalid reference to unknown account 'Assets:Cash'" };
-		expect(published(editor)).toEqual([{ line: 0, message: 'Transaction is flagged incomplete' }, bean]);
+		const flag = { line: 0, message: 'Transaction is flagged incomplete' };
+		expect(published(editor)).toEqual([flag, bean]);
+		expect(runs).toBe(1);
 
 		plugin.settings.entryLedger = 'main.bean';
 		await plugin.saveSettings();
-		Object.assign(editor.cm, {
-			state: { field: () => [bean, { line: 0, message: 'Transaction is flagged incomplete' }] },
-		});
-		plugin.beanCheckRunner = async () => ({ stderr: '', missing: false });
+		expect(published(editor)).toEqual([flag]);
+		expect(await problemTexts(plugin)).toEqual(['No problems.']);
+		expect(runs).toBe(1);
+
+		plugin.beanCheckRunner = async () => {
+			runs += 1;
+			return { stderr: '', missing: false };
+		};
 		await vault.emit('modify', journal);
 		await delay(600);
-		expect(published(editor)).toEqual([{ line: 0, message: 'Transaction is flagged incomplete' }, bean]);
+		expect(runs).toBe(2);
+		expect(published(editor)).toEqual([flag]);
 
 		editor.lines[0] = '2026-10-01 * "Cafe"';
 		await vault.emit('modify', journal);
 		await delay(600);
-
-		expect(published(editor)).toEqual([bean]);
+		expect(runs).toBe(3);
+		expect(published(editor)).toEqual([]);
 	});
 });
 

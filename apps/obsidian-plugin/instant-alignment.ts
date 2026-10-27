@@ -13,8 +13,10 @@ import { EditorSelection, Prec } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import type { EditorView } from '@codemirror/view';
-import { blockRangeAt, computeAlignment, isAmountDotInsert } from './align';
+import { editorInfoField } from 'obsidian';
+import { alignmentTarget, blockRangeInLedger, computeAlignment, isAmountDotInsert } from './align';
 import type { LineEdit } from './align';
+import { docFences, ledgerLinesOf } from './fences';
 
 /** A caret as whole-text offsets; `head` is the active end. */
 export interface Caret {
@@ -74,7 +76,8 @@ function lineAt(lines: Lines, offset: number): number {
 export function instantAlignmentPlan(
 	text: string,
 	carets: readonly Caret[],
-	separatorColumn: number
+	separatorColumn: number,
+	ledgerLine?: (lineIndex: number) => boolean
 ): InstantPlan | null {
 	if (carets.some((caret) => caret.anchor !== caret.head)) return null;
 
@@ -101,16 +104,16 @@ export function instantAlignmentPlan(
 		working[line] = next;
 	}
 
-	const targetColumn = Math.max(0, separatorColumn - 1);
+	const targetColumn = alignmentTarget(separatorColumn);
 	const claimed = new Set<string>();
 	const edits: LineEdit[] = [];
 	for (const insert of inserts) {
 		if (!insert.amount) continue;
-		const range = blockRangeAt(working, insert.line);
+		const range = blockRangeInLedger(working, insert.line, ledgerLine);
 		const key = `${range.from}:${range.to}`;
 		if (claimed.has(key)) continue;
 		claimed.add(key);
-		edits.push(...computeAlignment(working, range, targetColumn));
+		edits.push(...computeAlignment(working, range, targetColumn, ledgerLine));
 	}
 	for (const edit of edits) {
 		const line = working[edit.line];
@@ -162,10 +165,18 @@ export interface InstantAlignmentHost {
 export function instantAlignmentExtension(host: InstantAlignmentHost): Extension {
 	const run = (view: EditorView): boolean => {
 		if (!host.settings.instantAlignment) return false;
+		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
+		const file = view.state.field(editorInfoField, false)?.file;
+		// A ledger file needs no fence scan: every line is ledger text.
+		const ledgerLine = ledgerLinesOf(file, () => docFences(view.state.doc).fences);
+		if (ledgerLine && !carets.every((caret) => ledgerLine(view.state.doc.lineAt(caret.head).number - 1))) {
+			return false;
+		}
 		const plan = instantAlignmentPlan(
 			view.state.doc.toString(),
-			view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head })),
-			host.settings.separatorColumn
+			carets,
+			host.settings.separatorColumn,
+			ledgerLine
 		);
 		if (plan === null) return false;
 		view.dispatch({

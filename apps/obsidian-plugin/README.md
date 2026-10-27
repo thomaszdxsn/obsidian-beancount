@@ -38,10 +38,12 @@ pip install beancount
   ASCII query also matches the pinyin initials of CJK names in account,
   payee and narration completion (`Expenses:cy` → `Expenses:餐饮`). Initials
   data comes from vscode-beancount (MIT).
-- **Account completion**: typing an account-shaped token (`Assets:Ca…`) in the
-  editor suggests still-open account names found in the vault's ledger text:
-  whole `.bean` / `.beancount` files, and only the `beancount` / `bean` fences
-  of markdown notes (prose such as `PG_DATA_DIR:-x` never becomes a name).
+- **Account completion**: typing an account-shaped token (`Assets:Ca…`) in
+  ledger text — a `.bean` / `.beancount` file or a `beancount` / `bean` fence,
+  outside quoted strings and `;` comments — suggests still-open account names
+  found in the vault's ledger text: whole `.bean` / `.beancount` files, and
+  only the fences of markdown notes (prose such as `PG_DATA_DIR:-x` never
+  becomes a name, and typing `The` in a note's prose opens no popup).
   Names are extracted per file with a regex, cached, and invalidated when files are
   created, modified, deleted or renamed. Segments after the capitalized root
   may hold non-ASCII letters and CJK middle dots (`Expenses:餐饮:午饭`,
@@ -83,9 +85,10 @@ pip install beancount
   unit of the coarsest written precision) shows `≠ 0: …` on its header. Cost,
   price and arithmetic suppress both; the entry ledger does not.
 - **Payee completion**: typing the first quoted field of a transaction line
-  (`2026-09-30 * "Am…`) suggests every payee found in the vault — that field
-  of every historical transaction. One vault scan feeds both completion
-  indexes. Turn it off with **Complete payees**. Picking a payee closes an
+  in ledger text (`2026-09-30 * "Am…`) suggests every payee found in the
+  vault's ledger text — that field of every historical transaction in ledger
+  files and note fences. One vault scan feeds every completion index.
+  Turn it off with **Complete payees**. Picking a payee closes an
   unclosed payee field. With **Autofill payee postings** (on), picking a
   payee on an entry with no postings yet inserts the postings of that
   payee's latest transaction; a two-leg entry keeps one amount and leaves
@@ -105,24 +108,29 @@ pip install beancount
   note — suggests every tag or link found in the vault; picking one replaces
   the typed sigil and partial name in one step.
 - **Narration completion** (off by default): with "Complete narrations"
-  enabled, typing the second quoted field of a transaction line
-  (`2026-09-30 * "Payee" "na…`) suggests narrations found in the vault, and
-  picking one closes the field.
-- **Posting auto-indent**: pressing Enter inside a beancount entry opens the
-  next line already indented two spaces — the first posting under a
-  transaction header, or the next posting/metadata line while the entry
-  continues. Enter everywhere else — prose, blank lines, an open completion
+  enabled, typing the second quoted field of a transaction line in ledger text
+  (`2026-09-30 * "Payee" "na…`) suggests narrations found in the vault's
+  ledger text, and picking one closes the field.
+- **Posting auto-indent**: pressing Enter inside a beancount entry — in a
+  ledger file or a fence — opens the next line already indented two spaces:
+  the first posting under a transaction header, or the next posting/metadata
+  line while the entry continues. An entry never reaches across a fence
+  marker. Enter everywhere else — note prose, blank lines, an open completion
   popover — behaves exactly as before.
 - **Decimal point alignment**: the "Align decimal points" command lines up the
   decimal points of the posting amounts in the transaction block at the cursor
-  — or in the selection, when there is one. Each block gets its own column:
-  the amounts' `sign + integer` blocks right-align at it (integers at the
-  units place) and cost/price annotations stay put. A line inside a multi-line
-  string is not a posting, even if it looks like one. An optional setting walks
-  every block of each markdown/beancount file the same way whenever it is
-  saved. Instant alignment (on by default) intercepts `.` in a posting amount,
-  aligns that transaction block onto the separator column (default 50), and
-  leaves the caret just after the point — one undo restores the insert.
+  — or in the selection, when there is one. In a note only fence lines count,
+  and a block never extends past its fence. Each block's decimal points go to
+  the separator column (default 50), or further right when a wide account
+  needs it: the amounts' `sign + integer` blocks right-align there (integers
+  at the units place) and cost/price annotations stay put. A line inside a
+  multi-line string is not a posting, even if it looks like one. An optional
+  setting walks every block of each ledger file, or of each fence in a note,
+  the same way whenever it is saved; a note without fences is never
+  rewritten. Instant alignment (on by default) intercepts `.` in a posting
+  amount in ledger text, aligns that transaction block onto the same column,
+  and leaves the caret just after the point — one undo restores the insert.
+  Separator column 1 aligns as tightly as each block allows.
   Alignment pads with spaces, so `.bean` / `.beancount` editors switch to the
   monospace font (`--font-monospace`); fences are already code blocks.
 - **Format ledger**: the "Format ledger" command rewrites a `.bean` /
@@ -131,8 +139,8 @@ pip install beancount
   metadata use the two-space indent; posting metadata is indented one level
   further. Header lines collapse runs of spaces, strings and `;` comments keep
   their text (a `"` in a comment does not start a string), and each
-  transaction's decimal points are aligned. A syntax error raises a Notice
-  with the document line and changes nothing.
+  transaction's decimal points are aligned on the separator column. A syntax
+  error raises a Notice with the document line and changes nothing.
 - **Date quick-insert**: the "Insert today's date" command drops today's date
   — `YYYY-MM-DD`, the beancount date shape — at the cursor, replacing the
   selection when there is one. It has no default hotkey; bind one under
@@ -154,9 +162,15 @@ pip install beancount
   the editor or raise a Notice. The process is not killed; only the report
   is discarded. Opening a ledger file, or a note with beancount fences,
   validates it too unless its target is unchanged since the last report (the
-  stored markers are reapplied instead). **Show problems** opens a sidebar
-  of the latest report grouped by file — include-chain files that are not
-  open and `<load>` errors included; clicking a vault row jumps to the line.
+  stored markers are reapplied instead). When a run cannot produce a report
+  — `bean-check` missing, a traceback, a timeout, too much output, or a temp
+  ledger that cannot be written — the markers already shown stay, a Notice
+  says why (once until that ledger next validates without one), and
+  **Show problems** lists `bean-check could not run: …` for it until it
+  reports again. Changing the entry ledger drops the stored report and its
+  underlines; flag markers stay. **Show problems** opens a sidebar of the
+  latest report grouped by file — include-chain files that are not open and
+  `<load>` errors included; clicking a vault row jumps to the line.
 - **QuickFix**: clicking a diagnostic gutter dot opens the fixes that line
   can take. `Flag as okay` turns a header `!` into `*` (or deletes a posting's
   leading flag). An unbalanced one-leg, one-commodity transaction can insert
@@ -164,7 +178,8 @@ pip install beancount
   (same payee first). `Invalid reference to unknown account` inserts an
   `open` directive — dated from the transaction, with the posting's commodity
   when there is one — into the vault file that already holds the most `open`
-  lines.
+  lines. Account names with non-ASCII segments (`Expenses:餐饮`) work in every
+  fix.
 - **Outline**: the "Show outline" command opens a sidebar of the active
   ledger. Org-mode `*` section titles nest the same way vscode-beancount's
   DocumentSymbolProvider does (including `_` fillers for skipped levels).

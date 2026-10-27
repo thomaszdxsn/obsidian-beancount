@@ -10,8 +10,7 @@ import { Decoration, ViewPlugin } from '@codemirror/view';
 import type { DecorationSet, EditorView, ViewUpdate } from '@codemirror/view';
 import { editorInfoField } from 'obsidian';
 import { ERROR_LINE_CLASS, ERROR_UNDERLINE_CLASS } from './diagnostics';
-import { docFences } from './fences';
-import { isLedgerFile } from './vault-index';
+import { docFences, isLedgerFile } from './fences';
 
 /** The CSS contract between these markers and `styles.css`. */
 export const WARNING_LINE_CLASS = 'cm-beancount-warning-line';
@@ -61,7 +60,7 @@ const refreshFlagWarnings = StateEffect.define<null>();
  * Org-mode `*` headings have no date and never match.
  */
 const TXN_FLAG_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
+	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]*(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
 
 /**
  * Flagged transaction lines in `text` whose configured level is error or

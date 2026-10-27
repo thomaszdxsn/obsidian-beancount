@@ -11,7 +11,14 @@ import { describe, expect, it } from 'vitest';
 import type { BeanCheckRun, LineDiagnostic } from '../bean-check';
 import { setLineDiagnostics } from '../diagnostics';
 import BeancountPlugin from '../main';
-import { fileMtime, openValidationTarget, ProblemStore, problemRowText, toProblemRows } from '../problems';
+import {
+	fileMtime,
+	openValidationTarget,
+	ProblemStore,
+	problemRowText,
+	toProblemRows,
+	VALIDATION_FAILURE_PREFIX,
+} from '../problems';
 import { BeancountProblemsView, drawProblems, revealProblem, revealProblemsView, VIEW_TYPE_PROBLEMS } from '../problems-view';
 import type { ProblemsMount } from '../problems-view';
 import { createEditor, FakeVault } from './fakes';
@@ -167,6 +174,39 @@ describe('ProblemStore', () => {
 		expect(store.count()).toBe(0);
 	});
 
+	it('lists a run failure beside existing rows until the next report', () => {
+		const store = new ProblemStore();
+		store.replace('ledger.bean', [row('ledger.bean', 1, 'does not balance', 'ledger.bean')]);
+		store.fail('ledger.bean', 'timed out');
+		expect(store.rowsFor('ledger.bean')).toEqual([row('ledger.bean', 1, 'does not balance', 'ledger.bean')]);
+		expect(store.groups()[0].rows.map((entry) => entry.message)).toEqual([
+			`${VALIDATION_FAILURE_PREFIX}timed out`,
+			'does not balance',
+		]);
+		store.fail('ledger.bean', 'timed out');
+		store.replace('ledger.bean', [row('ledger.bean', 1, 'does not balance', 'ledger.bean')]);
+		expect(store.groups()[0].rows.map((entry) => entry.message)).toEqual(['does not balance']);
+		store.fail('note.md', 'could not write the temporary ledger');
+		expect(store.count()).toBe(2);
+		store.replace('note.md', []);
+		expect(store.count()).toBe(1);
+	});
+
+	it('does not notify when recording the same failure twice', () => {
+		const store = new ProblemStore();
+		let calls = 0;
+		store.subscribe(() => {
+			calls += 1;
+		});
+		store.fail('ledger.bean', 'not found');
+		store.fail('ledger.bean', 'not found');
+		expect(calls).toBe(1);
+		store.replace('ledger.bean', []);
+		expect(calls).toBe(2);
+		store.replace('ledger.bean', []);
+		expect(calls).toBe(2);
+	});
+
 	it('does not notify when clearing a target that was already empty', () => {
 		const store = new ProblemStore();
 		let calls = 0;
@@ -304,6 +344,16 @@ class FakeMount implements ProblemsMount {
 	}
 }
 
+describe('problemRowText', () => {
+	it('omits the line number when it is 0', () => {
+		expect(problemRowText(row('<load>', 0, 'does not exist'))).toBe('<load>  does not exist');
+		expect(problemRowText(row('ledger.bean', 0, `${VALIDATION_FAILURE_PREFIX}timed out`))).toBe(
+			`ledger.bean  ${VALIDATION_FAILURE_PREFIX}timed out`,
+		);
+		expect(problemRowText(row('child.bean', 2, 'unknown account'))).toBe('child.bean:2  unknown account');
+	});
+});
+
 describe('drawProblems', () => {
 	it('shows the count and leaves unmapped rows unclickable', () => {
 		const mount = new FakeMount();
@@ -339,6 +389,32 @@ describe('drawProblems', () => {
 		expect(mount.children[2].clicks).toEqual([]);
 		mount.children[4].clicks[0]();
 		expect(opened).toEqual(['child.bean']);
+	});
+
+	it('does not make a line-0 row clickable even when it names a vault file', () => {
+		const mount = new FakeMount();
+		drawProblems(
+			mount,
+			[
+				{
+					file: 'ledger.bean',
+					vaultPath: 'ledger.bean',
+					rows: [row('ledger.bean', 0, `${VALIDATION_FAILURE_PREFIX}timed out`, 'ledger.bean')],
+				},
+			],
+			() => {
+				throw new Error('opened');
+			},
+		);
+		expect(mount.children.map((child) => ({ className: child.className, text: child.text, clicks: child.clicks.length }))).toEqual([
+			{ className: 'beancount-problems-header', text: '1 problem', clicks: 0 },
+			{ className: 'beancount-problems-file', text: 'ledger.bean', clicks: 0 },
+			{
+				className: 'beancount-problems-row beancount-problems-unmapped',
+				text: `ledger.bean  ${VALIDATION_FAILURE_PREFIX}timed out`,
+				clicks: 0,
+			},
+		]);
 	});
 
 	it('uses a singular header and an empty sentence', () => {
@@ -580,9 +656,9 @@ describe('open-triggered validation', () => {
 		const texts = children.map((child) => child.text);
 		expect(created.getViewType()).toBe(VIEW_TYPE_PROBLEMS);
 		expect(texts[0]).toBe('2 problems');
-		expect(texts).toContain('<load>:0  File "/vault/gone.bean" does not exist');
+		expect(texts).toContain('<load>  File "/vault/gone.bean" does not exist');
 		expect(texts).toContain("child.bean:2  Invalid reference to unknown account 'Assets:Cash'");
-		const unmapped = children.find((child) => child.text.startsWith('<load>:'));
+		const unmapped = children.find((child) => child.text.startsWith('<load>  '));
 		expect(unmapped?.clicks).toEqual([]);
 		expect(unmapped?.className).toContain('beancount-problems-unmapped');
 	});
@@ -813,6 +889,8 @@ describe('stored markers and stale targets', () => {
 		plugin.settings.entryLedger = 'main.bean';
 		await plugin.saveSettings();
 		expect(mountChildren(view).map((child) => child.text)).toEqual(['No problems.']);
+		expect(published(editor)).toEqual([]);
+		expect(runs).toHaveLength(1);
 
 		plugin.settings.entryLedger = '';
 		await plugin.saveSettings();

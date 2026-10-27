@@ -1,9 +1,13 @@
 /**
- * Markdown `beancount`/`bean` fenced code blocks are the notes' ledger.
+ * Where a buffer's ledger text is. A `.bean` / `.beancount` file is ledger
+ * text throughout; any other buffer (a markdown note, another extension, or
+ * no file) only inside its `beancount`/`bean` fenced code blocks.
+ *
  * bean-check cannot parse markdown, so the plugin copies each fence body into
  * a temporary `.bean` file, then maps the tool's 1-based temp lines back onto
  * the host document so markers land on the fence, not the temp file.
  */
+import type { TFile } from 'obsidian';
 
 /** One fenced ledger in a markdown document. */
 export interface BeancountFence {
@@ -156,6 +160,67 @@ export function ledgerSource(path: string, content: string): string {
 	return extractBeancountFences(content)
 		.map((fence) => fence.lines.join('\n'))
 		.join('\n');
+}
+
+/** File extensions bean-check parses: the ledger files validation checks. */
+const LEDGER_EXTENSIONS: Record<string, true> = { beancount: true, bean: true };
+
+/**
+ * Whether a vault entry is one of the ledger files `bean-check` parses —
+ * ledger text throughout, and the only files whose saves are worth
+ * validating. A folder has no `extension`.
+ */
+export function isLedgerFile(file: { extension?: string }): file is TFile {
+	// `=== true`, not truthiness: inherited keys such as `constructor` or
+	// `toString` resolve to functions on the prototype chain.
+	return typeof file.extension === 'string' && LEDGER_EXTENSIONS[file.extension] === true;
+}
+
+function fenceContainsLine(fences: readonly BeancountFence[], lineIndex: number): boolean {
+	for (const fence of fences) {
+		if (lineIndex >= fence.startLine && lineIndex < fence.startLine + fence.lines.length) return true;
+	}
+	return false;
+}
+
+/**
+ * Which lines of a buffer are ledger text: `undefined` for a ledger file,
+ * where every line is and nothing needs scanning; otherwise a test against
+ * the fence bodies `fences()` returns (only called for non-ledger files).
+ */
+export function ledgerLinesOf(
+	file: { extension?: string } | null | undefined,
+	fences: () => readonly BeancountFence[]
+): ((lineIndex: number) => boolean) | undefined {
+	if (file && isLedgerFile(file)) return undefined;
+	const bodies = fences();
+	return (lineIndex) => fenceContainsLine(bodies, lineIndex);
+}
+
+/** What `editorLineIsLedger` reads from an Obsidian `Editor`. */
+interface LedgerEditor {
+	getValue(): string;
+	/** The live CodeMirror view Obsidian puts on its editors; not in the public typings. */
+	cm?: { state?: { doc?: FenceDoc } };
+}
+
+/**
+ * Ledger-text check for an Obsidian `Editor`: the file, plus the fences of
+ * the buffer when the file is not a ledger. The live CodeMirror document is
+ * scanned through `docFences`, cached per document version that a note's
+ * flag markers and inlay hints already scan, so a capitalized word typed in
+ * a long note costs no extra pass. Callers run their cheap per-line trigger
+ * shape first.
+ */
+export function editorLineIsLedger(
+	editor: LedgerEditor,
+	lineIndex: number,
+	file: { extension?: string } | null | undefined
+): boolean {
+	if (file && isLedgerFile(file)) return true;
+	const doc = editor.cm?.state?.doc;
+	const fences = doc ? docFences(doc).fences : extractBeancountFences(editor.getValue());
+	return fenceContainsLine(fences, lineIndex);
 }
 
 /**

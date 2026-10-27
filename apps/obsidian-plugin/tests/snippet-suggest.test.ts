@@ -81,6 +81,19 @@ describe('SnippetSuggest.onTrigger', () => {
 		});
 		expect(suggest.onTrigger({ line: 0, ch: 3 }, editor as unknown as Editor, file)).toBeNull();
 	});
+
+	it('triggers inside ~~~bean and unclosed fences', () => {
+		const { suggest } = setup();
+		const file = { extension: 'md' } as TFile;
+		const tilde = createEditor(['~~~bean', 'txn']);
+		expect(suggest.onTrigger({ line: 1, ch: 3 }, tilde as unknown as Editor, file)).toMatchObject({
+			query: 'txn',
+		});
+		const open = createEditor(['```beancount', 'txn']);
+		expect(suggest.onTrigger({ line: 1, ch: 3 }, open as unknown as Editor, file)).toMatchObject({
+			query: 'txn',
+		});
+	});
 });
 
 describe('SnippetSuggest suggestions', () => {
@@ -186,7 +199,7 @@ describe('payee completion after txn', () => {
 		vi.useFakeTimers({ toFake: ['Date'] });
 		vi.setSystemTime(new Date(2026, 9, 4));
 		const vault = new FakeVault();
-		vault.write('a.md', '2026-09-30 * "Whole Foods" "Groceries"');
+		vault.write('a.bean', '2026-09-30 * "Whole Foods" "Groceries"');
 		const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
 		const index = new VaultIndex(extractPayees);
 		registerVaultIndex(plugin as unknown as Plugin, index);
@@ -195,7 +208,7 @@ describe('payee completion after txn', () => {
 		const expansion = expandSnippet(txnSnippet().body);
 		const editor = createEditor([expansion.text]);
 		const cursor = { line: 0, ch: expansion.stops[0].from };
-		expect(payees.onTrigger(cursor, editor as unknown as Editor, null)).toEqual({
+		expect(payees.onTrigger(cursor, editor as unknown as Editor, LEDGER)).toEqual({
 			start: { line: 0, ch: 14 },
 			end: { line: 0, ch: 14 },
 			query: '',

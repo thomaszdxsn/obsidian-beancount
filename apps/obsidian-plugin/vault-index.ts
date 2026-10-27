@@ -21,6 +21,7 @@
 import type { Plugin, TAbstractFile, TFile } from 'obsidian';
 import { rankCompletions } from './completion-rank';
 import type { CompletionUsage } from './completion-rank';
+import { ledgerSource } from './fences';
 
 export { MAX_SUGGESTIONS } from './completion-rank';
 
@@ -28,9 +29,6 @@ export { MAX_SUGGESTIONS } from './completion-rank';
 const MAX_VALUE_LENGTH = 256;
 /** File extensions whose text is read: scanned for names, rewritten on align. */
 export const TEXT_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
-
-/** File extensions bean-check parses: the ledger files validation checks. */
-export const LEDGER_EXTENSIONS: Record<string, true> = { beancount: true, bean: true };
 
 /** The shape `isTextFile` needs: a folder has no `extension`. */
 interface VaultEntry {
@@ -48,14 +46,6 @@ export function isTextFile(file: VaultEntry): file is TFile {
 	return typeof file.extension === 'string' && TEXT_EXTENSIONS[file.extension] === true;
 }
 
-/**
- * Whether a vault entry is one of the ledger files `bean-check` parses — the
- * only files whose saves are worth validating.
- */
-export function isLedgerFile(file: VaultEntry): file is TFile {
-	return typeof file.extension === 'string' && LEDGER_EXTENSIONS[file.extension] === true;
-}
-
 /** Per-file cache `registerVaultIndex` keeps in sync with vault events. */
 export interface VaultCache {
 	setFileContent(path: string, content: string): void;
@@ -70,9 +60,8 @@ export class VaultIndex implements VaultCache {
 	private sorted: readonly string[] | null = null;
 
 	/**
-	 * The extractor takes the file's path too: token shapes that also occur
-	 * in markdown prose (tags, links, commodities) are extracted from
-	 * beancount fence bodies only, which the caller decides by extension.
+	 * The extractor receives ledger text (`registerVaultIndex` applies
+	 * `ledgerSource` once per read) and the file path.
 	 */
 	constructor(
 		private readonly extract: (content: string, path: string) => ReadonlySet<string>,
@@ -168,7 +157,8 @@ export function registerVaultIndex(plugin: Plugin, ...indexes: readonly VaultCac
 			.cachedRead(file)
 			.then((content) => {
 				if (revisions.get(path) !== current) return;
-				for (const index of indexes) index.setFileContent(path, content);
+				const ledger = ledgerSource(path, content);
+				for (const index of indexes) index.setFileContent(path, ledger);
 				revisions.delete(path);
 			})
 			.catch(() => undefined);

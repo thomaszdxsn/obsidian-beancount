@@ -73,6 +73,13 @@ describe('transactionFoldAt', () => {
 		expect(folded(open, 1)).toBeNull();
 	});
 
+	it('folds headers whose flag sits against the date', () => {
+		const body = '\n  Assets:Cash  1 USD\n  Income:Job';
+		for (const header of ['2026-10-01!', '2026-10-01*', '2026-10-01txn']) {
+			expect(folded(`${header} "x"\n  Assets:Cash  1 USD\n  Income:Job`, 1)).toBe(body);
+		}
+	});
+
 	it('offers no fold on a transaction with nothing under its header', () => {
 		expect(folded('2026-01-01 * "Empty"\n\n  Assets:Cash 1 USD', 1)).toBeNull();
 		expect(folded('2026-01-01 * "Only a comment"\n  ; note', 1)).toBeNull();

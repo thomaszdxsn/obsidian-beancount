@@ -8,7 +8,7 @@
 import { ItemView } from 'obsidian';
 import type { App, Editor } from 'obsidian';
 import { flattenOutline, jumpToOutlineLine, parseBeancountOutline } from './outline';
-import { isLedgerFile } from './vault-index';
+import { isLedgerFile } from './fences';
 
 export const VIEW_TYPE_OUTLINE = 'beancount-outline';
 

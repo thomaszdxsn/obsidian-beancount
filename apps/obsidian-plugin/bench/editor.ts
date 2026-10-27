@@ -197,13 +197,15 @@ const integerCaret = integerOnly.line(ledgerLine).from + integerOnly.line(ledger
 function saveWorkload(): [() => unknown, () => unknown] {
 	const accounts = new AccountIndex();
 	const payees = new VaultIndex(extractPayees);
-	const commodities = new VaultIndex((content, path) => extractCommodities(ledgerSource(path, content)));
-	const tags = new VaultIndex((content, path) => extractTags(ledgerSource(path, content)));
-	const links = new VaultIndex((content, path) => extractLinks(ledgerSource(path, content)));
+	const commodities = new VaultIndex(extractCommodities);
+	const tags = new VaultIndex(extractTags);
+	const links = new VaultIndex(extractLinks);
 	const narrations = new VaultIndex(extractNarrations);
 	const caches = [accounts, payees, commodities, tags, links, narrations, new PairingIndex(), new OpenFileIndex(), new PayeeTemplateIndex()];
 	const run = () => {
-		for (const cache of caches) cache.setFileContent(ledgerFile.path, ledger);
+		// What `registerVaultIndex` does per read: ledger text once, then every cache.
+		const text = ledgerSource(ledgerFile.path, ledger);
+		for (const cache of caches) cache.setFileContent(ledgerFile.path, text);
 		return [accounts.match('Ex'), payees.match('W'), commodities.match('U')];
 	};
 	return [run, run];

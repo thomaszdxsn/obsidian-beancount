@@ -3,7 +3,18 @@
  * column is computed, and that the rewrite is idempotent and surgical.
  */
 import { describe, expect, it } from 'vitest';
-import { alignText, blockRangeAt, computeAlignment, displayWidth, isAmountDotInsert } from '../align';
+import {
+	alignFencedDocument,
+	alignmentRanges,
+	alignLines,
+	alignText,
+	blockRangeAt,
+	blockRangeInLedger,
+	computeAlignment,
+	displayWidth,
+	intersectRange,
+	isAmountDotInsert,
+} from '../align';
 
 /** Align a document given as lines; return the document as lines. */
 function align(lines: string[]): string[] {
@@ -254,6 +265,17 @@ describe('alignText', () => {
 		expect(computeAlignment(once.split('\n'))).toEqual([]);
 	});
 
+	it('keeps today’s tight column when called without a target, and pads when given one', () => {
+		const src = '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n';
+		const tight = '  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n';
+		expect(alignText(src)).toBe(tight);
+		expect(alignText(src, 0)).toBe(tight);
+		const lines = src.split('\n');
+		alignLines(lines, 49);
+		expect(lines[1].indexOf('.')).toBe(49);
+		expect(alignText(lines.join('\n'), 49)).toBe(lines.join('\n'));
+	});
+
 	it('changes nothing in documents without postings', () => {
 		const prose = 'just a note\n  indented prose 12.5 USD-ish\n';
 		expect(alignText(prose)).toBe(prose);
@@ -305,6 +327,81 @@ describe('alignText', () => {
 		]);
 	});
 
+});
+
+describe('alignFencedDocument', () => {
+	it('aligns fence bodies and leaves posting-shaped prose, including no-fence notes', () => {
+		const note = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'  Assets:Cash -12.5 USD',
+			'',
+		].join('\n');
+		expect(alignFencedDocument(note)).toBe(
+			[
+				'  Expenses:Food 12.5 USD',
+				'```beancount',
+				'  Expenses:Food 12.5 USD',
+				'  Assets:Cash  -12.5 USD',
+				'```',
+				'  Assets:Cash -12.5 USD',
+				'',
+			].join('\n')
+		);
+		const prose = '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n';
+		expect(alignFencedDocument(prose)).toBe(prose);
+	});
+
+	it('keeps an indented fence’s indent and pads to a target column', () => {
+		const note = ['  ```beancount', '    Expenses:Food 12.5 USD', '    Assets:Cash -12.5 USD', '  ```', ''].join('\n');
+		const aligned = alignFencedDocument(note, 49);
+		const lines = aligned.split('\n');
+		expect(lines[0]).toBe('  ```beancount');
+		expect(lines[1].startsWith('    ')).toBe(true);
+		expect(lines[1].indexOf('.')).toBe(49);
+		expect(lines[3]).toBe('  ```');
+		expect(alignFencedDocument(aligned, 49)).toBe(aligned);
+	});
+
+	it('aligns a fence below prose holding an unmatched quote', () => {
+		// The `"` of `27"` opens no string for the fence: each fence starts
+		// outside any string, as Format ledger already treats it.
+		const note = ['a 27" monitor', '```beancount', '  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD', '```', ''].join(
+			'\n'
+		);
+		expect(alignFencedDocument(note)).toBe(
+			['a 27" monitor', '```beancount', '  Expenses:Food 12.5 USD', '  Assets:Cash  -12.5 USD', '```', ''].join('\n')
+		);
+	});
+
+	it('aligns an unclosed fence through EOF the way a closed body would', () => {
+		expect(alignFencedDocument('intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD\n')).toBe(
+			'intro\n```beancount\n  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD\n'
+		);
+	});
+});
+
+describe('alignmentRanges', () => {
+	it('covers a ledger buffer, and only non-empty fence bodies in a note', () => {
+		const ledger = ['2026-10-01 * "A"', '  Assets:Cash -1 USD'];
+		expect(alignmentRanges(ledger, true)).toEqual([{ from: 0, to: 1 }]);
+		expect(alignmentRanges([], true)).toEqual([]);
+		const note = [
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Assets:Cash -12.5 USD',
+			'```',
+			'```beancount',
+			'```',
+			'  Assets:Cash -12.5 USD',
+		];
+		expect(alignmentRanges(note, false)).toEqual([{ from: 2, to: 2 }]);
+		expect(intersectRange({ from: 0, to: 6 }, { from: 2, to: 2 })).toEqual({ from: 2, to: 2 });
+		expect(intersectRange({ from: 0, to: 1 }, { from: 2, to: 2 })).toBeNull();
+	});
 });
 
 describe('computeAlignment', () => {
@@ -457,6 +554,19 @@ describe('blockRangeAt', () => {
 		expect(blockRangeAt([], 0)).toEqual({ from: 0, to: 0 });
 	});
 
+});
+
+describe('blockRangeInLedger', () => {
+	it('matches blockRangeAt when every line is ledger text', () => {
+		const lines = ['2026-10-01 * "A"', '  Assets:Cash 1.00 USD', '  Expenses:Food 2.00 USD'];
+		expect(blockRangeInLedger(lines, 2, undefined)).toEqual(blockRangeAt(lines, 2));
+		expect(blockRangeInLedger(lines, 2, () => true)).toEqual(blockRangeAt(lines, 2));
+	});
+
+	it('does not look past a fence-shaped gap in the ledger-line filter', () => {
+		const lines = ['2026-10-14 open questions', '   ```beancount', '  Assets:Cash', '```'];
+		expect(blockRangeInLedger(lines, 2, (i) => i === 2)).toEqual({ from: 2, to: 2 });
+	});
 });
 
 describe('displayWidth', () => {

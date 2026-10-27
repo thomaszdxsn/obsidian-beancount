@@ -5,7 +5,16 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import type { ChildProcess } from 'child_process';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, resolve, sep } from 'path';
-import { alignText, blockRangeAt, computeAlignment } from './align';
+import {
+	alignFencedDocument,
+	alignmentRanges,
+	alignmentTarget,
+	alignText,
+	blockRangeAt,
+	computeAlignment,
+	inRanges,
+	intersectRange,
+} from './align';
 import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
@@ -36,11 +45,25 @@ import {
 import type { QuickFix, TextEdit } from './code-actions';
 import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
-import { FAVA_HOST, favaUrl, isFavaBinary, normalizeFavaPort, openFavaUrl, runFavaProcess } from './fava';
-import type { FavaOpener, FavaRunner } from './fava';
+import {
+	captureFavaStderr,
+	FAVA_CLOSE_TIMEOUT_MS,
+	FAVA_HOST,
+	FAVA_READY_TIMEOUT_MS,
+	favaExitReason,
+	favaUrl,
+	isFavaBinary,
+	normalizeFavaPort,
+	openFavaUrl,
+	probeFavaUrl,
+	runFavaProcess,
+	waitForChildClose,
+	waitForFavaReady,
+} from './fava';
+import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { buildFenceLedger, extractBeancountFences, isSafeIncludePath, ledgerSource } from './fences';
+import { buildFenceLedger, extractBeancountFences, isLedgerFile, isSafeIncludePath } from './fences';
 import type { BeancountFence } from './fences';
 import { insertTodayDate } from './insert-date';
 import { extractPayees } from './payee-index';
@@ -59,7 +82,7 @@ import { BeancountProblemsView, revealProblemsView, VIEW_TYPE_PROBLEMS } from '.
 import { BeancountBalancesView, revealBalancesView, VIEW_TYPE_BALANCES } from './report-view';
 import { fileMtime, openValidationTarget, ProblemStore, toProblemRows } from './problems';
 import { instantAlignmentExtension } from './instant-alignment';
-import { isLedgerFile, isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
 import { CompletionUsage } from './completion-rank';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 
@@ -106,11 +129,16 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 /** Delay before on-save alignment, so a burst of edits aligns once. */
 const ALIGN_DEBOUNCE_MS = 500;
 
-const MISSING_BEAN_CHECK_NOTICE =
-	'bean-check not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.';
+const MISSING_BEAN_CHECK_REASON =
+	'not found — install beancount (pip install beancount) or set the bean-check path in the plugin settings.';
+const MISSING_BEAN_CHECK_NOTICE = `bean-check ${MISSING_BEAN_CHECK_REASON}`;
+const TEMP_LEDGER_NOTICE = 'bean-check could not write the temporary ledger';
+const TEMP_LEDGER_REASON = 'could not write the temporary ledger';
 
 const MISSING_FAVA_NOTICE =
 	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
+const NO_LEDGER_FAVA_NOTICE =
+	'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.';
 
 /** Delay before on-save validation, so a burst of saves checks once. */
 const VALIDATE_DEBOUNCE_MS = 500;
@@ -226,10 +254,20 @@ function editorLines(editor: Editor): string[] {
 
 /**
  * What the command aligns: the selected lines when there is a selection,
- * otherwise the transaction block the cursor sits in.
+ * otherwise the transaction block the cursor sits in — both cut to
+ * `bodies`, the lines alignment may touch, so a block never crosses a fence.
  */
-function commandScope(editor: Editor, lines: readonly string[]): LineRange {
-	if (!editor.somethingSelected()) return blockRangeAt(lines, editor.getCursor().line);
+function commandScope(editor: Editor, lines: readonly string[], bodies: readonly LineRange[]): LineRange[] {
+	if (!editor.somethingSelected()) {
+		const line = editor.getCursor().line;
+		const block = blockRangeAt(lines, line);
+		for (const body of bodies) {
+			if (line < body.from || line > body.to) continue;
+			const clipped = intersectRange(block, body);
+			return clipped === null ? [] : [clipped];
+		}
+		return [];
+	}
 	let from = Number.MAX_SAFE_INTEGER;
 	let to = 0;
 	for (const selection of editor.listSelections()) {
@@ -241,16 +279,32 @@ function commandScope(editor: Editor, lines: readonly string[]): LineRange {
 		// characters, so the last selected line is the one before it.
 		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
 	}
-	return { from, to };
+	const selected = { from, to };
+	const scopes: LineRange[] = [];
+	for (const body of bodies) {
+		const clipped = intersectRange(selected, body);
+		if (clipped !== null) scopes.push(clipped);
+	}
+	return scopes;
 }
 
 /**
  * Rewrite the gaps in `scope` (the whole buffer when omitted) so the decimal
- * points of each transaction block line up.
+ * points of each transaction block line up. Several ranges are one
+ * transaction so undo is still one step. `ledgerLine` marks a note's fence
+ * lines; without it the whole buffer is ledger text.
  */
-function alignInEditor(editor: Editor, scope?: LineRange): void {
+function alignInEditor(
+	editor: Editor,
+	scope?: readonly LineRange[],
+	targetColumn?: number,
+	ledgerLine?: (line: number) => boolean
+): void {
 	const lines = editorLines(editor);
-	const edits = computeAlignment(lines, scope);
+	const edits =
+		scope === undefined
+			? computeAlignment(lines, undefined, targetColumn, ledgerLine)
+			: scope.flatMap((range) => computeAlignment(lines, range, targetColumn, ledgerLine));
 	if (edits.length === 0) return;
 	const changes = edits.map((edit) => ({
 		from: { line: edit.line, ch: edit.from },
@@ -280,9 +334,31 @@ function alignInEditor(editor: Editor, scope?: LineRange): void {
 }
 
 /** The `Align decimal points` command. */
-function alignCommand(editor: Editor): void {
-	alignInEditor(editor, commandScope(editor, editorLines(editor)));
+function alignCommand(
+	editor: Editor,
+	file: { path: string; extension: string } | null,
+	separatorColumn: number
+): void {
+	const lines = editorLines(editor);
+	const ledger = file !== null && isLedgerFile(file);
+	const bodies = alignmentRanges(lines, ledger);
+	const scopes = commandScope(editor, lines, bodies);
+	if (scopes.length === 0) return;
+	alignInEditor(editor, scopes, alignmentTarget(separatorColumn), ledger ? undefined : inRanges(bodies));
 }
+
+/** On-save: a ledger file is the whole buffer; anything else is fence bodies. */
+function alignOpenEditor(
+	editor: Editor,
+	file: { path: string; extension: string },
+	targetColumn: number
+): void {
+	const ledger = isLedgerFile(file);
+	const scopes = alignmentRanges(editorLines(editor), ledger);
+	if (scopes.length === 0) return;
+	alignInEditor(editor, scopes, targetColumn, ledger ? undefined : inRanges(scopes));
+}
+
 /**
  * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger. Any other
  * file, including an untitled buffer, formats each ```beancount / ```bean
@@ -290,11 +366,16 @@ function alignCommand(editor: Editor): void {
  * changes nothing. No notice when the text is already formatted — same as
  * alignment finding nothing to do.
  */
-function formatInEditor(editor: Editor, file: { path: string; extension: string } | null): void {
+function formatInEditor(
+	editor: Editor,
+	file: { path: string; extension: string } | null,
+	separatorColumn: number
+): void {
+	const targetColumn = alignmentTarget(separatorColumn);
 	const result =
 		file !== null && isLedgerFile(file)
-			? formatLedger(editor.getValue())
-			: formatFencedDocument(editor.getValue());
+			? formatLedger(editor.getValue(), targetColumn)
+			: formatFencedDocument(editor.getValue(), targetColumn);
 	if (!result.ok) {
 		new Notice(formatErrorNotice(result.error));
 		return;
@@ -375,8 +456,15 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * old per-file targets would never be replaced by a later run.
 	 */
 	private problemsEntryLedger = '';
-	/** Notice texts shown this session: autosave must not stack them. */
-	private readonly noticesShown = new Set<string>();
+	/** bean-check path the notice dedupe was last reset under. */
+	private problemsBeanCheckPath = '';
+	/**
+	 * Notice texts shown per run target since that target's last quiet run.
+	 * Autosave must not stack the same toast; another target's quiet run
+	 * must not re-arm this one. A bean-check-path or entry-ledger change
+	 * clears every target.
+	 */
+	private readonly noticesShown = new Map<string, Set<string>>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
 	private readonly balanceInlays = new BalanceInlayController(this);
 	/** Transaction-flag markers; refreshed when flagWarnings change. */
@@ -387,10 +475,25 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	favaRunner: FavaRunner = runFavaProcess;
 	/** Opens the Fava UI after start or reuse; tests swap this. */
 	favaOpener: FavaOpener = openFavaUrl;
+	/** HTTP GET of Fava's root; tests swap this so they never open sockets. */
+	favaReadyProbe: FavaReadyProbe = probeFavaUrl;
+	/** Bound on waiting for Fava to answer; tests shrink this. */
+	favaReadyTimeoutMs = FAVA_READY_TIMEOUT_MS;
+	/** Pause between readiness probes and bound on the close wait; tests no-op this. */
+	favaDelay: (ms: number) => Promise<void> = (ms) =>
+		new Promise((resolve) => window.setTimeout(resolve, ms));
+	/** Bound on waiting for stdio close after Fava exits; tests shrink this. */
+	favaCloseTimeoutMs = FAVA_CLOSE_TIMEOUT_MS;
 	/** Live Fava child, killed when the plugin unloads. */
 	private favaChild: ChildProcess | null = null;
 	/** Port the live child was started with; reuse must open this URL. */
 	private favaBoundPort: number | null = null;
+	/** True once the live child answered HTTP with status < 400. */
+	private favaServing = false;
+	/** True when Stop Fava or unload is the reason the child will exit. */
+	private favaExpectExit = false;
+	/** Stderr tail of the live child; captured once at spawn. */
+	private favaStderr: () => string = () => '';
 	/** In-flight start so a second command cannot spawn another process. */
 	private favaStart: Promise<boolean> | null = null;
 	/** Completion pick counts persisted beside settings in data.json. */
@@ -405,6 +508,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		this.settings = mergeSettings(stored);
 		this.problemsEntryLedger = this.settings.entryLedger;
+		this.problemsBeanCheckPath = this.settings.beanCheckPath;
 		this.usage = CompletionUsage.parse(stored, Date.now, () => {
 			void this.writePluginData();
 		});
@@ -421,14 +525,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const pinyinMatching = () => this.settings.pinyinMatching;
 		const accounts = new AccountIndex(this.usage, pinyinMatching);
 		const payees = new VaultIndex(extractPayees, this.usage, pinyinMatching);
-		// Markdown tags (`#project`), Obsidian block IDs (` ^abc123`), prose
-		// amounts (`- 10 GB`) and colon-joined words (`PG_DATA_DIR:-x`) collide
-		// with ledger token shapes, so on notes these extractors (and the
-		// account index) see only the beancount fence bodies; ledger files are
-		// scanned whole.
-		const commodities = new VaultIndex((content, path) => extractCommodities(ledgerSource(path, content)), this.usage, pinyinMatching);
-		const tags = new VaultIndex((content, path) => extractTags(ledgerSource(path, content)), this.usage, pinyinMatching);
-		const links = new VaultIndex((content, path) => extractLinks(ledgerSource(path, content)), this.usage, pinyinMatching);
+		const commodities = new VaultIndex(extractCommodities, this.usage, pinyinMatching);
+		const tags = new VaultIndex(extractTags, this.usage, pinyinMatching);
+		const links = new VaultIndex(extractLinks, this.usage, pinyinMatching);
 		const narrations = new VaultIndex(extractNarrations, this.usage, pinyinMatching);
 		const payeeTemplates = new PayeeTemplateIndex();
 		const snippetSession = new SnippetSession();
@@ -507,12 +606,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		this.addCommand({
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
-			editorCallback: alignCommand,
+			editorCallback: (editor, ctx) =>
+				alignCommand(editor, ctx?.file ?? null, this.settings.separatorColumn),
 		});
 		this.addCommand({
 			id: 'format-ledger',
 			name: 'Format ledger',
-			editorCallback: (editor, ctx) => formatInEditor(editor, ctx.file),
+			editorCallback: (editor, ctx) =>
+				formatInEditor(editor, ctx?.file ?? null, this.settings.separatorColumn),
 		});
 		this.addCommand({
 			id: 'insert-today-date',
@@ -572,9 +673,9 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
 			this.ledgerFile.destroy();
+			this.favaExpectExit = true;
 			this.favaChild?.kill();
-			this.favaChild = null;
-			this.favaBoundPort = null;
+			this.clearFavaChild();
 		});
 		if (this.settings.runFavaOnActivate) {
 			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
@@ -585,11 +686,22 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	async saveSettings(): Promise<void> {
 		const entryLedger = this.settings.entryLedger;
 		const entryChanged = entryLedger !== this.problemsEntryLedger;
+		const beanCheckPath = this.settings.beanCheckPath;
+		const beanCheckChanged = beanCheckPath !== this.problemsBeanCheckPath;
 		await this.writePluginData();
+		if (beanCheckChanged) {
+			this.problemsBeanCheckPath = beanCheckPath;
+			this.noticesShown.clear();
+		}
 		if (entryChanged) {
 			this.problemsEntryLedger = entryLedger;
+			this.noticesShown.clear();
 			this.problems.clear();
 			this.lastValidatedMtime.clear();
+			// Stored Problems are gone; underlines those targets painted must
+			// go with them. Flag markers are not bean-check rows — leave them.
+			// Do not schedule a run: typing in the setting is not a save.
+			this.dropOwnedBeanCheckMarkers();
 			// A ledger run that started under the previous entry ledger must
 			// not republish those rows when it finishes. Markdown fences are
 			// their own target either way, so an in-flight note may still report.
@@ -628,43 +740,83 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		return this.favaChild != null && this.favaChild.exitCode === null;
 	}
 
+	private clearFavaChild(): void {
+		this.favaChild = null;
+		this.favaBoundPort = null;
+		this.favaServing = false;
+		this.favaStderr = () => '';
+	}
+
 	private revealFava(announce: boolean): void {
 		if (!announce) return;
-		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
+		const bound = this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort);
+		const wanted = normalizeFavaPort(this.settings.favaPort);
+		const url = favaUrl(bound);
 		this.favaOpener(url);
+		if (bound !== wanted) {
+			new Notice(
+				`Fava is already running on port ${bound}; stop it and start again to use port ${wanted}.`
+			);
+			return;
+		}
 		new Notice(`Fava is running at ${url}`);
 	}
 
 	private stopFava(): void {
 		if (!this.isFavaRunning()) {
-			this.favaChild = null;
-			this.favaBoundPort = null;
+			this.clearFavaChild();
 			new Notice('Fava is not running.');
 			return;
 		}
+		this.favaExpectExit = true;
 		this.favaChild?.kill();
-		this.favaChild = null;
-		this.favaBoundPort = null;
+		this.clearFavaChild();
 		new Notice('Fava stopped.');
 	}
 
 	private async launchFava(announce: boolean): Promise<void> {
-		if (this.isFavaRunning()) {
-			this.revealFava(announce);
-			return;
-		}
 		if (this.favaStart) {
 			const started = await this.favaStart;
 			if (started && this.isFavaRunning()) this.revealFava(announce);
 			return;
 		}
-		this.favaStart = this.startFavaProcess();
+		if (this.isFavaRunning() && this.favaServing) {
+			this.revealFava(announce);
+			return;
+		}
+		this.favaStart =
+			this.isFavaRunning() && this.favaChild
+				? this.waitUntilFavaServes(this.favaChild)
+				: this.startFavaProcess();
 		try {
 			const started = await this.favaStart;
 			if (started && this.isFavaRunning()) this.revealFava(announce);
 		} finally {
 			this.favaStart = null;
 		}
+	}
+
+	private async waitUntilFavaServes(child: ChildProcess): Promise<boolean> {
+		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
+		const getStderr = this.favaStderr;
+		const outcome = await waitForFavaReady(child, url, this.favaReadyProbe, {
+			timeoutMs: this.favaReadyTimeoutMs,
+			delay: this.favaDelay,
+			closeTimeoutMs: this.favaCloseTimeoutMs,
+		});
+		if (outcome === 'ready') {
+			this.favaServing = true;
+			return true;
+		}
+		if (outcome === 'timeout') {
+			if (!this.favaExpectExit) new Notice(`Fava did not answer at ${url}`);
+			return false;
+		}
+		if (!this.favaExpectExit) {
+			new Notice(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
+		}
+		if (this.favaChild === child) this.clearFavaChild();
+		return false;
 	}
 
 	private async startFavaProcess(): Promise<boolean> {
@@ -675,7 +827,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		const requested = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
 		if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
-			new Notice('No valid bean file is available.');
+			new Notice(NO_LEDGER_FAVA_NOTICE);
 			return false;
 		}
 		const adapter = this.app.vault.adapter as FileSystemAdapter;
@@ -683,7 +835,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const confined = resolve(root, requested);
 		const rel = relative(root, confined);
 		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-			new Notice('No valid bean file is available.');
+			new Notice(`Fava: entry ledger must be a vault file, not "${clipText(requested)}"`);
 			return false;
 		}
 		const port = normalizeFavaPort(this.settings.favaPort);
@@ -694,15 +846,32 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		const child = result.child ?? null;
 		if (!child) return false;
+		const getStderr = captureFavaStderr(child);
+		this.favaStderr = getStderr;
+		this.favaExpectExit = false;
+		this.favaServing = false;
 		this.favaChild = child;
 		this.favaBoundPort = port;
-		child.once('exit', () => {
-			if (this.favaChild === child) {
-				this.favaChild = null;
-				this.favaBoundPort = null;
-			}
+		let closed = false;
+		child.once('close', () => {
+			closed = true;
 		});
-		return true;
+		child.once('exit', (code) => {
+			const unexpected = !this.favaExpectExit && this.favaServing && this.favaChild === child;
+			void (async () => {
+				await waitForChildClose(child, {
+					alreadyClosed: closed,
+					timeoutMs: this.favaCloseTimeoutMs,
+					delay: this.favaDelay,
+				});
+				const stderr = getStderr();
+				if (this.favaChild === child) this.clearFavaChild();
+				if (unexpected && !this.favaExpectExit) {
+					new Notice(`Fava exited: ${favaExitReason(stderr, code)}`);
+				}
+			})();
+		});
+		return this.waitUntilFavaServes(child);
 	}
 
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
@@ -813,7 +982,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!file || !this.validateLive) return;
 		// `isLedgerFile` is a type predicate to `TFile`. Called on `file` it
 		// would narrow the false branch to `never`, so the check uses a copy.
-		const ledger = isLedgerFile({ path: file.path, extension: file.extension });
+		const ledger = isLedgerFile({ extension: file.extension });
 		if (!ledger && file.extension !== 'md') return;
 		const editor = ledger ? null : openEditorFor(this.app, file);
 		if (ledger || editor) {
@@ -900,6 +1069,31 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (seq !== undefined) this.validateSeq.set(path, seq + 1);
 	}
 
+	/**
+	 * Strip bean-check underlines from open editors this plugin marked, leaving
+	 * flag markers. Used when stored Problems are dropped for a new entry ledger.
+	 */
+	private dropOwnedBeanCheckMarkers(): void {
+		const owned = [...this.markOwners.keys()];
+		this.markOwners.clear();
+		const filesByPath = new Map<string, TFile>();
+		for (const entry of this.app.vault.getFiles()) {
+			if (!filesByPath.has(entry.path)) filesByPath.set(entry.path, entry);
+		}
+		for (const path of owned) {
+			const vaultFile = filesByPath.get(path);
+			if (!vaultFile) continue;
+			let leftFlags = false;
+			for (const editor of openEditorsFor(this.app, vaultFile)) {
+				const flags = flagsFor(path, editor.getValue());
+				if (flags.length > 0) leftFlags = true;
+				setEditorLineDiagnostics(editor, flags);
+			}
+			if (leftFlags) this.extraFlagged.add(path);
+			else this.extraFlagged.delete(path);
+		}
+	}
+
 
 	private scheduleAlign(file: TFile): void {
 		window.clearTimeout(this.alignTimers.get(file.path));
@@ -959,7 +1153,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 				fences = extractBeancountFences(text);
 				if (fences.length === 0) {
-					this.markErrors(target, [], root);
+					if (!this.markErrors(target, [], root)) this.noticesShown.delete(target);
 					return;
 				}
 			}
@@ -968,14 +1162,18 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			// it must not name some other program to execute on the ledger.
 			const command = this.settings.beanCheckPath.trim() || 'bean-check';
 			if (!isBeanCheckBinary(command)) {
-				this.notify(MISSING_BEAN_CHECK_NOTICE);
+				this.recordRunFailure(target, MISSING_BEAN_CHECK_NOTICE, MISSING_BEAN_CHECK_REASON);
 				return;
 			}
 			const entry = this.settings.entryLedger.trim();
 			// Newlines/quotes in the setting would break out of the generated
 			// `include "..."` line; reject them the same way as a path escape.
 			if (entry && !isSafeIncludePath(entry)) {
-				this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+				this.recordRunFailure(
+					target,
+					`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`,
+					`entry ledger must be a vault file, not "${clipText(entry)}"`,
+				);
 				return;
 			}
 			const confined = resolve(root, entry || file.path);
@@ -984,7 +1182,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			// at some other file entirely.
 			const rel = relative(root, confined);
 			if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-				this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`);
+				this.recordRunFailure(
+					target,
+					`bean-check: entry ledger must be a vault file, not "${clipText(entry || file.path)}"`,
+					`entry ledger must be a vault file, not "${clipText(entry || file.path)}"`,
+				);
 				return;
 			}
 
@@ -994,7 +1196,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 					const real = realpathSync(confined).replace(/\\/g, '/');
 					const realRel = relative(root, real);
 					if (realRel === '' || realRel === '..' || realRel.startsWith('..' + sep) || isAbsolute(realRel)) {
-						this.notify(`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`);
+						this.recordRunFailure(
+							target,
+							`bean-check: entry ledger must be a vault file, not "${clipText(entry)}"`,
+							`entry ledger must be a vault file, not "${clipText(entry)}"`,
+						);
 						return;
 					}
 					includePath = real;
@@ -1008,19 +1214,25 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			let hostLine: ((tempLine: number) => number | undefined) | undefined;
 			try {
 				if (markdown && fences) {
-					const ledger = buildFenceLedger(fences, includePath);
-					const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
-					cleanup = () => rmSync(dir, { recursive: true, force: true });
-					const temp = join(dir, 'fences.bean');
-					writeFileSync(temp, ledger.text);
-					checkPath = realpathSync(temp);
-					hostLine = (line) => ledger.hostLine(line);
+					try {
+						const ledger = buildFenceLedger(fences, includePath);
+						const dir = mkdtempSync(join(tmpdir(), 'obsidian-beancount-'));
+						cleanup = () => rmSync(dir, { recursive: true, force: true });
+						const temp = join(dir, 'fences.bean');
+						writeFileSync(temp, ledger.text);
+						checkPath = realpathSync(temp);
+						hostLine = (line) => ledger.hostLine(line);
+					} catch {
+						if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
+						this.recordRunFailure(target, TEMP_LEDGER_NOTICE, TEMP_LEDGER_REASON);
+						return;
+					}
 				}
 
 				const run = await this.beanCheckRunner(command, [checkPath]);
 				if (!this.validateLive || this.validateSeq.get(target) !== seq) return;
 				if (run.missing) {
-					this.notify(MISSING_BEAN_CHECK_NOTICE);
+					this.recordRunFailure(target, MISSING_BEAN_CHECK_NOTICE, MISSING_BEAN_CHECK_REASON);
 					return;
 				}
 				let errors = parseBeanCheckErrors(run.stderr);
@@ -1028,7 +1240,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				// a hang cut short) — say so and keep the marks that are already up,
 				// instead of clearing them for "clean".
 				if (errors.length === 0 && (run.stderr.trim() !== '' || run.failure)) {
-					this.notify(`bean-check ${run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`}`);
+					const reason = run.failure ?? `failed: ${clipText(run.stderr.trim().split('\n')[0])}`;
+					this.recordRunFailure(target, `bean-check ${reason}`, reason);
 					return;
 				}
 				if (hostLine) {
@@ -1041,7 +1254,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 						return [{ ...error, file: root + file.path, line }];
 					});
 				}
-				this.markErrors(target, errors, root);
+				if (!this.markErrors(target, errors, root)) this.noticesShown.delete(target);
 			} finally {
 				cleanup?.();
 			}
@@ -1059,8 +1272,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	 * in scope — its own save is the newest word on it, whoever marked it
 	 * before. A file another target marked is left for that target's next run.
 	 */
-	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): void {
-		if (!this.validateLive) return;
+	private markErrors(target: string, errors: readonly BeanCheckError[], root: string): boolean {
+		if (!this.validateLive) return false;
 		const vaultFiles = this.app.vault.getFiles();
 		const filesByPath = new Map<string, TFile>();
 		for (const entry of vaultFiles) {
@@ -1099,7 +1312,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// must not pass for a clean run, so the first of it becomes a notice.
 		if (unmapped.length > 0) {
 			this.notify(
-				`bean-check: ${clipText(unmapped[0].file)}: ${clipText(unmapped[0].message)}`
+				target,
+				`bean-check: ${clipText(unmapped[0].file)}: ${clipText(unmapped[0].message)}`,
 			);
 		}
 		const reported = new Set(errorsByPath.keys());
@@ -1146,16 +1360,29 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				mergeDiagnostics(beanDiagnosticsOn(editor), flags)
 			);
 		}
+		return unmapped.length > 0;
 	}
 
 	/**
-	 * Show a notice once per session per text: with autosave, the same
-	 * problem re-arms every few seconds and must not stack toasts.
+	 * Keep existing markers, but surface a persistent Problems line and a
+	 * (deduped) notice so a failed run is not silent after the first toast.
 	 */
-	private notify(text: string): void {
+	private recordRunFailure(target: string, notice: string, reason: string): void {
 		if (!this.validateLive) return;
-		if (this.noticesShown.has(text)) return;
-		this.noticesShown.add(text);
+		this.problems.fail(target, reason);
+		this.notify(target, notice);
+	}
+
+	/**
+	 * Show a notice once per target per quiet-run window: with autosave, the
+	 * same problem re-arms every few seconds and must not stack toasts.
+	 */
+	private notify(target: string, text: string): void {
+		if (!this.validateLive) return;
+		const shown = this.noticesShown.get(target) ?? new Set<string>();
+		if (shown.has(text)) return;
+		shown.add(text);
+		this.noticesShown.set(target, shown);
 		new Notice(text);
 	}
 
@@ -1165,13 +1392,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// by the next autosave from the still-unaligned buffer. Files not open
 		// in any leaf have no buffer to fight with.
 		const editor = openEditorFor(this.app, file);
+		const column = alignmentTarget(this.settings.separatorColumn);
 		if (editor) {
 			// The on-save walk aligns every transaction block of the buffer.
-			alignInEditor(editor);
+			alignOpenEditor(editor, file, column);
 			return;
 		}
 		const text = await this.app.vault.read(file);
-		const aligned = alignText(text);
+		const aligned = isLedgerFile(file) ? alignText(text, column) : alignFencedDocument(text, column);
 		if (aligned === text) return;
 		// The file may have been opened — or edited — while the read was in
 		// flight. An open one is the editor's business again, and a changed
@@ -1180,7 +1408,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// text back and re-arm the debounce forever.
 		const live = openEditorFor(this.app, file);
 		if (live) {
-			alignInEditor(live);
+			alignOpenEditor(live, file, column);
 			return;
 		}
 		if ((await this.app.vault.read(file)) !== text) return;

@@ -55,6 +55,9 @@ async function loadPlugin(
 		return { missing: false, child: child as unknown as ChildProcess };
 	};
 	plugin.favaOpener = () => {};
+	plugin.favaReadyProbe = async () => 200;
+	plugin.favaDelay = async () => {};
+	plugin.favaCloseTimeoutMs = 0;
 	plugin.loadData = async () => loadedData;
 	await plugin.onload();
 	return plugin;
@@ -139,7 +142,9 @@ describe('issue 29 commands and Fava', () => {
 		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
 		expect(favaRuns).toEqual([]);
-		expect(notices).toEqual(['No valid bean file is available.']);
+		expect(notices).toEqual([
+			'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.',
+		]);
 	});
 
 	it('refuses an entry ledger outside the vault', async () => {
@@ -147,6 +152,6 @@ describe('issue 29 commands and Fava', () => {
 		const command = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		await command?.callback?.();
 		expect(favaRuns).toEqual([]);
-		expect(notices).toEqual(['No valid bean file is available.']);
+		expect(notices).toEqual(['Fava: entry ledger must be a vault file, not "../outside.bean"']);
 	});
 });

@@ -36,6 +36,8 @@
 
  */
 
+import { extractBeancountFences } from './fences';
+
 /** Minimum whitespace between the account (and its flag) and the amount. */
 const MIN_GAP = 1;
 
@@ -239,14 +241,20 @@ function blockRole(line: string): BlockRole {
  * column 0 opens a block of its own; indented lines join the open one, or
  * open a run of loose postings when none is open. Ids are only compared, so
  * a scan starting mid-file groups the lines of its range exactly as a scan
- * from line 0 would.
+ * from line 0 would. With `ledgerLine`, a line outside ledger text (note
+ * prose, a fence marker) closes the block like a blank line.
  */
-function scanBlocks(lines: readonly string[], from = 0, to = lines.length - 1): number[] {
+function scanBlocks(
+	lines: readonly string[],
+	from = 0,
+	to = lines.length - 1,
+	ledgerLine?: (line: number) => boolean
+): number[] {
 	const blockOfLine: number[] = [];
 	let block = -1;
 	let next = 0;
 	for (let i = Math.max(0, from); i <= to && i < lines.length; i += 1) {
-		const role = blockRole(lines[i]);
+		const role = ledgerLine !== undefined && !ledgerLine(i) ? BlockRole.Close : blockRole(lines[i]);
 		if (role === BlockRole.Close) {
 			block = -1;
 		} else if (role === BlockRole.Open || block === -1) {
@@ -278,25 +286,59 @@ export function blockRangeAt(lines: readonly string[], line: number): LineRange 
 }
 
 /**
+ * `blockRangeAt` cut down to the ledger lines around `line`, so a header
+ * above a fence opener cannot pull a fence body into its entry and an entry
+ * that started outside cannot claim fence lines. Only the block's own lines
+ * are visited. Without `ledgerLine` (a ledger file), the range is the same
+ * as `blockRangeAt`.
+ */
+export function blockRangeInLedger(
+	lines: readonly string[],
+	line: number,
+	ledgerLine: ((lineIndex: number) => boolean) | undefined
+): LineRange {
+	const block = blockRangeAt(lines, line);
+	if (ledgerLine === undefined) return block;
+	let from = line;
+	while (from > block.from && ledgerLine(from - 1)) from -= 1;
+	let to = line;
+	while (to < block.to && ledgerLine(to + 1)) to += 1;
+	return { from, to };
+}
+
+/** Whether a line falls inside one of `ranges`: the ledger lines of a note. */
+export function inRanges(ranges: readonly LineRange[]): (line: number) => boolean {
+	return (line) => ranges.some((range) => line >= range.from && line <= range.to);
+}
+
+/**
  * Gap rewrites that align the decimal points of the posting amounts in
  * `lines` — one column per transaction block, or per block inside `range`
  * when given (a selection). `targetColumn` is a floor on that column: the
  * 0-based display width at which the decimal point should sit, so a
  * 1-based separator column of 50 is `49`. Lines that are not postings are
  * ignored; a line whose gap already lands on its block's column produces no
- * edit, so the result of one pass is a fixed point of the next.
+ * edit, so the result of one pass is a fixed point of the next. With
+ * `ledgerLine` (a note), only ledger lines can be postings, and each run of
+ * them starts outside any string: a `"` in prose above a fence does not
+ * swallow the fence.
  */
 export function computeAlignment(
 	lines: readonly string[],
 	range?: LineRange,
-	targetColumn?: number
+	targetColumn?: number,
+	ledgerLine?: (line: number) => boolean
 ): LineEdit[] {
-	const blockOfLine = range ? scanBlocks(lines, range.from, range.to) : scanBlocks(lines);
+	const blockOfLine = scanBlocks(lines, range?.from, range?.to, ledgerLine);
 	const postings: Posting[] = [];
 	let inString = false;
 	// String state is carried from line 0; past the range nothing reads it.
 	const last = range ? Math.min(lines.length - 1, range.to) : lines.length - 1;
 	for (let line = 0; line <= last; line += 1) {
+		if (ledgerLine !== undefined && !ledgerLine(line)) {
+			inString = false;
+			continue;
+		}
 		const continuation = inString;
 		inString = endsInString(lines[line], inString);
 		if (range && line < range.from) continue;
@@ -346,15 +388,63 @@ export function isAmountDotInsert(line: string, ch: number): boolean {
 	return posting !== null && posting.gapEnd + posting.beforeDot === ch;
 }
 
+/**
+ * The 0-based decimal column `computeAlignment` aligns to for the 1-based
+ * `separatorColumn` setting. Every alignment entry point (typing `.`, the
+ * command, align on save, Format ledger) uses it; 1 gives the tightest layout.
+ */
+export function alignmentTarget(separatorColumn: number): number {
+	return Math.max(0, separatorColumn - 1);
+}
+
 /** `computeAlignment` applied to a whole document's text. */
-export function alignText(text: string): string {
+export function alignText(text: string, targetColumn?: number): string {
 	const lines = text.split('\n');
-	return alignLines(lines) ? lines.join('\n') : text;
+	return alignLines(lines, targetColumn) ? lines.join('\n') : text;
+}
+
+/**
+ * Line ranges alignment may rewrite: the whole buffer of a ledger file, or
+ * each non-empty ```beancount / ```bean fence body, clipped to `lines`.
+ */
+export function alignmentRanges(lines: readonly string[], ledger: boolean): LineRange[] {
+	if (ledger) return lines.length === 0 ? [] : [{ from: 0, to: lines.length - 1 }];
+	const ranges: LineRange[] = [];
+	for (const fence of extractBeancountFences(lines.join('\n'))) {
+		if (fence.lines.length === 0) continue;
+		const from = fence.startLine;
+		const to = Math.min(lines.length - 1, from + fence.lines.length - 1);
+		if (from >= 0 && from <= to) ranges.push({ from, to });
+	}
+	return ranges;
+}
+
+export function intersectRange(a: LineRange, b: LineRange): LineRange | null {
+	const from = Math.max(a.from, b.from);
+	const to = Math.min(a.to, b.to);
+	return from <= to ? { from, to } : null;
+}
+
+/**
+ * Align each ```beancount / ```bean fence body on the host lines. Prose and
+ * fence markers stay as written. A note with no ledger fence is unchanged,
+ * so a save must not rewrite it. Indented openers keep the indent they
+ * still carry on the host line.
+ */
+export function alignFencedDocument(text: string, targetColumn?: number): string {
+	const lines = text.split('\n');
+	const ranges = alignmentRanges(lines, false);
+	if (ranges.length === 0) return text;
+	return applyAlignment(lines, targetColumn, inRanges(ranges)) ? lines.join('\n') : text;
 }
 
 /** `computeAlignment` applied in place to every line; false when nothing changed. */
-export function alignLines(lines: string[]): boolean {
-	const edits = computeAlignment(lines);
+export function alignLines(lines: string[], targetColumn?: number): boolean {
+	return applyAlignment(lines, targetColumn);
+}
+
+function applyAlignment(lines: string[], targetColumn?: number, ledgerLine?: (line: number) => boolean): boolean {
+	const edits = computeAlignment(lines, undefined, targetColumn, ledgerLine);
 	for (const edit of edits) {
 		const line = lines[edit.line];
 		lines[edit.line] = line.slice(0, edit.from) + edit.text + line.slice(edit.to);
