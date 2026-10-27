@@ -350,6 +350,8 @@ describe('fava start without a process', () => {
 		plugin.favaOpener = (url) => {
 			opened.push(url);
 		};
+		plugin.favaReadyProbe = async () => 200;
+		plugin.favaReadyDelay = async () => {};
 
 		await command(plugin, 'start-fava')();
 		await command(plugin, 'start-fava')();

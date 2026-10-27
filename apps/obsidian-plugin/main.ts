@@ -36,8 +36,20 @@ import {
 import type { QuickFix, TextEdit } from './code-actions';
 import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
-import { FAVA_HOST, favaUrl, isFavaBinary, normalizeFavaPort, openFavaUrl, runFavaProcess } from './fava';
-import type { FavaOpener, FavaRunner } from './fava';
+import {
+	captureFavaStderr,
+	FAVA_HOST,
+	FAVA_READY_TIMEOUT_MS,
+	favaExitReason,
+	favaUrl,
+	isFavaBinary,
+	normalizeFavaPort,
+	openFavaUrl,
+	probeFavaUrl,
+	runFavaProcess,
+	waitForFavaReady,
+} from './fava';
+import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
 import { buildFenceLedger, extractBeancountFences, isSafeIncludePath } from './fences';
@@ -111,6 +123,8 @@ const MISSING_BEAN_CHECK_NOTICE =
 
 const MISSING_FAVA_NOTICE =
 	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
+const NO_LEDGER_FAVA_NOTICE =
+	'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.';
 
 /** Delay before on-save validation, so a burst of saves checks once. */
 const VALIDATE_DEBOUNCE_MS = 500;
@@ -387,10 +401,21 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	favaRunner: FavaRunner = runFavaProcess;
 	/** Opens the Fava UI after start or reuse; tests swap this. */
 	favaOpener: FavaOpener = openFavaUrl;
+	/** HTTP GET of Fava's root; tests swap this so they never open sockets. */
+	favaReadyProbe: FavaReadyProbe = probeFavaUrl;
+	/** Bound on waiting for Fava to answer; tests shrink this. */
+	favaReadyTimeoutMs = FAVA_READY_TIMEOUT_MS;
+	/** Pause between readiness probes; tests no-op this. */
+	favaReadyDelay: (ms: number) => Promise<void> = (ms) =>
+		new Promise((resolve) => window.setTimeout(resolve, ms));
 	/** Live Fava child, killed when the plugin unloads. */
 	private favaChild: ChildProcess | null = null;
 	/** Port the live child was started with; reuse must open this URL. */
 	private favaBoundPort: number | null = null;
+	/** True once the live child answered HTTP with status < 400. */
+	private favaServing = false;
+	/** True when Stop Fava or unload is the reason the child will exit. */
+	private favaExpectExit = false;
 	/** In-flight start so a second command cannot spawn another process. */
 	private favaStart: Promise<boolean> | null = null;
 	/** Completion pick counts persisted beside settings in data.json. */
@@ -567,9 +592,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
 			this.ledgerFile.destroy();
+			this.favaExpectExit = true;
 			this.favaChild?.kill();
 			this.favaChild = null;
 			this.favaBoundPort = null;
+			this.favaServing = false;
 		});
 		if (this.settings.runFavaOnActivate) {
 			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
@@ -623,10 +650,25 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		return this.favaChild != null && this.favaChild.exitCode === null;
 	}
 
+	private favaWaitOptions(): {
+		timeoutMs: number;
+		delay: (ms: number) => Promise<void>;
+	} {
+		return { timeoutMs: this.favaReadyTimeoutMs, delay: this.favaReadyDelay };
+	}
+
 	private revealFava(announce: boolean): void {
 		if (!announce) return;
-		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
+		const bound = this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort);
+		const wanted = normalizeFavaPort(this.settings.favaPort);
+		const url = favaUrl(bound);
 		this.favaOpener(url);
+		if (bound !== wanted) {
+			new Notice(
+				`Fava is already running on port ${bound}; stop it and start again to use port ${wanted}.`
+			);
+			return;
+		}
 		new Notice(`Fava is running at ${url}`);
 	}
 
@@ -634,17 +676,25 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!this.isFavaRunning()) {
 			this.favaChild = null;
 			this.favaBoundPort = null;
+			this.favaServing = false;
 			new Notice('Fava is not running.');
 			return;
 		}
+		this.favaExpectExit = true;
 		this.favaChild?.kill();
 		this.favaChild = null;
 		this.favaBoundPort = null;
+		this.favaServing = false;
 		new Notice('Fava stopped.');
 	}
 
 	private async launchFava(announce: boolean): Promise<void> {
 		if (this.isFavaRunning()) {
+			if (!this.favaServing && this.favaChild) {
+				const serving = await this.waitUntilFavaServes(this.favaChild);
+				if (serving && this.isFavaRunning()) this.revealFava(announce);
+				return;
+			}
 			this.revealFava(announce);
 			return;
 		}
@@ -662,6 +712,30 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 	}
 
+	private async waitUntilFavaServes(child: ChildProcess): Promise<boolean> {
+		const port = this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort);
+		const url = favaUrl(port);
+		const getStderr = captureFavaStderr(child);
+		const outcome = await waitForFavaReady(child, url, this.favaReadyProbe, this.favaWaitOptions());
+		if (outcome === 'ready') {
+			this.favaServing = true;
+			return true;
+		}
+		if (outcome === 'timeout') {
+			new Notice(`Fava did not answer at ${url}`);
+			return false;
+		}
+		if (!this.favaExpectExit) {
+			new Notice(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
+		}
+		if (this.favaChild === child) {
+			this.favaChild = null;
+			this.favaBoundPort = null;
+			this.favaServing = false;
+		}
+		return false;
+	}
+
 	private async startFavaProcess(): Promise<boolean> {
 		const command = this.settings.favaPath.trim() || 'fava';
 		if (!isFavaBinary(command)) {
@@ -670,7 +744,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		const requested = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
 		if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
-			new Notice('No valid bean file is available.');
+			new Notice(NO_LEDGER_FAVA_NOTICE);
 			return false;
 		}
 		const adapter = this.app.vault.adapter as FileSystemAdapter;
@@ -678,7 +752,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const confined = resolve(root, requested);
 		const rel = relative(root, confined);
 		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-			new Notice('No valid bean file is available.');
+			new Notice(`Fava: entry ledger must be a vault file, not "${clipText(requested)}"`);
 			return false;
 		}
 		const port = normalizeFavaPort(this.settings.favaPort);
@@ -689,15 +763,40 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		const child = result.child ?? null;
 		if (!child) return false;
+		const getStderr = captureFavaStderr(child);
+		this.favaExpectExit = false;
+		this.favaServing = false;
 		this.favaChild = child;
 		this.favaBoundPort = port;
-		child.once('exit', () => {
+		child.once('exit', (code) => {
+			const unexpected = !this.favaExpectExit && this.favaServing && this.favaChild === child;
 			if (this.favaChild === child) {
 				this.favaChild = null;
 				this.favaBoundPort = null;
+				this.favaServing = false;
+			}
+			if (unexpected) {
+				new Notice(`Fava exited: ${favaExitReason(getStderr(), code)}`);
 			}
 		});
-		return true;
+		const outcome = await waitForFavaReady(child, favaUrl(port), this.favaReadyProbe, this.favaWaitOptions());
+		if (outcome === 'ready') {
+			this.favaServing = true;
+			return true;
+		}
+		if (outcome === 'timeout') {
+			new Notice(`Fava did not answer at ${favaUrl(port)}`);
+			return false;
+		}
+		if (!this.favaExpectExit) {
+			new Notice(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
+		}
+		if (this.favaChild === child) {
+			this.favaChild = null;
+			this.favaBoundPort = null;
+			this.favaServing = false;
+		}
+		return false;
 	}
 
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {
