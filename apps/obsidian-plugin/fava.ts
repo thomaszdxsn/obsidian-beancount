@@ -16,6 +16,8 @@ export const FAVA_READY_TIMEOUT_MS = 30_000;
 export const FAVA_PROBE_INTERVAL_MS = 100;
 /** Per-request hang bound so a silent port cannot stall the whole wait. */
 export const FAVA_PROBE_REQUEST_TIMEOUT_MS = 400;
+/** Bound on waiting for stdio 'close' after 'exit' so the last stderr line is not lost. */
+export const FAVA_CLOSE_TIMEOUT_MS = 1_000;
 /** Bytes of Fava stderr kept for the exit notice. */
 const STDERR_TAIL = 4_096;
 
@@ -117,6 +119,33 @@ export function favaExitReason(stderr: string, code: number | null | undefined):
 
 export type FavaReadyOutcome = 'ready' | 'exited' | 'timeout';
 
+const defaultDelay = (ms: number): Promise<void> =>
+	new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** Node may emit 'exit' before stderr finishes; wait for 'close' (or `timeoutMs`) so the tail is complete. */
+export async function waitForChildClose(
+	child: ChildProcess,
+	options: {
+		alreadyClosed?: boolean;
+		timeoutMs?: number;
+		delay?: (ms: number) => Promise<void>;
+	} = {}
+): Promise<void> {
+	if (options.alreadyClosed) return;
+	const timeoutMs = options.timeoutMs ?? FAVA_CLOSE_TIMEOUT_MS;
+	const delay = options.delay ?? defaultDelay;
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		const done = () => {
+			if (settled) return;
+			settled = true;
+			resolve();
+		};
+		child.once('close', done);
+		void delay(timeoutMs).then(done);
+	});
+}
+
 /** Poll until Fava answers with status < 400, the child exits, or time is up. */
 export async function waitForFavaReady(
 	child: ChildProcess,
@@ -127,30 +156,47 @@ export async function waitForFavaReady(
 		intervalMs?: number;
 		delay?: (ms: number) => Promise<void>;
 		now?: () => number;
+		closeTimeoutMs?: number;
+		closeDelay?: (ms: number) => Promise<void>;
 	} = {}
 ): Promise<FavaReadyOutcome> {
 	const timeoutMs = options.timeoutMs ?? FAVA_READY_TIMEOUT_MS;
 	const intervalMs = options.intervalMs ?? FAVA_PROBE_INTERVAL_MS;
-	const delay =
-		options.delay ?? ((ms) => new Promise((resolve) => window.setTimeout(resolve, ms)));
+	const delay = options.delay ?? defaultDelay;
 	const now = options.now ?? Date.now;
 	const started = now();
 	let exited = child.exitCode !== null;
+	let closed = false;
 	const onExit = () => {
 		exited = true;
 	};
+	const onClose = () => {
+		closed = true;
+	};
 	child.once('exit', onExit);
+	child.once('close', onClose);
+	const finishExit = async (): Promise<'exited'> => {
+		await waitForChildClose(child, {
+			alreadyClosed: closed,
+			timeoutMs: options.closeTimeoutMs ?? FAVA_CLOSE_TIMEOUT_MS,
+			delay: options.closeDelay ?? options.delay ?? defaultDelay,
+		});
+		return 'exited';
+	};
 	try {
 		while (true) {
-			if (exited || child.exitCode !== null) return 'exited';
+			if (exited || child.exitCode !== null) return await finishExit();
 			const status = await probe(url);
-			if (exited || child.exitCode !== null) return 'exited';
+			if (exited || child.exitCode !== null) return await finishExit();
 			if (status != null && status < 400) return 'ready';
 			if (now() - started >= timeoutMs) return 'timeout';
 			await delay(intervalMs);
 		}
 	} finally {
-		if (typeof child.removeListener === 'function') child.removeListener('exit', onExit);
+		if (typeof child.removeListener === 'function') {
+			child.removeListener('exit', onExit);
+			child.removeListener('close', onClose);
+		}
 	}
 }
 

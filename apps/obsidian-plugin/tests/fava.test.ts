@@ -40,28 +40,42 @@ afterEach(() => {
 });
 
 function liveChild(exitCode: number | null = null): ChildProcess {
-	const listeners: Array<(code: number | null) => void> = [];
+	const exitListeners: Array<(code: number | null) => void> = [];
+	const closeListeners: Array<() => void> = [];
 	const stderr = new PassThrough();
 	const child = {
 		exitCode,
 		stderr,
 		once(event: string, cb: (...args: unknown[]) => void) {
-			if (event === 'exit') listeners.push(cb as (code: number | null) => void);
+			if (event === 'exit') exitListeners.push(cb as (code: number | null) => void);
+			if (event === 'close') closeListeners.push(cb as () => void);
 			return child;
 		},
 		removeListener(event: string, cb: (...args: unknown[]) => void) {
-			if (event !== 'exit') return child;
-			const index = listeners.indexOf(cb as (code: number | null) => void);
-			if (index >= 0) listeners.splice(index, 1);
+			const list = event === 'exit' ? exitListeners : event === 'close' ? closeListeners : null;
+			if (!list) return child;
+			const index = list.indexOf(cb as never);
+			if (index >= 0) list.splice(index, 1);
 			return child;
 		},
-		kill(code = 0) {
+		emitExit(code: number) {
 			child.exitCode = code;
-			for (const cb of [...listeners]) cb(code);
+			for (const cb of [...exitListeners]) cb(code);
+		},
+		emitClose() {
+			for (const cb of [...closeListeners]) cb();
+		},
+		kill(code = 0) {
+			child.emitExit(code);
+			child.emitClose();
 			return true;
 		},
 	};
 	return child as unknown as ChildProcess;
+}
+
+function fakeChild(child: ChildProcess): { emitExit: (code: number) => void; emitClose: () => void } {
+	return child as unknown as { emitExit: (code: number) => void; emitClose: () => void };
 }
 
 function writeChildStderr(child: ChildProcess, text: string): void {
@@ -102,6 +116,8 @@ async function loadPlugin(
 	};
 	plugin.favaReadyProbe = async () => 200;
 	plugin.favaReadyDelay = async () => {};
+	plugin.favaCloseTimeoutMs = 0;
+	plugin.favaCloseDelay = async () => {};
 	plugin.loadData = async () => loadedData;
 	beforeLoad?.(plugin);
 	await plugin.onload();
@@ -188,6 +204,7 @@ describe('waitForFavaReady', () => {
 		const first = await waitForFavaReady(child, 'http://127.0.0.1:5000/', async () => 302, {
 			delay: async () => {},
 			timeoutMs: 0,
+			closeTimeoutMs: 0,
 		});
 		expect(first).toBe('ready');
 		const outcome = await waitForFavaReady(
@@ -197,7 +214,12 @@ describe('waitForFavaReady', () => {
 				hits.push(1);
 				return hits.length === 1 ? 403 : 200;
 			},
-			{ delay: async () => {}, timeoutMs: 30_000, now: () => (hits.length > 1 ? 1 : 0) }
+			{
+				delay: async () => {},
+				timeoutMs: 30_000,
+				closeTimeoutMs: 0,
+				now: () => (hits.length > 1 ? 1 : 0),
+			}
 		);
 		expect(outcome).toBe('ready');
 		expect(hits).toHaveLength(2);
@@ -208,14 +230,38 @@ describe('waitForFavaReady', () => {
 			await waitForFavaReady(liveChild(1), 'http://127.0.0.1:5000/', async () => 200, {
 				delay: async () => {},
 				timeoutMs: 0,
+				closeTimeoutMs: 0,
 			})
 		).toBe('exited');
 		expect(
 			await waitForFavaReady(liveChild(), 'http://127.0.0.1:5000/', async () => 403, {
 				delay: async () => {},
 				timeoutMs: 0,
+				closeTimeoutMs: 0,
 			})
 		).toBe('timeout');
+	});
+
+	it('waits for close so stderr that arrives after exit is kept', async () => {
+		const child = liveChild();
+		const pending = waitForFavaReady(
+			child,
+			'http://127.0.0.1:5000/',
+			async () => {
+				fakeChild(child).emitExit(1);
+				return 403;
+			},
+			{
+				delay: async () => {},
+				timeoutMs: 30_000,
+				closeTimeoutMs: 30_000,
+				closeDelay: () => new Promise(() => {}),
+			}
+		);
+		await Promise.resolve();
+		writeChildStderr(child, "ModuleNotFoundError: No module named 'pkg_resources'\n");
+		fakeChild(child).emitClose();
+		expect(await pending).toBe('exited');
 	});
 });
 
@@ -325,6 +371,117 @@ describe('Start Fava / Stop Fava', () => {
 		await Promise.all([start?.callback?.(), start?.callback?.()]);
 		expect(favaRuns).toHaveLength(1);
 		expect(opened).toEqual(['http://127.0.0.1:5000/', 'http://127.0.0.1:5000/']);
+	});
+
+	it('joins an in-flight wait instead of probing twice', async () => {
+		const vault = new FakeVault();
+		vault.write('main.bean', '');
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		let probes = 0;
+		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		plugin.favaReadyProbe = async () => {
+			probes += 1;
+			return pending;
+		};
+		plugin.favaReadyTimeoutMs = 0;
+		const start = plugin.registrations.commands.find((entry) => entry.id === 'start-fava')?.callback;
+		const first = start?.();
+		await Promise.resolve();
+		const second = start?.();
+		release?.(200);
+		await Promise.all([first, second]);
+		expect(probes).toBe(1);
+		expect(opened).toEqual(['http://127.0.0.1:5000/', 'http://127.0.0.1:5000/']);
+		expect(notices.filter((text) => text.startsWith('Fava did not') || text.startsWith('Fava exited'))).toEqual(
+			[]
+		);
+
+		plugin.registrations.commands.find((entry) => entry.id === 'stop-fava')?.callback?.();
+		opened.length = 0;
+		notices.length = 0;
+		probes = 0;
+		const pendingFail = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		plugin.favaReadyProbe = async () => {
+			probes += 1;
+			return pendingFail;
+		};
+		const third = start?.();
+		await Promise.resolve();
+		const fourth = start?.();
+		release?.(403);
+		await Promise.all([third, fourth]);
+		expect(probes).toBe(1);
+		expect(opened).toEqual([]);
+		expect(notices).toEqual(['Fava did not answer at http://127.0.0.1:5000/']);
+	});
+
+	it('does not notice a timeout after Stop or unload while still waiting', async () => {
+		const vault = new FakeVault();
+		vault.write('main.bean', '');
+		const child = liveChild();
+		(child as { kill: () => boolean }).kill = () => true;
+		nextChild = child;
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		plugin.favaReadyProbe = async () => pending;
+		plugin.favaReadyTimeoutMs = 0;
+		const started = plugin.registrations.commands.find((entry) => entry.id === 'start-fava')?.callback?.();
+		await Promise.resolve();
+		notices.length = 0;
+		plugin.registrations.commands.find((entry) => entry.id === 'stop-fava')?.callback?.();
+		release?.(403);
+		await started;
+		expect(notices).toEqual(['Fava stopped.']);
+		expect(opened).toEqual([]);
+
+		const hanging = liveChild();
+		(hanging as { kill: () => boolean }).kill = () => true;
+		nextChild = hanging;
+		const plugin2 = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		const pendingUnload = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		plugin2.favaReadyProbe = async () => pendingUnload;
+		plugin2.favaReadyTimeoutMs = 0;
+		const again = plugin2.registrations.commands.find((entry) => entry.id === 'start-fava')?.callback?.();
+		await Promise.resolve();
+		notices.length = 0;
+		opened.length = 0;
+		for (const cleanup of plugin2.registrations.cleanups) cleanup();
+		release?.(403);
+		await again;
+		expect(notices.filter((text) => text.includes('did not answer') || text.startsWith('Fava exited'))).toEqual(
+			[]
+		);
+	});
+
+	it('quotes stderr that arrives between exit and close', async () => {
+		const vault = new FakeVault();
+		vault.write('main.bean', '');
+		const child = liveChild();
+		nextChild = child;
+		const plugin = await loadPlugin(vault, { entryLedger: 'main.bean' });
+		plugin.favaCloseTimeoutMs = 30_000;
+		plugin.favaCloseDelay = () => new Promise(() => {});
+		plugin.favaReadyProbe = async () => {
+			fakeChild(child).emitExit(1);
+			return 403;
+		};
+		const started = plugin.registrations.commands.find((entry) => entry.id === 'start-fava')?.callback?.();
+		await Promise.resolve();
+		writeChildStderr(child, 'Error: late stderr line\n');
+		fakeChild(child).emitClose();
+		await started;
+		expect(opened).toEqual([]);
+		expect(notices).toEqual(['Fava exited: Error: late stderr line']);
 	});
 
 	it('stops the live process and lets a later start spawn again', async () => {
@@ -470,6 +627,8 @@ ModuleNotFoundError: No module named 'pkg_resources'
 		notices.length = 0;
 		opened.length = 0;
 		child.kill(1);
+		await Promise.resolve();
+		await Promise.resolve();
 		expect(notices).toEqual(['Fava exited: 1']);
 		expect(opened).toEqual([]);
 	});
@@ -497,8 +656,7 @@ ModuleNotFoundError: No module named 'pkg_resources'
 			};
 		});
 		// onload fires launchFava without awaiting it; drain the probe/exit turn.
-		await Promise.resolve();
-		await Promise.resolve();
+		for (let i = 0; i < 8 && notices.length === 0; i++) await Promise.resolve();
 		expect(opened).toEqual([]);
 		expect(notices).toEqual(['Fava exited: Error: [Errno 48] Address already in use']);
 	});

@@ -57,6 +57,8 @@ async function loadPlugin(
 	plugin.favaOpener = () => {};
 	plugin.favaReadyProbe = async () => 200;
 	plugin.favaReadyDelay = async () => {};
+	plugin.favaCloseTimeoutMs = 0;
+	plugin.favaCloseDelay = async () => {};
 	plugin.loadData = async () => loadedData;
 	await plugin.onload();
 	return plugin;

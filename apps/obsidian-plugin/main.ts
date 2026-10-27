@@ -47,6 +47,7 @@ import { createDiagnosticsExtension, lineDiagnostics, setEditorLineDiagnostics }
 import type { DiagnosticClickHost } from './diagnostics';
 import {
 	captureFavaStderr,
+	FAVA_CLOSE_TIMEOUT_MS,
 	FAVA_HOST,
 	FAVA_READY_TIMEOUT_MS,
 	favaExitReason,
@@ -56,6 +57,7 @@ import {
 	openFavaUrl,
 	probeFavaUrl,
 	runFavaProcess,
+	waitForChildClose,
 	waitForFavaReady,
 } from './fava';
 import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
@@ -480,6 +482,11 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	/** Pause between readiness probes; tests no-op this. */
 	favaReadyDelay: (ms: number) => Promise<void> = (ms) =>
 		new Promise((resolve) => window.setTimeout(resolve, ms));
+	/** Bound on waiting for stdio close after Fava exits; tests shrink this. */
+	favaCloseTimeoutMs = FAVA_CLOSE_TIMEOUT_MS;
+	/** Pause used only for that close bound; tests no-op this. */
+	favaCloseDelay: (ms: number) => Promise<void> = (ms) =>
+		new Promise((resolve) => window.setTimeout(resolve, ms));
 	/** Live Fava child, killed when the plugin unloads. */
 	private favaChild: ChildProcess | null = null;
 	/** Port the live child was started with; reuse must open this URL. */
@@ -771,21 +778,19 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	}
 
 	private async launchFava(announce: boolean): Promise<void> {
-		if (this.isFavaRunning()) {
-			if (!this.favaServing && this.favaChild) {
-				const serving = await this.waitUntilFavaServes(this.favaChild);
-				if (serving && this.isFavaRunning()) this.revealFava(announce);
-				return;
-			}
-			this.revealFava(announce);
-			return;
-		}
 		if (this.favaStart) {
 			const started = await this.favaStart;
 			if (started && this.isFavaRunning()) this.revealFava(announce);
 			return;
 		}
-		this.favaStart = this.startFavaProcess();
+		if (this.isFavaRunning() && this.favaServing) {
+			this.revealFava(announce);
+			return;
+		}
+		this.favaStart =
+			this.isFavaRunning() && this.favaChild
+				? this.waitUntilFavaServes(this.favaChild)
+				: this.startFavaProcess();
 		try {
 			const started = await this.favaStart;
 			if (started && this.isFavaRunning()) this.revealFava(announce);
@@ -800,13 +805,15 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		const outcome = await waitForFavaReady(child, url, this.favaReadyProbe, {
 			timeoutMs: this.favaReadyTimeoutMs,
 			delay: this.favaReadyDelay,
+			closeTimeoutMs: this.favaCloseTimeoutMs,
+			closeDelay: this.favaCloseDelay,
 		});
 		if (outcome === 'ready') {
 			this.favaServing = true;
 			return true;
 		}
 		if (outcome === 'timeout') {
-			new Notice(`Fava did not answer at ${url}`);
+			if (!this.favaExpectExit) new Notice(`Fava did not answer at ${url}`);
 			return false;
 		}
 		if (!this.favaExpectExit) {
@@ -843,18 +850,30 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		}
 		const child = result.child ?? null;
 		if (!child) return false;
-		this.favaStderr = captureFavaStderr(child);
+		const getStderr = captureFavaStderr(child);
+		this.favaStderr = getStderr;
 		this.favaExpectExit = false;
 		this.favaServing = false;
 		this.favaChild = child;
 		this.favaBoundPort = port;
+		let closed = false;
+		child.once('close', () => {
+			closed = true;
+		});
 		child.once('exit', (code) => {
 			const unexpected = !this.favaExpectExit && this.favaServing && this.favaChild === child;
-			const stderr = this.favaStderr();
-			if (this.favaChild === child) this.clearFavaChild();
-			if (unexpected) {
-				new Notice(`Fava exited: ${favaExitReason(stderr, code)}`);
-			}
+			void (async () => {
+				await waitForChildClose(child, {
+					alreadyClosed: closed,
+					timeoutMs: this.favaCloseTimeoutMs,
+					delay: this.favaCloseDelay,
+				});
+				const stderr = getStderr();
+				if (this.favaChild === child) this.clearFavaChild();
+				if (unexpected && !this.favaExpectExit) {
+					new Notice(`Fava exited: ${favaExitReason(stderr, code)}`);
+				}
+			})();
 		});
 		return this.waitUntilFavaServes(child);
 	}
