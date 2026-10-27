@@ -13,6 +13,7 @@
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { editorLedger } from './fences';
 import { COMMODITY_PREFIX_RE, LINK_PREFIX_RE, NARRATION_PREFIX_RE, TAG_PREFIX_RE } from './token-index';
+import { inStringOrComment } from './scan';
 import type { CompletionIndex } from './suggest';
 import { IndexSuggest } from './suggest';
 
@@ -22,26 +23,6 @@ function tokenAfter(line: string, cursor: EditorPosition, tokenChars: RegExp): b
 	return after !== '' && tokenChars.test(after);
 }
 
-/**
- * Whether the cursor sits in free text a token popup must not interrupt: an
- * unclosed quoted string (a payee, a narration, a quoted metadata value) or
- * a `;` comment, which owns the rest of its line. Quotes outside strings
- * are field delimiters; escapes are respected inside.
- */
-export function inStringOrComment(prefix: string): boolean {
-	let inString = false;
-	for (let i = 0; i < prefix.length; i += 1) {
-		const ch = prefix[i];
-		if (inString && ch === '\\') {
-			i += 1;
-		} else if (ch === '"') {
-			inString = !inString;
-		} else if (ch === ';' && !inString) {
-			return true;
-		}
-	}
-	return inString;
-}
 
 /**
  * Tag completion: typing `#` (plus a partial name) inside ledger text

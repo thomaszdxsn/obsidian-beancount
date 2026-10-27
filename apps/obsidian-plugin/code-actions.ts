@@ -9,13 +9,13 @@
  * (`PairingIndex`); the `open` lands in the vault file that already holds
  * the most `open` directives (`OpenFileIndex`).
  */
-import { ACCOUNT_SHAPE } from './account-index';
 import { blockRangeAt } from './align';
 import { clipText } from './bean-check';
 import type { LineDiagnostic } from './bean-check';
 import type { VaultCache } from './vault-index';
 import { ledgerKindFromPath } from './fences';
 import type { LedgerRegion } from './fences';
+import { ACCOUNT_SHAPE, headerPayee, parseHeaderLine, parsePostingLine } from './scan';
 
 /** Tooltip on a `!` transaction that bean-check does not itself report. */
 export const FLAGGED_MESSAGE = 'Transaction is flagged incomplete';
@@ -67,9 +67,6 @@ export interface QuickFixContext {
 	openedAccounts: ReadonlySet<string>;
 }
 
-const TXN_HEADER_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]*(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])(.*)$/;
-const HEADER_BANG_RE = /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \t]*(!)(?![A-Za-z0-9])/;
 const POSTING_BANG_RE = /^([ \t]+)(!)([ \t]+)/;
 const OPEN_LINE_RE = new RegExp(
 	String.raw`^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+open(?![A-Za-z0-9])[ \t]+(${ACCOUNT_SHAPE})`,
@@ -78,13 +75,6 @@ const OPEN_LINE_RE = new RegExp(
 const UNKNOWN_ACCOUNT_RE = /Invalid reference to unknown account '([^']+)'/g;
 const UNBALANCED_RE = /Transaction does not balance:\s*\(([^)]+)\)/;
 const RESIDUAL_RE = /^([-+]?[0-9][0-9,]*(?:\.[0-9]*)?)\s+(\S+)$/;
-const PAYEE_RE = /^[ \t]*"((?:[^"\\\n]|\\.)+)"/;
-const INDENT_RE = /^[ \t]+/;
-const LEADING_FLAG_RE = /^[*!&#?%A-Z][ \t]+/;
-const ACCOUNT_RE = new RegExp(`^${ACCOUNT_SHAPE}`, 'u');
-const NUMBER_RE = /^[-+]?[0-9][0-9,]*(?:\.[0-9]*)?/;
-const COMMODITY_RE = /^(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")/;
-const TRAILING_FLAG_RE = /^[*!&#?%A-Z](?=\s|$)/;
 
 interface AmountPosting {
 	account: string;
@@ -172,10 +162,9 @@ export function quickFixesForLine(context: QuickFixContext): QuickFix[] {
 export function flagOkayEdit(lines: readonly string[], line: number): TextEdit | null {
 	const text = lines[line];
 	if (text === undefined) return null;
-	const header = HEADER_BANG_RE.exec(text);
-	if (header !== null && header.index === 0) {
-		const fromCh = header[0].length - 1;
-		return { line, fromCh, toCh: fromCh + 1, text: '*' };
+	const flagged = parseHeaderLine(text);
+	if (flagged?.kind === 'txn-header' && flagged.flag === '!' && flagged.flagSpan !== undefined) {
+		return { line, fromCh: flagged.flagSpan.from, toCh: flagged.flagSpan.to, text: '*' };
 	}
 	const posting = POSTING_BANG_RE.exec(text);
 	if (posting !== null && posting.index === 0) {
@@ -213,9 +202,10 @@ export function padEdit(
 	const commodity = residual?.commodity ?? posting.commodity;
 	if (commodity === undefined) return null;
 	const number = residual ? negateAmount(residual.number) : negateAmount(posting.number);
-	const header = TXN_HEADER_RE.exec(lines[range.from] ?? '');
-	const payeeField = header ? PAYEE_RE.exec(header[3]) : null;
-	const account = inferBalancingAccount(posting.account, payeeField ? payeeField[1] : undefined, pairings);
+	const headerLine = lines[range.from] ?? '';
+	const padHeader = parseHeaderLine(headerLine);
+	const payee = padHeader ? headerPayee(headerLine, padHeader) : undefined;
+	const account = inferBalancingAccount(posting.account, payee, pairings);
 	if (account === null || account === posting.account) return null;
 	const insertAt = range.to;
 	const lineText = lines[insertAt] ?? '';
@@ -290,19 +280,18 @@ export function extractPairings(content: string): readonly Pairing[] {
 	const pairings: Pairing[] = [];
 	let line = 0;
 	while (line < lines.length) {
-		// A header opens with its date: skip the regex for every other line.
 		const head = lines[line].charCodeAt(0);
-		const header = head >= 0x30 && head <= 0x39 ? TXN_HEADER_RE.exec(lines[line]) : null;
-		if (header === null) {
+		const headerLine = lines[line] ?? '';
+		const header = head >= 0x30 && head <= 0x39 ? parseHeaderLine(headerLine) : null;
+		if (header === null || header.kind !== 'txn-header') {
 			line += 1;
 			continue;
 		}
 		const range = blockRangeAt(lines, line);
-		// One parse per line; a third posting already rules the block out.
 		let accounts = 0;
 		const postings: Array<{ account: string; commodity?: string }> = [];
 		for (let i = range.from; i <= range.to && accounts <= 2; i += 1) {
-			const parsed = parsePostingLine(lines[i]);
+			const parsed = scannedAmount(lines[i]);
 			if (parsed === null) continue;
 			accounts += 1;
 			if (parsed.number !== undefined) postings.push(parsed);
@@ -315,8 +304,8 @@ export function extractPairings(content: string): readonly Pairing[] {
 				first.commodity === second.commodity
 			) {
 				pairings.push({
-					date: header[1].replace(/\//g, '-'),
-					payee: PAYEE_RE.exec(header[3])?.[1],
+					date: header.date.replace(/\//g, '-'),
+					payee: headerPayee(headerLine, header),
 					accounts: [first.account, second.account],
 				});
 			}
@@ -447,8 +436,8 @@ function entryDate(lines: readonly string[], line: number): string | undefined {
 	if (onLine !== null) return onLine[1];
 	const range = blockRangeAt(lines, line);
 	for (let i = range.from; i <= range.to; i += 1) {
-		const match = TXN_HEADER_RE.exec(lines[i]);
-		if (match !== null) return match[1];
+		const header = parseHeaderLine(lines[i] ?? '');
+		if (header?.kind === 'txn-header') return header.date;
 	}
 	return undefined;
 }
@@ -504,10 +493,20 @@ function pickOther(account: string, pairings: readonly Pairing[]): string | null
 	return best;
 }
 
+function scannedAmount(line: string): { account: string; number?: string; commodity?: string } | null {
+	const parsed = parsePostingLine(line);
+	if (parsed?.account === undefined) return null;
+	return {
+		account: parsed.account.text,
+		number: parsed.number ? line.slice(parsed.number.from, parsed.number.to) : undefined,
+		commodity: parsed.commodity ? line.slice(parsed.commodity.from, parsed.commodity.to) : undefined,
+	};
+}
+
 function postingAccounts(lines: readonly string[], from: number, to: number): string[] {
 	const accounts: string[] = [];
 	for (let i = from; i <= to; i += 1) {
-		const parsed = parsePostingLine(lines[i]);
+		const parsed = scannedAmount(lines[i]);
 		if (parsed !== null) accounts.push(parsed.account);
 	}
 	return accounts;
@@ -516,36 +515,9 @@ function postingAccounts(lines: readonly string[], from: number, to: number): st
 function amountPostings(lines: readonly string[], from: number, to: number): AmountPosting[] {
 	const postings: AmountPosting[] = [];
 	for (let i = from; i <= to; i += 1) {
-		const parsed = parsePostingLine(lines[i]);
+		const parsed = scannedAmount(lines[i]);
 		if (parsed === null || parsed.number === undefined) continue;
-		postings.push({ ...parsed, number: parsed.number, line: i });
+		postings.push({ account: parsed.account, number: parsed.number, commodity: parsed.commodity, line: i });
 	}
 	return postings;
-}
-
-function parsePostingLine(line: string): { account: string; number?: string; commodity?: string } | null {
-	const indent = INDENT_RE.exec(line);
-	if (indent === null || indent.index !== 0) return null;
-	let rest = line.slice(indent[0].length);
-	const leadingFlag = LEADING_FLAG_RE.exec(rest);
-	if (leadingFlag !== null && leadingFlag.index === 0) rest = rest.slice(leadingFlag[0].length);
-	const account = ACCOUNT_RE.exec(rest);
-	if (account === null || account.index !== 0) return null;
-	rest = rest.slice(account[0].length).replace(/^[ \t]+/, '');
-	const trailingFlag = TRAILING_FLAG_RE.exec(rest);
-	if (trailingFlag !== null && trailingFlag.index === 0) {
-		rest = rest.slice(trailingFlag[0].length).replace(/^[ \t]+/, '');
-	}
-	if (rest === '' || rest.startsWith(';') || rest.startsWith('{') || rest.startsWith('@')) {
-		return { account: account[0] };
-	}
-	const number = NUMBER_RE.exec(rest);
-	if (number === null || number.index !== 0) return { account: account[0] };
-	rest = rest.slice(number[0].length).replace(/^[ \t]+/, '');
-	const commodity = COMMODITY_RE.exec(rest);
-	return {
-		account: account[0],
-		number: number[0],
-		commodity: commodity !== null && commodity.index === 0 ? commodity[0] : undefined,
-	};
 }

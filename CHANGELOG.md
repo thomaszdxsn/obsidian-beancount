@@ -73,6 +73,7 @@ UI/UX fixes from the architecture review (#75).
   is; editor features no longer scan fences or inspect the file extension
   to decide line-level context (#69).
 - Ledger validation owns bean-check debounce, Problems writes, and bean-check markers (#68).
+- Ledger line scanner：插件内一份容错行扫描（#70）。
 
 ## 0.2.2
 

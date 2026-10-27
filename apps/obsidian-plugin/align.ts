@@ -37,67 +37,10 @@
  */
 
 import { ledgerDoc } from './fences';
+import { endsInString, postingAmountCols, skipSpace } from './scan';
 
 /** Minimum whitespace between the account (and its flag) and the amount. */
 const MIN_GAP = 1;
-
-/**
- * JS `\s` (WhiteSpace and LineTerminator), as one UTF-16 code unit: what
- * separates the tokens of a posting line.
- */
-function isSpace(c: number): boolean {
-	if (c === 0x20 || (c >= 0x09 && c <= 0x0d)) return true;
-	if (c < 0xa0) return false;
-	return (
-		c === 0xa0 ||
-		c === 0x1680 ||
-		(c >= 0x2000 && c <= 0x200a) ||
-		c === 0x2028 ||
-		c === 0x2029 ||
-		c === 0x202f ||
-		c === 0x205f ||
-		c === 0x3000 ||
-		c === 0xfeff
-	);
-}
-
-/** Offset past the `\s` run at `at`. */
-function skipSpace(line: string, at: number): number {
-	while (at < line.length && isSpace(line.charCodeAt(at))) at += 1;
-	return at;
-}
-
-/** Offset past the `[ \t]` run at `at`. */
-function skipBlank(line: string, at: number): number {
-	while (at < line.length && (line.charCodeAt(at) === 0x20 || line.charCodeAt(at) === 0x09)) at += 1;
-	return at;
-}
-
-/**
- * An account as the syntax mode highlights it: a capitalized root plus
- * `:segment` parts. Segments may hold non-ASCII characters (`Expenses:餐饮`),
- * which is exactly why nothing prose-shaped leaks in: URLs start lowercase,
- * wikilinks start with a bracket, and metadata keys (`note:`) have no segment.
- */
-const ACCOUNT_RE = /^[A-Z][a-z]+(?::[^\s:]+)+$/;
-
-/** A posting flag: `*!&#?%` or a single capital. */
-function isFlag(c: number): boolean {
-	return (c >= 0x41 && c <= 0x5a) || c === 0x2a || c === 0x21 || c === 0x26 || c === 0x23 || c === 0x3f || c === 0x25;
-}
-
-/**
- * The units amount: optional sign, integer (thousands separators allowed),
- * optional fraction. The lookahead keeps the match a whole token, so
- * `12.34.56` and `12.5USD` are not amounts.
- */
-const NUMBER_RE = /[-+]?[0-9][0-9,]*(?:\.[0-9]*)?(?=\s|$)/y;
-
-/** A commodity: uppercase word or quoted word, as the syntax mode sees them. */
-const COMMODITY_RE = /(?:[A-Z][A-Z0-9'\-._]{0,22}[A-Z0-9]|"[^"\s]+")(?=\s|$)/y;
-
-/** Syntax that may follow an amount still being typed without its commodity. */
-const ANNOTATION_STARTS: Record<string, true> = { '{': true, '@': true, ';': true };
 
 /** The whitespace rewrite that moves one amount's decimal point. */
 export interface LineEdit {
@@ -128,95 +71,29 @@ interface Posting {
 	block: number;
 }
 
-/**
- * Whether `line` ends inside a `"` string. A `;` outside a string starts a
- * comment and is not scanned, so a quote there cannot open a string that
- * swallows the next line. Inside a string, a backslash escapes the next
- * character on this line only: a trailing backslash does not swallow the
- * newline. Alignment and formatting share this scan.
- */
-export function endsInString(line: string, inStringStart: boolean): boolean {
-	// Most lines hold no quote at all: nothing can open a string.
-	if (!inStringStart && !line.includes('"')) return false;
-	let inString = inStringStart;
-	for (let i = 0; i < line.length; i += 1) {
-		const ch = line[i];
-		if (inString) {
-			if (ch === '\\' && i + 1 < line.length) {
-				i += 1;
-				continue;
-			}
-			if (ch === '"') inString = false;
-			continue;
-		}
-		if (ch === '"') {
-			inString = true;
-			continue;
-		}
-		if (ch === ';') break;
-	}
-	return inString;
-}
-
-/** Where the decimal point sits inside a number token; integers end there. */
-function dotOffset(number: string): number {
-	const dot = number.indexOf('.');
-	return dot === -1 ? number.length : dot;
-}
-
-/** What may follow the amount: nothing, a commodity, or annotation syntax. */
-function amountTailOk(line: string, at: number): boolean {
-	const next = skipSpace(line, at);
-	if (next >= line.length) return true;
-	if (ANNOTATION_STARTS[line[next]] === true) return true;
-	COMMODITY_RE.lastIndex = next;
-	return COMMODITY_RE.test(line);
-}
-
-function parsePosting(line: string): Posting | null {
-	// Postings are indented; directives (`2026-01-01 balance …`, `include`)
-	// start at column 0 and are out of scope.
-	let at = skipBlank(line, 0);
-	if (at === 0) return null;
-
-	// The flag may precede the account (`  * Assets:Cash …`).
-	if (isFlag(line.charCodeAt(at))) {
-		const afterFlag = skipBlank(line, at + 1);
-		if (afterFlag > at + 1) at = afterFlag;
-	}
-
-	let accountEnd = at;
-	while (accountEnd < line.length && !isSpace(line.charCodeAt(accountEnd))) accountEnd += 1;
-	if (accountEnd === at || !ACCOUNT_RE.test(line.slice(at, accountEnd))) return null;
-
-	// …or sit between account and amount (`  Assets:Cash * 12.50 USD`);
-	// it stays with the account, so the gap after it is what gets rewritten.
-	let gapStart = accountEnd;
-	const flagAt = skipSpace(line, gapStart);
-	if (
-		flagAt > gapStart &&
-		isFlag(line.charCodeAt(flagAt)) &&
-		(flagAt + 1 >= line.length || isSpace(line.charCodeAt(flagAt + 1)))
-	) {
-		gapStart = flagAt + 1;
-	}
-
-	const gapEnd = skipSpace(line, gapStart);
+function alignmentPosting(line: string): Posting | null {
+	const cols = postingAmountCols(line);
+	if (cols === null) return null;
+	const gapStart = cols.gapStart;
+	const gapEnd = cols.numberFrom;
 	if (gapEnd === gapStart) return null;
-
-	NUMBER_RE.lastIndex = gapEnd;
-	const number = NUMBER_RE.exec(line);
-	if (number === null || !amountTailOk(line, NUMBER_RE.lastIndex)) return null;
-
+	let beforeDot = cols.numberTo - cols.numberFrom;
+	for (let i = cols.numberFrom; i < cols.numberTo; i += 1) {
+		if (line.charCodeAt(i) === 0x2e) {
+			beforeDot = i - cols.numberFrom;
+			break;
+		}
+	}
 	return {
 		gapStart,
 		gapEnd,
 		prefixWidth: displayWidth(line.slice(0, gapStart)),
-		beforeDot: dotOffset(number[0]),
+		beforeDot,
 		line: 0,
 		block: -1,
 	};
 }
+
 
 /** How a line takes part in a transaction block; see `scanBlocks`. */
 const enum BlockRole {
@@ -343,7 +220,7 @@ export function computeAlignment(
 		inString = endsInString(lines[line], inString);
 		if (range && line < range.from) continue;
 		if (continuation) continue;
-		const posting = parsePosting(lines[line]);
+		const posting = alignmentPosting(lines[line]);
 		if (posting !== null) {
 			posting.line = line;
 			posting.block = blockOfLine[line];
@@ -384,7 +261,7 @@ export function computeAlignment(
  */
 export function isAmountDotInsert(line: string, ch: number): boolean {
 	if (ch < 0 || ch > line.length) return false;
-	const posting = parsePosting(line.slice(0, ch) + '.' + line.slice(ch));
+	const posting = alignmentPosting(line.slice(0, ch) + '.' + line.slice(ch));
 	return posting !== null && posting.gapEnd + posting.beforeDot === ch;
 }
 

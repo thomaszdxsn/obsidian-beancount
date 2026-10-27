@@ -17,6 +17,7 @@
  * not outline items — the issue names txn/open/close/balance only.
  */
 import type { Editor } from 'obsidian';
+import { parseHeaderLine, unescapeQuoted } from './scan';
 
 /** Dummy heading title inserted for a skipped org-mode level. */
 export const DUMMY_HEADING = '_';
@@ -39,12 +40,6 @@ export interface OutlineRow {
 	depth: number;
 }
 
-const TXN_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]*(txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])(.*)$/;
-const DIRECTIVE_RE =
-	/^([0-9]{4}[-/][0-9]{2}[-/][0-9]{2})[ \t]+(open|close|balance)(?![A-Za-z0-9])[ \t]*(\S+)?/;
-const QUOTED_FIELD_RE = /^[ \t]*"((?:[^"\\\n]|\\.)*)"/;
-
 interface HeadingLine {
 	level: number;
 	name: string;
@@ -64,27 +59,6 @@ function parseHeading(text: string): HeadingLine {
 		else name += ch;
 	}
 	return { level, name: name.trim() };
-}
-
-function quotedFields(rest: string): string[] {
-	const fields: string[] = [];
-	let leftover = rest;
-	while (fields.length < 2) {
-		const match = QUOTED_FIELD_RE.exec(leftover);
-		if (!match) break;
-		const field = match[1];
-		fields.push(field.includes('\\') ? field.replace(/\\(.)/g, '$1') : field);
-		leftover = leftover.slice(match[0].length);
-	}
-	return fields;
-}
-
-function transactionTitle(flag: string, rest: string): string {
-	const [payee, narration] = quotedFields(rest);
-	if (payee && narration) return `${payee} — ${narration}`;
-	if (payee) return payee;
-	if (narration) return narration;
-	return flag;
 }
 
 
@@ -128,36 +102,39 @@ export function parseBeancountOutline(text: string): OutlineNode[] {
 	const lines = text.split('\n');
 	for (let line = 0; line < lines.length; line++) {
 		const raw = lines[line];
-		if (raw.startsWith('*')) {
+		if (raw.charCodeAt(0) === 0x2a) {
 			const heading = parseHeading(raw);
 			if (heading.level < 1 || !heading.name) continue;
 			attachHeading(heading.level, heading.name, line);
 			continue;
 		}
-		// Both entry shapes open with a date.
 		const head = raw.charCodeAt(0);
 		if (!(head >= 0x30 && head <= 0x39)) continue;
-		const txn = TXN_RE.exec(raw);
-		if (txn) {
-			pushDated(currentSiblings(), txn[1], line, {
+		const header = parseHeaderLine(raw);
+		if (header === null) continue;
+		if (header.kind === 'txn-header') {
+			const payee = header.payee ? unescapeQuoted(raw.slice(header.payee.from, header.payee.to)) : undefined;
+			const narration = header.narration
+				? unescapeQuoted(raw.slice(header.narration.from, header.narration.to))
+				: undefined;
+			pushDated(currentSiblings(), header.date, line, {
 				kind: 'transaction',
-				title: transactionTitle(txn[2], txn[3]),
+				title: payee && narration ? `${payee} — ${narration}` : payee || narration || header.flag || '*',
 				line,
 				children: [],
 			});
 			continue;
 		}
-		const directive = DIRECTIVE_RE.exec(raw);
-		if (directive) {
-			const kind = directive[2] as 'open' | 'close' | 'balance';
-			const account = directive[3];
-			pushDated(currentSiblings(), directive[1], line, {
-				kind,
-				title: account ? `${kind} ${account}` : kind,
-				line,
-				children: [],
-			});
-		}
+		const keyword = header.keyword;
+		if (keyword !== 'open' && keyword !== 'close' && keyword !== 'balance') continue;
+		const rest = header.keywordSpan ? raw.slice(header.keywordSpan.to).trim() : '';
+		const token = rest.split(/[ \t]+/)[0];
+		pushDated(currentSiblings(), header.date, line, {
+			kind: keyword,
+			title: token ? `${keyword} ${token}` : keyword,
+			line,
+			children: [],
+		});
 	}
 
 	return roots;

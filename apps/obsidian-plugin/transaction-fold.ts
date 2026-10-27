@@ -25,13 +25,10 @@ import type { EditorState, Extension, Text } from '@codemirror/state';
 import { BeancountParser, BeancountSyntaxError, Transaction } from '@repo/beancount-parser';
 import { editorInfoField } from 'obsidian';
 import { isLedgerFile, ledgerDoc } from './fences';
+import { classifyLine, endsInString, entryExtent } from './scan';
 
-/** A transaction header at column 0: a date, then `txn` or a flag, space optional as in the grammar. */
-const DATED_HEADER = /^\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
-/** A header, possibly under a fence opener's 0–3 space indent: the cheap pre-check. */
-const MAYBE_HEADER = /^ {0,3}\d{4}[-/]\d{2}[-/]\d{2}[ \t]*(?:txn|[*!&#?%PSTCURM])(?![A-Za-z0-9])/;
-/** A line the grammar can attach to the directive above: indent, then content. */
-const ATTACHED_LINE = /^[ \t]+\S/;
+/** Cheap reject: a line that might be a dated header, including 0–3 space fence indent. */
+const DATE_HEAD = /^ {0,3}\d{4}[-/]\d{2}[-/]\d{2}/;
 
 /** Entries cached; oldest dropped first. Enough for a large ledger's visible span and edits. */
 const CACHE_LIMIT = 5000;
@@ -57,21 +54,7 @@ export interface FoldBody {
 	lines: readonly string[];
 }
 
-/**
- * Whether a `"…"` string is still open after `text`, given whether one was
- * open at its start. Outside a string, `;` starts a comment to end of line.
- */
-function stringOpenAfter(text: string, open: boolean): boolean {
-	for (let i = 0; i < text.length; i += 1) {
-		const ch = text[i];
-		if (open) {
-			if (ch === '\\') i += 1;
-			else if (ch === '"') open = false;
-		} else if (ch === '"') open = true;
-		else if (ch === ';') return false;
-	}
-	return open;
-}
+
 
 function hiddenLines(entry: string): number | null {
 	const cached = hiddenLinesCache.get(entry);
@@ -119,21 +102,22 @@ export function transactionFoldAt(
 	const lastLine = body ? body.first + body.lines.length - 1 : doc.lines;
 	const textOf = (n: number) => (body ? body.lines[n - body.first] : doc.line(n).text);
 	const header = textOf(lineNumber);
-	if (!DATED_HEADER.test(header)) return null;
-	const entry = [header];
-	let inString = stringOpenAfter(header, false);
-	let end = lineNumber;
-	while (end < lastLine) {
-		const text = textOf(end + 1);
-		// A multi-line string carries on through blank and column-0 lines.
-		if (!inString && !ATTACHED_LINE.test(text)) break;
-		// Too long to parse on every edit; a truncated parse would fold a wrong extent.
-		if (entry.length === MAX_ENTRY_LINES) return null;
-		entry.push(text);
-		inString = stringOpenAfter(text, inString);
-		end += 1;
-	}
-	if (end === lineNumber || inString) return null;
+	if (classifyLine(header) !== 'txn-header') return null;
+	const range = entryExtent(
+		(i) => {
+			const n = lineNumber + i;
+			if (n > lastLine) return undefined;
+			return textOf(n);
+		},
+		0,
+		MAX_ENTRY_LINES
+	);
+	if (range === null || range.to === 0) return null;
+	const entry: string[] = [];
+	for (let i = 0; i <= range.to; i += 1) entry.push(textOf(lineNumber + i));
+	let inString = false;
+	for (const text of entry) inString = endsInString(text, inString);
+	if (inString) return null;
 	const hidden = hiddenLines(entry.join('\n') + '\n');
 	if (hidden === null) return null;
 	return { from: doc.line(lineNumber).to, to: doc.line(lineNumber + hidden).to };
@@ -148,7 +132,7 @@ export function transactionFoldInState(state: EditorState, lineStart: number): {
 	const doc = state.doc;
 	const line = doc.lineAt(lineStart);
 	// Cheap reject before the fence scan: most lines are no header.
-	if (!MAYBE_HEADER.test(line.text)) return null;
+	if (!DATE_HEAD.test(line.text)) return null;
 	if (file && isLedgerFile(file)) return transactionFoldAt(doc, line.number);
 	const region = ledgerDoc('fenced', doc).regionAt(line.number - 1);
 	return region ? transactionFoldAt(doc, line.number, { first: region.hostStartLine + 1, lines: region.lines }) : null;

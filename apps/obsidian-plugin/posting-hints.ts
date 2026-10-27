@@ -32,17 +32,9 @@
  * fallback; without it the label has no pad and the widget supplies the gap.
  */
 import { displayWidth } from './align';
-import {
-	ACCOUNT_EXACT,
-	FLAG_EXACT,
-	META_RE,
-	TXN_RE,
-	add,
-	commodityOf,
-	stripComment,
-	toQty,
-} from './balance-hints';
+import { add, toQty } from './balance-hints';
 import type { Qty } from './balance-hints';
+import { classifyLine, commodityOf, META_RE, parsePostingLine, stripComment } from './scan';
 
 export type PostingHintKind = 'inferred' | 'unbalanced';
 
@@ -127,60 +119,54 @@ function numberDotColumn(body: string, numberToken: string): number | null {
 function classifyPosting(line: string): Classified {
 	const raw = stripCarriage(line);
 	if (raw.charAt(0) !== ' ' && raw.charAt(0) !== '\t') return { kind: 'skip' };
-	const body = stripComment(raw);
-	const trimmed = body.trim();
-	if (trimmed === '' || META_RE.test(trimmed)) return { kind: 'skip' };
-	const tokens = trimmed.split(/[ \t]+/);
-	let at = 0;
-	if (FLAG_EXACT.test(tokens[0]) && tokens.length > 1) at = 1;
-	const account = tokens[at];
-	if (account === undefined || !ACCOUNT_EXACT.test(account)) return { kind: 'complex' };
-	at++;
-	if (at < tokens.length && FLAG_EXACT.test(tokens[at])) at++;
-	const rest = tokens.slice(at);
-	if (rest.every((token) => TAG_OR_LINK_RE.test(token))) return { kind: 'missing' };
-	if (rest.length >= 2 && rest.slice(2).every((token) => TAG_OR_LINK_RE.test(token))) {
-		const qty = toQty(rest[0]);
-		const commodity = commodityOf(rest[1]);
-		if (qty !== null && commodity !== null) {
-			const dotColumn = numberDotColumn(body, rest[0]);
-			if (dotColumn === null) return { kind: 'complex' };
-			return { kind: 'simple', qty, commodity: commodity.id, display: rest[1], dotColumn };
-		}
+	const parsed = parsePostingLine(raw);
+	if (parsed === null) {
+		const trimmed = raw.trim();
+		if (trimmed === '' || trimmed.startsWith(';') || META_RE.test(trimmed)) return { kind: 'skip' };
+		return { kind: 'complex' };
 	}
-	return { kind: 'complex' };
+	if (parsed.hasCost || parsed.hasPrice) return { kind: 'complex' };
+	const body = stripComment(raw);
+	if (parsed.number === undefined) {
+		const rest = body.slice(parsed.gapStart).trim();
+		return rest === '' || rest.split(/[ \t]+/).every((token) => TAG_OR_LINK_RE.test(token))
+			? { kind: 'missing' }
+			: { kind: 'complex' };
+	}
+	if (parsed.commodity === undefined) return { kind: 'complex' };
+	const numberText = raw.slice(parsed.number.from, parsed.number.to);
+	const commodityToken = raw.slice(parsed.commodity.from, parsed.commodity.to);
+	const after = body.slice(parsed.commodity.to).trim();
+	if (after !== '' && !after.split(/[ \t]+/).every((token) => TAG_OR_LINK_RE.test(token))) return { kind: 'complex' };
+	const qty = toQty(numberText);
+	const commodity = commodityOf(commodityToken);
+	if (qty === null || commodity === null) return { kind: 'complex' };
+	const dotColumn = numberDotColumn(body, numberText);
+	if (dotColumn === null) return { kind: 'complex' };
+	return { kind: 'simple', qty, commodity: commodity.id, display: commodityToken, dotColumn };
 }
 
-/**
- * One pass, same entry boundaries as the syntax mode: a blank line or a
- * comment at column 0 closes the transaction. Indented lines outside one
- * are not postings.
- */
 function collectTransactions(lines: readonly string[]): Txn[] {
 	const txns: Txn[] = [];
 	let current: Txn | null = null;
 	for (let i = 0; i < lines.length; i++) {
 		const raw = stripCarriage(lines[i]);
-		if (raw.trim() === '' || raw.charAt(0) === ';') {
-			current = null;
-			continue;
-		}
-		if (raw.charAt(0) !== ' ' && raw.charAt(0) !== '\t') {
-			current = null;
-			if (TXN_RE.test(raw)) {
-				current = { header: i, postings: [], complex: false };
-				txns.push(current);
+		if (raw.charAt(0) === ' ' || raw.charAt(0) === '\t') {
+			if (current === null) continue;
+			const parsed = classifyPosting(raw);
+			if (parsed.kind === 'skip') continue;
+			if (parsed.kind === 'complex') {
+				current.complex = true;
+				continue;
 			}
+			current.postings.push({ line: i, parsed });
 			continue;
 		}
-		if (current === null) continue;
-		const parsed = classifyPosting(raw);
-		if (parsed.kind === 'skip') continue;
-		if (parsed.kind === 'complex') {
-			current.complex = true;
-			continue;
+		current = null;
+		if (classifyLine(raw) === 'txn-header') {
+			current = { header: i, postings: [], complex: false };
+			txns.push(current);
 		}
-		current.postings.push({ line: i, parsed });
 	}
 	return txns;
 }

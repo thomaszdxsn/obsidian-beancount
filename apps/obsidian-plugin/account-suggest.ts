@@ -12,7 +12,7 @@ import { ACCOUNT_CHAR_RE, ACCOUNT_PREFIX_RE, describeAccount } from './account-i
 import type { AccountIndex } from './account-index';
 import { editorLedger } from './fences';
 import { COMMODITY_PREFIX_RE, LINK_PREFIX_RE, TAG_PREFIX_RE } from './token-index';
-import { inStringOrComment } from './token-suggest';
+import { inStringOrComment } from './scan';
 import { IndexSuggest } from './suggest';
 
 export class AccountSuggest extends IndexSuggest {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { BalanceLineCache, balanceHints, stripComment } from '../balance-hints';
+import { BalanceLineCache, balanceHints } from '../balance-hints';
+import { stripComment } from '../scan';
 
 const hints = (...lines: string[]) => balanceHints(lines);
 
