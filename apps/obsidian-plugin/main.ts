@@ -16,12 +16,11 @@ import {
 import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
 import type { LineRange } from './align';
 import { beancountMode } from './beancount-mode';
-import { AccountIndex } from './account-index';
 import { AccountSuggest } from './account-suggest';
 import { accountHoverTooltip } from './account-hover';
 import type { BeanCheckRunner } from './bean-check';
 import { clipText, runBeanCheck } from './bean-check';
-import { flagOkayEdit, insertOpenDirective, OpenFileIndex, padEdit, PairingIndex, quickFixesForLine } from './code-actions';
+import { flagOkayEdit, insertOpenDirective, padEdit, quickFixesForLine } from './code-actions';
 import type { QuickFix, TextEdit } from './code-actions';
 import { beanDiagnostics, createDiagnosticsExtension, flagOkayDiagnostics, setEditorBeanDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
@@ -45,11 +44,9 @@ import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
 import { isLedgerFile } from './fences';
 import { insertTodayDate } from './insert-date';
-import { extractPayees } from './payee-index';
+import { LedgerIndex } from './ledger-index';
 import { PayeeSuggest } from './payee-suggest';
-import { PayeeTemplateIndex } from './payee-template';
 import { SnippetSession, SnippetSuggest, snippetTabExtension } from './snippet-suggest';
-import { extractCommodities, extractLinks, extractNarrations, extractTags } from './token-index';
 import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from './token-suggest';
 import { transactionFoldExtension } from './transaction-fold';
 import { postingIndentExtension } from './posting-indent';
@@ -61,7 +58,7 @@ import { BeancountProblemsView, revealProblemsView, VIEW_TYPE_PROBLEMS } from '.
 import { BeancountBalancesView, revealBalancesView, VIEW_TYPE_BALANCES } from './report-view';
 import { fileMtime } from './problems';
 import { instantAlignmentExtension } from './instant-alignment';
-import { isTextFile, registerVaultIndex, VaultIndex } from './vault-index';
+import { isTextFile } from './vault-index';
 import { CompletionUsage } from './completion-rank';
 import { BeancountSettingTab, BeancountSettings, DEFAULT_SETTINGS, mergeSettings } from './settings';
 import type { Clock } from './clock';
@@ -338,8 +335,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	/** How `bean-check` is started; tests swap in their own runner. */
 	beanCheckRunner: BeanCheckRunner = runBeanCheck;
 	private validation!: LedgerValidation;
-	private readonly pairings = new PairingIndex();
-	private readonly openFiles = new OpenFileIndex();
+	private ledger!: LedgerIndex;
 	/** Pending on-save alignment per file path. */
 	private readonly alignTimers = new Map<string, number>();
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
@@ -411,40 +407,22 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (uninstall) this.register(uninstall);
 		// One vault scan feeds every completion index, balancing-account
 		// history, and the file that already holds `open` directives.
-		const pinyinMatching = () => this.settings.pinyinMatching;
-		const accounts = new AccountIndex(this.usage, pinyinMatching);
-		const payees = new VaultIndex(extractPayees, this.usage, pinyinMatching);
-		const commodities = new VaultIndex(extractCommodities, this.usage, pinyinMatching);
-		const tags = new VaultIndex(extractTags, this.usage, pinyinMatching);
-		const links = new VaultIndex(extractLinks, this.usage, pinyinMatching);
-		const narrations = new VaultIndex(extractNarrations, this.usage, pinyinMatching);
-		const payeeTemplates = new PayeeTemplateIndex();
+		this.ledger = new LedgerIndex(this.usage, () => this.settings.pinyinMatching);
+		this.ledger.applyVault(this);
 		const snippetSession = new SnippetSession();
-		registerVaultIndex(
-			this,
-			accounts,
-			payees,
-			commodities,
-			tags,
-			links,
-			narrations,
-			this.pairings,
-			this.openFiles,
-			payeeTemplates
-		);
-		const accountSuggest = new AccountSuggest(this.app, accounts);
-		const payeeSuggest = new PayeeSuggest(this.app, payees, () => this.settings.completePayee, {
+		const accountSuggest = new AccountSuggest(this.app, this.ledger.accounts);
+		const payeeSuggest = new PayeeSuggest(this.app, this.ledger.payees, () => this.settings.completePayee, {
 			enabled: () => this.settings.payeeAutofill,
 			templateFor: (payee) => {
-				const template = payeeTemplates.get(payee);
+				const template = this.ledger.templateFor(payee);
 				return template !== null && template.postings.length > 0 ? template.postings : null;
 			},
 			session: snippetSession,
 		});
-		const commoditySuggest = new CommoditySuggest(this.app, commodities);
-		const tagSuggest = new TagSuggest(this.app, tags);
-		const linkSuggest = new LinkSuggest(this.app, links);
-		const narrationSuggest = new NarrationSuggest(this.app, narrations, () => this.settings.completeNarration);
+		const commoditySuggest = new CommoditySuggest(this.app, this.ledger.commodities);
+		const tagSuggest = new TagSuggest(this.app, this.ledger.tags);
+		const linkSuggest = new LinkSuggest(this.app, this.ledger.links);
+		const narrationSuggest = new NarrationSuggest(this.app, this.ledger.narrations, () => this.settings.completeNarration);
 		const snippetSuggest = new SnippetSuggest(this.app, snippetSession);
 		this.registerEditorSuggest(accountSuggest);
 		this.registerEditorSuggest(payeeSuggest);
@@ -472,7 +450,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		// plus a gutter dot. Clicking the dot offers the quick fixes that
 		// line can take.
 		this.registerEditorExtension(createDiagnosticsExtension(this));
-		this.registerEditorExtension(accountHoverTooltip(accounts));
+		this.registerEditorExtension(accountHoverTooltip(this.ledger.accounts));
 		// Cmd+/ comments, auto-close brackets, and ;#region folds inside
 		// ```beancount / ```bean fences — markdown's languageData otherwise
 		// wins because the fence highlighter is a CM5 overlay, not a nested
@@ -748,14 +726,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		if (!diagnostic) return false;
 		const { editor, file } = located;
 		const lines = editor.getValue().split('\n');
-		const openFile = this.openFiles.bestFile() ?? (isLedgerFile(file) ? file.path : null);
+		const openFile = this.ledger.bestOpenFile() ?? (isLedgerFile(file) ? file.path : null);
 		const fixes = quickFixesForLine({
 			lines,
 			line,
 			message: diagnostic.message,
-			pairings: this.pairings.all(),
+			pairings: this.ledger.pairings(),
 			openFile,
-			openedAccounts: openFile ? this.openFiles.openedIn(openFile) : new Set(),
+			openedAccounts: openFile ? this.ledger.openedIn(openFile) : new Set(),
 		});
 		if (fixes.length === 0) return false;
 		const menu = new Menu();
@@ -805,7 +783,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			return;
 		}
 		if (fix.kind === 'pad') {
-			const edit = padEdit(lines, line, this.pairings.all(), message);
+			const edit = padEdit(lines, line, this.ledger.pairings(), message);
 			if (edit) applyEditorEdit(editor, edit);
 			return;
 		}

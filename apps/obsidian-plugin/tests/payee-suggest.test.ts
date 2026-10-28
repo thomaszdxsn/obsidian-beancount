@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
-import { extractPayees } from '../payee-index';
 import { PayeeSuggest } from '../payee-suggest';
-import { registerVaultIndex, VaultIndex } from '../vault-index';
+import { LedgerIndex } from '../ledger-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
@@ -27,7 +26,7 @@ function contextFor(query: string): EditorSuggestContext {
 
 interface Fixture {
 	vault: FakeVault;
-	index: VaultIndex;
+	index: LedgerIndex;
 	suggest: PayeeSuggest;
 	plugin: RecordingPlugin;
 }
@@ -36,9 +35,9 @@ function setup(files: Record<string, string> = {}): Fixture {
 	const vault = new FakeVault();
 	for (const [path, content] of Object.entries(files)) vault.write(path, content);
 	const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
-	const index = new VaultIndex(extractPayees);
-	registerVaultIndex(plugin as unknown as Plugin, index);
-	return { vault, index, suggest: new PayeeSuggest({} as App, index), plugin };
+	const index = new LedgerIndex();
+	index.applyVault(plugin as unknown as Plugin);
+	return { vault, index, suggest: new PayeeSuggest({} as App, index.payees), plugin };
 }
 
 describe('PayeeSuggest.onTrigger', () => {

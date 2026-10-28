@@ -1,7 +1,7 @@
 /**
  * Completion popovers for commodity, tag, link and narration fields: one
- * `IndexSuggest` subclass each, fed by the `VaultIndex` extractors in
- * `token-index.ts`. Each subclass only decides when the line and cursor
+ * `IndexSuggest` subclass each, fed by `LedgerIndex` token facts.
+ * Each subclass only decides when the line and cursor
  * open its field (`onTrigger`); matching and picking come from the shared
  * base.
  *

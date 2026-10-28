@@ -2,9 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
 import { CompletionUsage } from '../completion-rank';
-import { extractCommodities, extractLinks, extractNarrations, extractTags } from '../token-index';
+import { LedgerIndex } from '../ledger-index';
 import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from '../token-suggest';
-import { registerVaultIndex, VaultIndex } from '../vault-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
@@ -27,18 +26,18 @@ function contextFor(query: string): EditorSuggestContext {
 	return { query } as EditorSuggestContext;
 }
 
-function setup(extract: (content: string) => ReadonlySet<string>, files: Record<string, string> = {}) {
+function setup(facet: 'tags' | 'links' | 'commodities' | 'narrations', files: Record<string, string> = {}) {
 	const vault = new FakeVault();
 	for (const [path, content] of Object.entries(files)) vault.write(path, content);
 	const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
-	const index = new VaultIndex(extract);
-	registerVaultIndex(plugin as unknown as Plugin, index);
-	return { vault, index, plugin };
+	const ledger = new LedgerIndex();
+	ledger.applyVault(plugin as unknown as Plugin);
+	return { vault, index: ledger[facet], plugin, ledger };
 }
 
 describe('TagSuggest.onTrigger', () => {
 	it('triggers on a partial tag inside a ledger file', async () => {
-		const { index } = setup(extractTags, { 'a.bean': '#trip' });
+		const { index } = setup('tags', { 'a.bean': '#trip' });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		const { editor, cursor } = at('#tr');
@@ -50,7 +49,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('triggers inside a beancount fence of a markdown note', async () => {
-		const { index } = setup(extractTags, { 'a.md': FENCED_VAULT.join('\n') });
+		const { index } = setup('tags', { 'a.md': FENCED_VAULT.join('\n') });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		const editor = createEditor([...FENCED_EDITOR]);
@@ -60,7 +59,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet on markdown prose outside a fence', async () => {
-		const { index } = setup(extractTags, { 'a.bean': '#trip' });
+		const { index } = setup('tags', { 'a.bean': '#trip' });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		const { editor, cursor } = at('#tr');
@@ -68,7 +67,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('triggers right after the sigil with every tag on offer', async () => {
-		const { index } = setup(extractTags, { 'a.bean': 'x #trip #truce' });
+		const { index } = setup('tags', { 'a.bean': 'x #trip #truce' });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		const { editor, cursor } = at('  #');
@@ -81,7 +80,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when editing inside the tag', async () => {
-		const { index } = setup(extractTags, { 'a.bean': '#trip' });
+		const { index } = setup('tags', { 'a.bean': '#trip' });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		// A token character after the cursor would be garbled by the pick.
@@ -90,7 +89,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when the tail is not a tag token', async () => {
-		const { index } = setup(extractTags, { 'a.bean': '#trip' });
+		const { index } = setup('tags', { 'a.bean': '#trip' });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		// `2 # 3`: the caret ends after a space, so the tail is no `#name`.
@@ -99,7 +98,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when the vault has no tags', async () => {
-		const { index } = setup(extractTags);
+		const { index } = setup('tags');
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		const { editor, cursor } = at('#tr');
@@ -107,7 +106,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet inside quoted strings', async () => {
-		const { index } = setup(extractTags, { 'a.bean': 'x #trip' });
+		const { index } = setup('tags', { 'a.bean': 'x #trip' });
 		await flush();
 		const tag = new TagSuggest({} as App, index);
 		// The payee/narration fields own quoted text: `Fix #` is not a tag
@@ -116,7 +115,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('respects escaped quotes when deciding string state', async () => {
-		const { index } = setup(extractTags, { 'a.bean': 'x #trip' });
+		const { index } = setup('tags', { 'a.bean': 'x #trip' });
 		await flush();
 		const tag = new TagSuggest({} as App, index);
 		// `\"` inside the payee is an escaped quote: the string ends at the
@@ -126,7 +125,7 @@ describe('TagSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet on the bare # transaction flag', async () => {
-		const { index } = setup(extractTags, { 'a.bean': '#trip' });
+		const { index } = setup('tags', { 'a.bean': '#trip' });
 		await flush();
 		const tag = new TagSuggest({} as App, index);
 		// `#` is a transaction flag: `2026-09-30 #` must not open the tag list.
@@ -139,7 +138,7 @@ describe('TagSuggest.onTrigger', () => {
 
 	it('caps suggestions at MAX_SUGGESTIONS', async () => {
 		const { index } = setup(
-			extractTags,
+			'tags',
 			Object.fromEntries(
 				Array.from({ length: 60 }, (_, i) => [`n${i}.bean`, `#tag${String(i).padStart(2, '0')}`])
 			)
@@ -152,7 +151,7 @@ describe('TagSuggest.onTrigger', () => {
 
 describe('LinkSuggest.onTrigger', () => {
 	it('triggers on a partial link inside ledger text', async () => {
-		const { index } = setup(extractLinks, { 'a.bean': '^receipt' });
+		const { index } = setup('links', { 'a.bean': '^receipt' });
 		await flush();
 		const suggest = new LinkSuggest({} as App, index);
 		const { editor, cursor } = at('^re');
@@ -165,7 +164,7 @@ describe('LinkSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet on markdown prose outside a fence', async () => {
-		const { index } = setup(extractLinks, { 'a.bean': '^receipt' });
+		const { index } = setup('links', { 'a.bean': '^receipt' });
 		await flush();
 		const suggest = new LinkSuggest({} as App, index);
 		const { editor, cursor } = at('^re');
@@ -173,7 +172,7 @@ describe('LinkSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when editing inside the link', async () => {
-		const { index } = setup(extractLinks, { 'a.bean': '^receipt' });
+		const { index } = setup('links', { 'a.bean': '^receipt' });
 		await flush();
 		const suggest = new LinkSuggest({} as App, index);
 		const { editor, cursor } = at('^re', 2);
@@ -181,7 +180,7 @@ describe('LinkSuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when the tail is not a link token', async () => {
-		const { index } = setup(extractLinks, { 'a.bean': '^receipt' });
+		const { index } = setup('links', { 'a.bean': '^receipt' });
 		await flush();
 		const suggest = new LinkSuggest({} as App, index);
 		// `2 ^ 3`: the caret ends after a space, so the tail is no `^name`.
@@ -190,7 +189,7 @@ describe('LinkSuggest.onTrigger', () => {
 	});
 
 	it('triggers in a fence even when the file is a markdown note', async () => {
-		const { index } = setup(extractLinks, { 'a.bean': '^receipt' });
+		const { index } = setup('links', { 'a.bean': '^receipt' });
 		await flush();
 		const suggest = new LinkSuggest({} as App, index);
 		const editor = createEditor(['```bean', '^re']);
@@ -201,7 +200,7 @@ describe('LinkSuggest.onTrigger', () => {
 	});
 
 	it('keeps the closed fence bounds: prose above and below stays quiet', async () => {
-		const { index } = setup(extractTags, { 'a.bean': 'x #trip' });
+		const { index } = setup('tags', { 'a.bean': 'x #trip' });
 		await flush();
 		const suggest = new TagSuggest({} as App, index);
 		// Line 1 is the fence body; lines 0, 2 (the closing fence) and 3 are
@@ -216,7 +215,7 @@ describe('LinkSuggest.onTrigger', () => {
 
 describe('CommoditySuggest.onTrigger', () => {
 	it('triggers on a partial posting unit', async () => {
-		const { index } = setup(extractCommodities, { 'a.bean': '  Assets:Cash  10.00 USD' });
+		const { index } = setup('commodities', { 'a.bean': '  Assets:Cash  10.00 USD' });
 		await flush();
 		const suggest = new CommoditySuggest({} as App, index);
 		const { editor, cursor } = at('  Assets:Cash  10.00 US');
@@ -229,7 +228,7 @@ describe('CommoditySuggest.onTrigger', () => {
 
 	it('triggers after the price and commodity keywords', async () => {
 		const { index } = setup(
-			extractCommodities,
+			'commodities',
 			{ 'a.bean': '2026-09-30 price USD 1.10 CAD\n2026-09-30 commodity AAPL' }
 		);
 		await flush();
@@ -242,7 +241,7 @@ describe('CommoditySuggest.onTrigger', () => {
 	});
 
 	it('stays quiet on an account tail and between the number and token', async () => {
-		const { index } = setup(extractCommodities, { 'a.bean': '  Assets:Cash  10.00 USD' });
+		const { index } = setup('commodities', { 'a.bean': '  Assets:Cash  10.00 USD' });
 		await flush();
 		const suggest = new CommoditySuggest({} as App, index);
 		expect(suggest.onTrigger(at('  Expenses:Fo').cursor, at('  Expenses:Fo').editor, LEDGER_FILE)).toBeNull();
@@ -251,7 +250,7 @@ describe('CommoditySuggest.onTrigger', () => {
 	});
 
 	it('stays quiet when editing inside the commodity', async () => {
-		const { index } = setup(extractCommodities, { 'a.bean': '  Assets:Cash  10.00 USD' });
+		const { index } = setup('commodities', { 'a.bean': '  Assets:Cash  10.00 USD' });
 		await flush();
 		const suggest = new CommoditySuggest({} as App, index);
 		// A token character after the cursor (`US|D`) would be garbled by the pick.
@@ -260,7 +259,7 @@ describe('CommoditySuggest.onTrigger', () => {
 	});
 
 	it('stays quiet on markdown prose outside a fence', async () => {
-		const { index } = setup(extractCommodities, { 'a.bean': '  Assets:Cash  10.00 USD' });
+		const { index } = setup('commodities', { 'a.bean': '  Assets:Cash  10.00 USD' });
 		await flush();
 		const suggest = new CommoditySuggest({} as App, index);
 		const { editor, cursor } = at('  Assets:Cash  10.00 US');
@@ -268,7 +267,7 @@ describe('CommoditySuggest.onTrigger', () => {
 	});
 
 	it('stays quiet inside quoted strings and comments', async () => {
-		const { index } = setup(extractCommodities, { 'a.bean': '  Assets:Cash  10.00 USD' });
+		const { index } = setup('commodities', { 'a.bean': '  Assets:Cash  10.00 USD' });
 		await flush();
 		const suggest = new CommoditySuggest({} as App, index);
 		// The payee field owns quoted text; a `;` comment owns the tail.
@@ -284,7 +283,7 @@ describe('NarrationSuggest', () => {
 	const NARRATIONS = { 'a.bean': '2026-09-30 * "Shell" "Fuel"' };
 
 	function setupNarrations(enabled: boolean) {
-		const fixture = setup(extractNarrations, NARRATIONS);
+		const fixture = setup('narrations', NARRATIONS);
 		return new NarrationSuggest({} as App, fixture.index, () => enabled);
 	}
 
@@ -394,20 +393,20 @@ describe('NarrationSuggest', () => {
 
 	it('remembers a pick so later matches rank it first', () => {
 		const usage = CompletionUsage.parse({}, () => 1);
-		const index = new VaultIndex(extractNarrations, usage);
-		index.setFileContent(
+		const index = new LedgerIndex(usage);
+		index.setFile(
 			'a.bean',
 			['2026-09-30 * "A" "Fuel"', '2026-09-30 * "B" "Groceries"'].join('\n')
 		);
-		const suggest = new NarrationSuggest({} as App, index, () => true);
+		const suggest = new NarrationSuggest({} as App, index.narrations, () => true);
 		const editor = createEditor(['2026-09-30 * "A" "']);
 		suggest.context = {
 			start: { line: 0, ch: 17 },
 			end: { line: 0, ch: 17 },
 			editor: editor as unknown as Editor,
 		} as EditorSuggestContext;
-		expect(index.match('')).toEqual(['Fuel', 'Groceries']);
+		expect(index.narrations.match('')).toEqual(['Fuel', 'Groceries']);
 		suggest.selectSuggestion('Groceries', {} as MouseEvent);
-		expect(index.match('')).toEqual(['Groceries', 'Fuel']);
+		expect(index.narrations.match('')).toEqual(['Groceries', 'Fuel']);
 	});
 });

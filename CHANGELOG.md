@@ -74,6 +74,7 @@ UI/UX fixes from the architecture review (#75).
   to decide line-level context (#69).
 - Ledger validation owns bean-check debounce, Problems writes, and bean-check markers (#68).
 - Ledger line scanner：插件内一份容错行扫描（#70）。
+- Ledger index 对每个 vault 文件按 Ledger region 扫描一次得到 File facts，改名/删除只保留一份（#72）。
 
 ## 0.2.2
 

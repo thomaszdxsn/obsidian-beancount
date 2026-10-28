@@ -6,14 +6,12 @@
  * Each fix is a surgical edit — one flag character, one posting line, or
  * one `open` line — computed from the marked line's text and bean-check
  * message. Account inference for a balancing posting reads two-leg history
- * (`PairingIndex`); the `open` lands in the vault file that already holds
- * the most `open` directives (`OpenFileIndex`).
+ * (`LedgerIndex.pairings`); the `open` lands in the vault file that already
+ * holds the most `open` directives (`LedgerIndex.bestOpenFile`).
  */
 import { blockRangeAt } from './align';
 import { clipText } from './bean-check';
 import type { LineDiagnostic } from './bean-check';
-import type { VaultCache } from './vault-index';
-import { ledgerKindFromPath } from './fences';
 import type { LedgerRegion } from './fences';
 import { ACCOUNT_SHAPE, headerPayee, parseHeaderLine, parsePostingLine } from './scan';
 
@@ -270,155 +268,6 @@ export function inferBalancingAccount(
 	}
 	return pickOther(account, pairings);
 }
-
-/**
- * Two-leg, single-commodity transactions in `content`. Each pairing is one
- * historical (payee, account ↔ account) used to infer a balancing account.
- */
-export function extractPairings(content: string): readonly Pairing[] {
-	const lines = content.split('\n');
-	const pairings: Pairing[] = [];
-	let line = 0;
-	while (line < lines.length) {
-		const head = lines[line].charCodeAt(0);
-		const headerLine = lines[line] ?? '';
-		const header = head >= 0x30 && head <= 0x39 ? parseHeaderLine(headerLine) : null;
-		if (header === null || header.kind !== 'txn-header') {
-			line += 1;
-			continue;
-		}
-		const range = blockRangeAt(lines, line);
-		let accounts = 0;
-		const postings: Array<{ account: string; commodity?: string }> = [];
-		for (let i = range.from; i <= range.to && accounts <= 2; i += 1) {
-			const parsed = scannedAmount(lines[i]);
-			if (parsed === null) continue;
-			accounts += 1;
-			if (parsed.number !== undefined) postings.push(parsed);
-		}
-		if (accounts === 2 && postings.length === 2) {
-			const [first, second] = postings;
-			if (
-				first.account !== second.account &&
-				first.commodity !== undefined &&
-				first.commodity === second.commodity
-			) {
-				pairings.push({
-					date: header.date.replace(/\//g, '-'),
-					payee: headerPayee(headerLine, header),
-					accounts: [first.account, second.account],
-				});
-			}
-		}
-		line = range.to + 1;
-	}
-	return pairings;
-}
-
-/** Vault-wide two-leg history feeding `inferBalancingAccount`. */
-export class PairingIndex implements VaultCache {
-	private readonly byPath = new Map<string, readonly Pairing[]>();
-	private cached: readonly Pairing[] | null = null;
-
-	setFileContent(path: string, content: string): void {
-		const pairings = extractPairings(content);
-		if (pairings.length === 0) this.byPath.delete(path);
-		else this.byPath.set(path, pairings);
-		this.cached = null;
-	}
-
-	removeFile(path: string): void {
-		if (this.byPath.delete(path)) this.cached = null;
-	}
-
-	renameFile(oldPath: string, newPath: string): boolean {
-		const oldPrefix = oldPath + '/';
-		let moved = false;
-		for (const [path, pairings] of [...this.byPath]) {
-			if (path !== oldPath && !path.startsWith(oldPrefix)) continue;
-			this.byPath.delete(path);
-			this.byPath.set(newPath + path.slice(oldPath.length), pairings);
-			moved = true;
-			this.cached = null;
-		}
-		return moved;
-	}
-
-	all(): readonly Pairing[] {
-		if (this.cached === null) {
-			const merged: Pairing[] = [];
-			for (const pairings of this.byPath.values()) merged.push(...pairings);
-			this.cached = merged;
-		}
-		return this.cached;
-	}
-}
-
-/** Which vault file already holds `open` directives, and which accounts. */
-export class OpenFileIndex implements VaultCache {
-	private readonly accountsByPath = new Map<string, ReadonlySet<string>>();
-
-	setFileContent(path: string, content: string): void {
-		const accounts = openedAccountsIn(content);
-		if (accounts.size === 0) this.accountsByPath.delete(path);
-		else this.accountsByPath.set(path, accounts);
-	}
-
-	removeFile(path: string): void {
-		this.accountsByPath.delete(path);
-	}
-
-	renameFile(oldPath: string, newPath: string): boolean {
-		const oldPrefix = oldPath + '/';
-		let moved = false;
-		for (const [path, accounts] of [...this.accountsByPath]) {
-			if (path !== oldPath && !path.startsWith(oldPrefix)) continue;
-			this.accountsByPath.delete(path);
-			this.accountsByPath.set(newPath + path.slice(oldPath.length), accounts);
-			moved = true;
-		}
-		return moved;
-	}
-
-	/**
-	 * The ledger file with the most `open` names. Markdown notes lose to
-	 * `.bean` / `.beancount` so a fenced scratch pad cannot steal the target.
-	 */
-	bestFile(): string | null {
-		let best: string | null = null;
-		let bestCount = 0;
-		let bestLedger = false;
-		for (const [path, accounts] of this.accountsByPath) {
-			const count = accounts.size;
-			const ledger = ledgerKindFromPath(path) === 'ledger-file';
-			if (best === null || (ledger && !bestLedger) || (ledger === bestLedger && count > bestCount)) {
-				best = path;
-				bestCount = count;
-				bestLedger = ledger;
-			}
-		}
-		return best;
-	}
-
-	openedIn(path: string): ReadonlySet<string> {
-		return this.accountsByPath.get(path) ?? new Set();
-	}
-}
-
-/** Accounts of the `open` directives in `content`; only lines holding `open` are tried. */
-function openedAccountsIn(content: string): Set<string> {
-	const accounts = new Set<string>();
-	for (let at = content.indexOf('open'); at !== -1; ) {
-		const start = content.lastIndexOf('\n', at) + 1;
-		let end = content.indexOf('\n', at);
-		if (end === -1) end = content.length;
-		const match = OPEN_LINE_RE.exec(content.slice(start, end));
-		if (match !== null) accounts.add(match[2]);
-		at = end === content.length ? -1 : content.indexOf('open', end + 1);
-	}
-	return accounts;
-}
-
 
 function unknownAccounts(message: string): string[] {
 	const accounts: string[] = [];

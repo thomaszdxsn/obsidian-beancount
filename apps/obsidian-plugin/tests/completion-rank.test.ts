@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { extractAccounts } from '../account-index';
-import { AccountIndex } from '../account-index';
-import { CompletionUsage, rankCompletions } from '../completion-rank';
-import { MAX_SUGGESTIONS, VaultIndex } from '../vault-index';
+import { LedgerIndex } from '../ledger-index';
+import { CompletionUsage, MAX_SUGGESTIONS, rankCompletions } from '../completion-rank';
 
 const HOUR = 36e5;
 
@@ -164,23 +162,23 @@ describe('rankCompletions', () => {
 	});
 });
 
-describe('VaultIndex.match ranking', () => {
+describe('LedgerIndex.match ranking', () => {
 	it('returns subsequence hits after prefixes', () => {
-		const index = new VaultIndex(extractAccounts);
-		index.setFileContent('a.md', 'Assets:Cash:Wallet Expenses:Food');
-		expect(index.match('fd')).toEqual(['Expenses:Food']);
-		expect(index.match('e')).toEqual(['Expenses:Food', 'Assets:Cash:Wallet']);
+		const index = new LedgerIndex();
+		index.setFile('a.bean', 'Assets:Cash:Wallet Expenses:Food');
+		expect(index.accounts.match('fd')).toEqual(['Expenses:Food']);
+		expect(index.accounts.match('e')).toEqual(['Expenses:Food', 'Assets:Cash:Wallet']);
 	});
 	it('promotes a remembered prefix match', () => {
 		const usage = CompletionUsage.parse({}, () => 1);
-		const index = new VaultIndex(extractAccounts, usage);
-		index.setFileContent('a.md', 'Assets:Broker:IBKR Assets:Cash:Wallet');
-		index.remember?.('Assets:Cash:Wallet');
-		expect(index.match('Assets:')).toEqual(['Assets:Cash:Wallet', 'Assets:Broker:IBKR']);
+		const index = new LedgerIndex(usage);
+		index.setFile('a.bean', 'Assets:Broker:IBKR Assets:Cash:Wallet');
+		index.accounts.remember?.('Assets:Cash:Wallet');
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:Cash:Wallet', 'Assets:Broker:IBKR']);
 	});
 });
 
-describe('AccountIndex.match ranking', () => {
+describe('LedgerIndex account match ranking', () => {
 	it('still hides closed accounts when they were frequently picked', () => {
 		const usage = CompletionUsage.parse(
 			{
@@ -190,8 +188,8 @@ describe('AccountIndex.match ranking', () => {
 			},
 			() => 1
 		);
-		const index = new AccountIndex(usage);
-		index.setFileContent(
+		const index = new LedgerIndex(usage);
+		index.setFile(
 			'a.bean',
 			[
 				'2020-01-01 open Assets:Cash USD',
@@ -199,18 +197,18 @@ describe('AccountIndex.match ranking', () => {
 				'2020-01-01 open Assets:Broker',
 			].join('\n')
 		);
-		expect(index.match('Assets:')).toEqual(['Assets:Broker']);
-		expect(index.match('as')).toEqual(['Assets:Broker']);
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:Broker']);
+		expect(index.accounts.match('as')).toEqual(['Assets:Broker']);
 	});
 
 	it('ranks still-open accounts by frecency', () => {
 		const usage = CompletionUsage.parse({}, () => 1);
-		const index = new AccountIndex(usage);
-		index.setFileContent(
+		const index = new LedgerIndex(usage);
+		index.setFile(
 			'a.bean',
 			['2020-01-01 open Assets:Broker', '2020-01-01 open Assets:Cash'].join('\n')
 		);
-		index.remember?.('Assets:Cash');
-		expect(index.match('Assets:')).toEqual(['Assets:Cash', 'Assets:Broker']);
+		index.accounts.remember?.('Assets:Cash');
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:Cash', 'Assets:Broker']);
 	});
 });

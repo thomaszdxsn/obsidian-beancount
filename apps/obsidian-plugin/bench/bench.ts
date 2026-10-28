@@ -13,8 +13,7 @@ import { BeancountParser } from '@repo/beancount-parser';
 import { formatLedger, formatFencedDocument } from '../format';
 import { alignText } from '../align';
 import { accountBalances } from '../balances';
-import { extractAccounts, extractAccountDirectives } from '../account-index';
-import { extractCommodities, extractTags, extractLinks, extractNarrations } from '../token-index';
+import { LedgerIndex } from '../ledger-index';
 import { parseBeancountOutline } from '../outline';
 const DAYS = Number(process.env.BENCH_DAYS ?? 1500);
 const ITERS = Number(process.env.BENCH_ITERS ?? 9);
@@ -53,14 +52,22 @@ const workloads: [string, () => unknown][] = [
 	],
 	[
 		'index',
-		() => [
-			extractAccounts(ledger),
-			extractAccountDirectives(ledger),
-			extractCommodities(ledger),
-			extractTags(ledger),
-			extractLinks(ledger),
-			extractNarrations(ledger),
-		],
+		() => {
+			const index = new LedgerIndex();
+			index.setFile('ledger.bean', ledger);
+			return {
+				accounts: index.accounts.match('Assets:'),
+				cash: index.accounts.record('Assets:Cash'),
+				payees: index.payees.match('W'),
+				commodities: index.commodities.match('U'),
+				tags: index.tags.match('#'),
+				links: index.links.match('^'),
+				narrations: index.narrations.match(''),
+				template: index.templateFor('Whole Foods'),
+				pairings: index.pairings(),
+				bestOpenFile: index.bestOpenFile(),
+			};
+		},
 	],
 	['outline', () => parseBeancountOutline(ledger).length],
 ];

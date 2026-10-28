@@ -1,14 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, TFile } from 'obsidian';
-import { AccountIndex } from '../account-index';
+import { LedgerIndex } from '../ledger-index';
 import { AccountSuggest } from '../account-suggest';
 import { CompletionUsage, rankCompletions } from '../completion-rank';
 import { PayeeSuggest } from '../payee-suggest';
-import { extractPayees } from '../payee-index';
 import { PINYIN_INITIALS_CACHE_CAP, pinyinInitials } from '../pinyin';
 import { NarrationSuggest } from '../token-suggest';
-import { extractNarrations } from '../token-index';
-import { VaultIndex } from '../vault-index';
 import { createEditor } from './fakes';
 
 /** Completion only triggers in ledger text; these cases are about matching. */
@@ -134,8 +131,8 @@ describe('rankCompletions pinyin tiers', () => {
 describe('account and payee pinyin completion', () => {
 	it('matches Expenses:cy to Expenses:餐饮 only while the getter is on, and hides closed names', () => {
 		let on = false;
-		const index = new AccountIndex(undefined, () => on);
-		index.setFileContent(
+		const index = new LedgerIndex(undefined, () => on);
+		index.setFile(
 			'a.bean',
 			[
 				'2020-01-01 open Expenses:餐饮',
@@ -145,19 +142,19 @@ describe('account and payee pinyin completion', () => {
 				'2021-01-01 close Expenses:餐饮:午饭',
 			].join('\n')
 		);
-		expect(index.match('Expenses:cy')).toEqual([]);
-		expect(index.match('Expenses:C')).toEqual(['Expenses:Cash']);
+		expect(index.accounts.match('Expenses:cy')).toEqual([]);
+		expect(index.accounts.match('Expenses:C')).toEqual(['Expenses:Cash']);
 		on = true;
-		expect(index.match('Expenses:cy')).toEqual(['Expenses:餐饮']);
-		expect(index.match('Expenses:cy:wf')).toEqual([]);
+		expect(index.accounts.match('Expenses:cy')).toEqual(['Expenses:餐饮']);
+		expect(index.accounts.match('Expenses:cy:wf')).toEqual([]);
 		// Direct prefix still outranks a pinyin prefix of the same query.
-		expect(index.match('Expenses:C')).toEqual(['Expenses:Cash', 'Expenses:餐饮']);
+		expect(index.accounts.match('Expenses:C')).toEqual(['Expenses:Cash', 'Expenses:餐饮']);
 	});
 
 	it('triggers on an ASCII account query and inserts the account, not the initials', () => {
-		const index = new AccountIndex(undefined, () => true);
-		index.setFileContent('a.bean', '2020-01-01 open Expenses:餐饮 USD');
-		const suggest = new AccountSuggest({} as App, index);
+		const index = new LedgerIndex(undefined, () => true);
+		index.setFile('a.bean', '2020-01-01 open Expenses:餐饮 USD');
+		const suggest = new AccountSuggest({} as App, index.accounts);
 		const line = '  Expenses:cy';
 		const editor = createEditor([line]);
 		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, LEDGER_FILE);
@@ -181,17 +178,17 @@ describe('account and payee pinyin completion', () => {
 	});
 
 	it('stays quiet on Expenses:cy when pinyin matching is off', () => {
-		const index = new AccountIndex(undefined, () => false);
-		index.setFileContent('a.bean', '2020-01-01 open Expenses:餐饮 USD');
-		const suggest = new AccountSuggest({} as App, index);
+		const index = new LedgerIndex(undefined, () => false);
+		index.setFile('a.bean', '2020-01-01 open Expenses:餐饮 USD');
+		const suggest = new AccountSuggest({} as App, index.accounts);
 		const line = '  Expenses:cy';
 		expect(suggest.onTrigger({ line: 0, ch: line.length }, createEditor([line]) as unknown as Editor, LEDGER_FILE)).toBeNull();
 	});
 
 	it('completes a payee from its initials and replaces the typed query', () => {
-		const index = new VaultIndex(extractPayees, undefined, () => true);
-		index.setFileContent('a.bean', '2026-09-30 * "餐饮" "午饭"');
-		const suggest = new PayeeSuggest({} as App, index);
+		const index = new LedgerIndex(undefined, () => true);
+		index.setFile('a.bean', '2026-09-30 * "餐饮" "午饭"');
+		const suggest = new PayeeSuggest({} as App, index.payees);
 		const line = '2026-09-30 * "cy';
 		const editor = createEditor([line]);
 		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, LEDGER_FILE);
@@ -213,18 +210,18 @@ describe('account and payee pinyin completion', () => {
 	});
 
 	it('does not offer a pinyin payee when the getter is off', () => {
-		const index = new VaultIndex(extractPayees, undefined, () => false);
-		index.setFileContent('a.bean', '2026-09-30 * "餐饮" "午饭"');
-		const suggest = new PayeeSuggest({} as App, index);
+		const index = new LedgerIndex(undefined, () => false);
+		index.setFile('a.bean', '2026-09-30 * "餐饮" "午饭"');
+		const suggest = new PayeeSuggest({} as App, index.payees);
 		const line = '2026-09-30 * "cy';
 		expect(suggest.onTrigger({ line: 0, ch: line.length }, createEditor([line]) as unknown as Editor, LEDGER_FILE)).toBeNull();
-		expect(index.match('cy')).toEqual([]);
+		expect(index.payees.match('cy')).toEqual([]);
 	});
 
 	it('completes a narration from ASCII initials and inserts the narration text', () => {
-		const index = new VaultIndex(extractNarrations, undefined, () => true);
-		index.setFileContent('a.bean', '2026-09-30 * "Shell" "午饭"');
-		const suggest = new NarrationSuggest({} as App, index, () => true);
+		const index = new LedgerIndex(undefined, () => true);
+		index.setFile('a.bean', '2026-09-30 * "Shell" "午饭"');
+		const suggest = new NarrationSuggest({} as App, index.narrations, () => true);
 		const line = '2026-09-30 * "Shell" "wf';
 		const editor = createEditor([line]);
 		const info = suggest.onTrigger({ line: 0, ch: line.length }, editor as unknown as Editor, LEDGER_FILE);
