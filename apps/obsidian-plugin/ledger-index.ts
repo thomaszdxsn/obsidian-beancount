@@ -14,6 +14,7 @@ import type { LedgerRegion } from './fences';
 import type { PayeeTemplate, TemplatePosting } from './payee-template';
 import {
 	ACCOUNT_SHAPE,
+	COMMODITY_EXACT,
 	headerPayee,
 	parseHeaderLine,
 	scanLedger,
@@ -21,7 +22,7 @@ import {
 	stripComment,
 	stripStringsAndComments,
 } from './scan';
-import type { LineKind, ScannedEntry, ScannedHeader, ScannedPosting } from './scan';
+import type { ScannedEntry, ScannedHeader, ScannedPosting } from './scan';
 import type { CompletionIndex } from './suggest';
 import { isTextFile } from './vault-index';
 
@@ -31,8 +32,6 @@ const MAX_VALUE_LENGTH = 256;
 const ACCOUNT_AT_START = new RegExp(`^${ACCOUNT_SHAPE}`, 'u');
 const COMMODITY_TOKEN = "[A-Z][A-Z0-9._'-]{0,22}[A-Z0-9]";
 const AMOUNT_RE = new RegExp(`[0-9][ \\t]+(${COMMODITY_TOKEN})(?![A-Z0-9])`, 'g');
-const COMMODITY_NAME_RE = new RegExp(`^(${COMMODITY_TOKEN})(?![A-Z0-9])`);
-const OPEN_CURRENCY_RE = /^[A-Z][A-Z0-9._'-]*$/;
 const TAG_RE = /(?:^|[ \t])#([A-Za-z0-9\-_/.]+)/gm;
 const LINK_RE = /(?:^|[ \t])\^([A-Za-z0-9\-_/.]+)/gm;
 
@@ -382,7 +381,7 @@ function collectFromRegion(region: LedgerRegion, path: string, sink: RegionSink)
 	collectAccounts(text, sink.accounts);
 	collectTagsAndLinks(text, sink.tags, sink.links);
 	const scan = text === '' ? { lines: [] as const, entries: [] as const } : scanLedger(text);
-	collectCommodities(region.lines, scan.lines, sink.commodities);
+	collectCommodities(region.lines, scan.entries, sink.commodities);
 	for (const entry of scan.entries) {
 		collectEntry(region, path, entry, sink);
 	}
@@ -545,7 +544,15 @@ function collectTagsAndLinks(content: string, tags: Set<string>, links: Set<stri
 	}
 }
 
-function collectCommodities(lines: readonly string[], kinds: readonly LineKind[], into: Set<string>): void {
+function collectCommodities(
+	lines: readonly string[],
+	entries: readonly ScannedEntry[],
+	into: Set<string>
+): void {
+	const headers = new Map<number, ScannedHeader>();
+	for (const entry of entries) {
+		if (entry.header !== undefined) headers.set(entry.startLine, entry.header);
+	}
 	for (let i = 0; i < lines.length; i += 1) {
 		const line = lines[i] ?? '';
 		if (line.includes('\u2028') || line.includes('\u2029')) {
@@ -557,7 +564,8 @@ function collectCommodities(lines: readonly string[], kinds: readonly LineKind[]
 			addAmounts(line, into);
 			continue;
 		}
-		if (kinds[i] === 'directive') collectDirectiveCommodities(line, into);
+		const header = headers.get(i);
+		if (header?.kind === 'directive') addDirectiveCommodities(line, header, into);
 	}
 }
 
@@ -567,26 +575,22 @@ function collectCommodityPiece(line: string, into: Set<string>): void {
 		addAmounts(line, into);
 		return;
 	}
-	collectDirectiveCommodities(line, into);
+	const header = parseHeaderLine(line);
+	if (header?.kind === 'directive') addDirectiveCommodities(line, header, into);
 }
 
-function collectDirectiveCommodities(line: string, into: Set<string>): void {
-	const header = parseHeaderLine(line);
-	if (header?.kind !== 'directive') return;
-	if (header.keyword === 'commodity') {
-		const rest = line.slice(skipSpace(line, header.keywordSpan?.to ?? 0));
-		const match = COMMODITY_NAME_RE.exec(rest);
-		if (match !== null) addValue(into, match[1]);
-		return;
+function addDirectiveCommodities(line: string, header: ScannedHeader, into: Set<string>): void {
+	if (header.keyword === 'commodity' || header.keyword === 'price') {
+		const token = firstCommodity(line.slice(skipSpace(line, header.keywordSpan?.to ?? 0)));
+		if (token !== undefined) addValue(into, token);
+		if (header.keyword === 'commodity') return;
 	}
-	if (header.keyword === 'price' || header.keyword === 'balance') {
-		if (header.keyword === 'price') {
-			const rest = line.slice(skipSpace(line, header.keywordSpan?.to ?? 0));
-			const match = COMMODITY_NAME_RE.exec(rest);
-			if (match !== null) addValue(into, match[1]);
-		}
-		addAmounts(line, into);
-	}
+	if (header.keyword === 'price' || header.keyword === 'balance') addAmounts(line, into);
+}
+
+function firstCommodity(rest: string): string | undefined {
+	const token = stripStringsAndComments(rest).trim().split(/[\s,]+/)[0];
+	return token !== undefined && token !== '' && COMMODITY_EXACT.test(token) ? token : undefined;
 }
 
 function addAmounts(line: string, into: Set<string>): void {
@@ -598,10 +602,9 @@ function addAmounts(line: string, into: Set<string>): void {
 }
 
 function parseCurrencies(rest: string): string[] {
-	const body = stripStringsAndComments(rest);
 	const currencies: string[] = [];
-	for (const token of body.split(/[\s,]+/)) {
-		if (OPEN_CURRENCY_RE.test(token)) currencies.push(token);
+	for (const token of stripStringsAndComments(rest).split(/[\s,]+/)) {
+		if (COMMODITY_EXACT.test(token)) currencies.push(token);
 	}
 	return currencies;
 }

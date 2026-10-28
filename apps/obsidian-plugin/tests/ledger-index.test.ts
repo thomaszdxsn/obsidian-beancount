@@ -157,7 +157,7 @@ describe('LedgerIndex queries', () => {
 		expect(index.templateFor('Cafe')?.path).toBe('c.bean');
 	});
 
-	it('merges two-leg pairings across files and clears them after rename then delete', () => {
+	it('clears pairings after rename then delete', () => {
 		const index = new LedgerIndex();
 		index.setFile(
 			'a.bean',
@@ -837,7 +837,7 @@ describe('LedgerIndex.applyVault', () => {
 		expect(names(index).sort()).toEqual(['Assets:Fresh', 'Expenses:Food']);
 	});
 
-	it('skips unreadable files during the initial scan', async () => {
+	it('indexes a path after its earlier read failed', async () => {
 		const vault = new FakeVault();
 		vault.write('a.bean', 'Assets:Cash');
 		vault.write('b.bean', 'Expenses:Food');
@@ -847,5 +847,8 @@ describe('LedgerIndex.applyVault', () => {
 		index.applyVault(plugin as unknown as Plugin);
 		await flush();
 		expect(names(index)).toEqual(['Expenses:Food']);
+		vault.failures.delete('a.bean');
+		await vault.emit('modify', vault.files.get('a.bean')!);
+		expect(names(index).sort()).toEqual(['Assets:Cash', 'Expenses:Food']);
 	});
 });
