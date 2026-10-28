@@ -25,8 +25,10 @@ export interface CompletionIndex {
 
 type SlotCache = {
 	editor: Editor;
+	filePath: string | null;
 	line: number;
 	ch: number;
+	lineText: string;
 	completeNarration: boolean;
 	slot: CompletionSlot | null;
 };
@@ -51,22 +53,26 @@ function cachedSlot(
 	file: TFile | null,
 	completeNarration: boolean
 ): CompletionSlot | null {
+	const lineText = editor.getLine(cursor.line);
+	const filePath = file?.path ?? null;
 	if (
 		slotCache &&
 		slotCache.editor === editor &&
+		slotCache.filePath === filePath &&
 		slotCache.line === cursor.line &&
 		slotCache.ch === cursor.ch &&
+		slotCache.lineText === lineText &&
 		slotCache.completeNarration === completeNarration
 	) {
 		return slotCache.slot;
 	}
 	const slot = completionSlot({
-		line: editor.getLine(cursor.line),
+		line: lineText,
 		ch: cursor.ch,
 		lineIsLedger: () => editorLedger(editor, file).lineIsLedger(cursor.line),
 		completeNarration,
 	});
-	slotCache = { editor, line: cursor.line, ch: cursor.ch, completeNarration, slot };
+	slotCache = { editor, filePath, line: cursor.line, ch: cursor.ch, lineText, completeNarration, slot };
 	return slot;
 }
 
