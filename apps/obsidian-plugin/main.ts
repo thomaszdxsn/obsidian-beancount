@@ -21,15 +21,13 @@ import type { QuickFix, TextEdit } from './code-actions';
 import { beanDiagnostics, createDiagnosticsExtension, flagOkayDiagnostics, setEditorBeanDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
 import {
-	FAVA_CLOSE_TIMEOUT_MS,
-	FAVA_READY_TIMEOUT_MS,
 	FavaProcess,
 	openFavaUrl,
 	probeFavaUrl,
 	resolveFavaLedger,
 	runFavaProcess,
 } from './fava';
-import type { FavaStartRequest } from './fava';
+import type { FavaOpener, FavaReadyProbe, FavaRunner, FavaStartRequest } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
 import { insertTodayDate } from './insert-date';
@@ -132,8 +130,16 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly flagWarnings = new FlagWarningController(this);
 	/** Ledger-file token colors and the separator ruler; refreshed with those settings. */
 	private readonly ledgerFile = new LedgerFileController(this);
-	/** Fava child lifecycle; tests assign a process with fake ports before onload. */
-	fava!: FavaProcess;
+	/** How Fava is started; tests swap in their own runner. */
+	favaRunner: FavaRunner = runFavaProcess;
+	/** Opens the Fava UI after start or reuse; tests swap this. */
+	favaOpener: FavaOpener = openFavaUrl;
+	/** HTTP GET of Fava's root; tests swap this so they never open sockets. */
+	favaReadyProbe: FavaReadyProbe = probeFavaUrl;
+	/** Pause between readiness probes and bound on the close wait; tests no-op this. */
+	favaDelay: (ms: number) => Promise<void> = (ms) =>
+		new Promise((resolve) => window.setTimeout(resolve, ms));
+	private fava!: FavaProcess;
 	/** Completion pick counts persisted beside settings in data.json. */
 	private usage: CompletionUsage = CompletionUsage.parse(null);
 
@@ -296,18 +302,15 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			name: 'Show account balances',
 			callback: () => revealBalancesView(this.app),
 		});
-		this.fava ??= new FavaProcess(
-			{
-				runner: runFavaProcess,
-				opener: openFavaUrl,
-				probe: probeFavaUrl,
-				delay: (ms) => new Promise((r) => window.setTimeout(r, ms)),
-				notify: (text) => new Notice(text),
-				resolveLedger: (entryLedger, activePath) =>
-					resolveFavaLedger(this.vaultRootPath(), entryLedger, activePath),
-			},
-			{ readyMs: FAVA_READY_TIMEOUT_MS, closeMs: FAVA_CLOSE_TIMEOUT_MS },
-		);
+		this.fava = new FavaProcess({
+			runner: (...args) => this.favaRunner(...args),
+			opener: (url) => this.favaOpener(url),
+			probe: (url) => this.favaReadyProbe(url),
+			delay: (ms) => this.favaDelay(ms),
+			notify: (text) => new Notice(text),
+			resolveLedger: (entryLedger, activePath) =>
+				resolveFavaLedger(this.vaultRootPath(), entryLedger, activePath),
+		});
 		this.addCommand({
 			id: 'start-fava',
 			name: 'Start Fava',

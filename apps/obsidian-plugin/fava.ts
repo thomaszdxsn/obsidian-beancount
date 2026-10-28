@@ -227,17 +227,21 @@ export const MISSING_FAVA_NOTICE =
 export const NO_LEDGER_FAVA_NOTICE =
 	'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.';
 
+export type FavaLedgerResult =
+	| { ok: true; absPath: string }
+	| { ok: false; reason: 'no-ledger' | 'escape'; requested: string };
+
 export function resolveFavaLedger(
 	root: string,
 	entryLedger: string,
 	activePath: string | null,
-): { ok: true; absPath: string } | { ok: false; reason: 'no-ledger' | 'escape' } {
+): FavaLedgerResult {
 	const requested = entryLedger.trim() || activePath || '';
 	if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
-		return { ok: false, reason: 'no-ledger' };
+		return { ok: false, reason: 'no-ledger', requested };
 	}
 	const resolved = resolveInVault(root, requested);
-	if (!resolved.ok) return { ok: false, reason: 'escape' };
+	if (!resolved.ok) return { ok: false, reason: 'escape', requested };
 	return { ok: true, absPath: resolved.absPath };
 }
 
@@ -247,10 +251,7 @@ export interface FavaPorts {
 	probe: FavaReadyProbe;
 	delay: (ms: number) => Promise<void>;
 	notify: (text: string) => void;
-	resolveLedger: (
-		entryLedger: string,
-		activePath: string | null,
-	) => { ok: true; absPath: string } | { ok: false; reason: 'no-ledger' | 'escape' };
+	resolveLedger: (entryLedger: string, activePath: string | null) => FavaLedgerResult;
 }
 
 export type FavaStartRequest = {
@@ -280,35 +281,43 @@ export class FavaProcess {
 	}
 
 	async start(req: FavaStartRequest): Promise<void> {
-		if (this.inFlight) {
+		while (this.inFlight) {
 			const started = await this.inFlight;
-			if (started && this.isRunning()) this.reveal(req);
-			return;
+			if (started && this.isRunning()) {
+				this.reveal(req);
+				return;
+			}
+			if (this.isRunning()) return;
 		}
 		if (this.isRunning() && this.serving) {
 			this.reveal(req);
 			return;
 		}
-		this.inFlight =
+		const flight =
 			this.isRunning() && this.child ? this.waitUntilServes(this.child) : this.spawn(req);
+		this.inFlight = flight;
 		try {
-			const started = await this.inFlight;
+			const started = await flight;
 			if (started && this.isRunning()) this.reveal(req);
 		} finally {
-			this.inFlight = null;
+			if (this.inFlight === flight) this.inFlight = null;
 		}
 	}
 
 	stop(): void {
-		if (!this.isRunning()) {
+		this.expectExit = true;
+		if (this.isRunning()) {
+			this.child?.kill();
 			this.clear();
-			this.ports.notify('Fava is not running.');
+			this.ports.notify('Fava stopped.');
 			return;
 		}
-		this.expectExit = true;
-		this.child?.kill();
+		if (this.inFlight) {
+			this.ports.notify('Fava stopped.');
+			return;
+		}
 		this.clear();
-		this.ports.notify('Fava stopped.');
+		this.ports.notify('Fava is not running.');
 	}
 
 	dispose(): void {
@@ -367,15 +376,15 @@ export class FavaProcess {
 	}
 
 	private async spawn(req: FavaStartRequest): Promise<boolean> {
+		this.expectExit = false;
 		if (!isFavaBinary(req.command)) {
 			this.ports.notify(MISSING_FAVA_NOTICE);
 			return false;
 		}
-		const requested = req.entryLedger.trim() || req.activePath || '';
 		const ledger = this.ports.resolveLedger(req.entryLedger, req.activePath);
 		if (!ledger.ok) {
 			if (ledger.reason === 'no-ledger') this.ports.notify(NO_LEDGER_FAVA_NOTICE);
-			else this.ports.notify(`Fava: entry ledger must be a vault file, not "${clipText(requested)}"`);
+			else this.ports.notify(`Fava: entry ledger must be a vault file, not "${clipText(ledger.requested)}"`);
 			return false;
 		}
 		const port = normalizeFavaPort(req.port);
@@ -387,17 +396,25 @@ export class FavaProcess {
 			ledger.absPath,
 		]);
 		if (result.missing) {
-			this.ports.notify(MISSING_FAVA_NOTICE);
+			if (!this.expectExit) this.ports.notify(MISSING_FAVA_NOTICE);
 			return false;
 		}
 		const child = result.child ?? null;
 		if (!child) return false;
+		if (this.expectExit) {
+			child.kill();
+			return false;
+		}
 		const getStderr = captureFavaStderr(child);
 		this.stderr = getStderr;
-		this.expectExit = false;
 		this.serving = false;
 		this.child = child;
 		this.boundPort = port;
+		if (this.expectExit) {
+			child.kill();
+			this.clear();
+			return false;
+		}
 		let closed = false;
 		child.once('close', () => {
 			closed = true;

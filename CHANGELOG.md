@@ -33,6 +33,9 @@ UI/UX fixes from the architecture review (#75).
 
 ### Fixed
 
+- **Stop Fava** while Fava is still launching now stops that process instead of
+  saying it is not running and leaving it behind. **Start Fava** right after
+  that stop launches again.
 - Typing an ordinary capitalized word such as `The`, `I` or `Tea` in a
   note's prose no longer opens account completion, where Enter would replace
   the word with an account name. Account completion also stays quiet in `;`

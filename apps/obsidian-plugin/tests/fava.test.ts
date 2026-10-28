@@ -94,18 +94,6 @@ const MAIN: FavaStartRequest = {
 	activePath: null,
 };
 
-function fakeResolve(
-	entryLedger: string,
-	activePath: string | null,
-): { ok: true; absPath: string } | { ok: false; reason: 'no-ledger' | 'escape' } {
-	const requested = entryLedger.trim() || activePath || '';
-	if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
-		return { ok: false, reason: 'no-ledger' };
-	}
-	if (requested.includes('..')) return { ok: false, reason: 'escape' };
-	return { ok: true, absPath: `/vault/${requested}` };
-}
-
 function processWith(
 	ports: Partial<FavaPorts> = {},
 	timeouts?: { readyMs: number; closeMs: number },
@@ -126,7 +114,7 @@ function processWith(
 		notify: (text) => {
 			notices.push(text);
 		},
-		resolveLedger: fakeResolve,
+		resolveLedger: (entryLedger, activePath) => resolveFavaLedger('/vault/', entryLedger, activePath),
 		...ports,
 	};
 	return { ports: wired, fava: new FavaProcess(wired, timeouts ?? { readyMs: 0, closeMs: 0 }) };
@@ -153,7 +141,18 @@ async function loadPlugin(
 	) as BeancountPlugin & RecordingPlugin;
 	plugin.beanCheckRunner = async () => ({ stderr: '', missing: false });
 	plugin.loadData = async () => loadedData;
-	plugin.fava = processWith().fava;
+	plugin.favaRunner = async (command, args) => {
+		favaRuns.push({ command, args: [...args] });
+		if (favaMissing) return { missing: true };
+		const child = nextChild ?? liveChild();
+		nextChild = undefined;
+		return { missing: false, child };
+	};
+	plugin.favaOpener = (url) => {
+		opened.push(url);
+	};
+	plugin.favaReadyProbe = async () => 200;
+	plugin.favaDelay = async () => {};
 	await plugin.onload();
 	return plugin;
 }
@@ -330,7 +329,7 @@ describe('mergeSettings favaPort', () => {
 });
 
 describe('resolveFavaLedger', () => {
-	it('accepts ledger files in the vault and rejects notes, fences, and escapes', () => {
+	it('accepts vault ledger files and rejects a missing path, a note, and an escape', () => {
 		expect(resolveFavaLedger('/vault/', 'main.bean', null)).toEqual({
 			ok: true,
 			absPath: '/vault/main.bean',
@@ -343,11 +342,22 @@ describe('resolveFavaLedger', () => {
 			ok: true,
 			absPath: '/vault/books.beancount',
 		});
-		expect(resolveFavaLedger('/vault/', '', 'note.md')).toEqual({ ok: false, reason: 'no-ledger' });
+		expect(resolveFavaLedger('/vault/', '', null)).toEqual({
+			ok: false,
+			reason: 'no-ledger',
+			requested: '',
+		});
 		expect(resolveFavaLedger('/vault/', '../outside.bean', null)).toEqual({
 			ok: false,
 			reason: 'escape',
+			requested: '../outside.bean',
 		});
+	});
+
+	it('does not treat a markdown note as a ledger even when it has a beancount fence', () => {
+		expect(
+			resolveFavaLedger('/vault/', '', 'note.md'),
+		).toEqual({ ok: false, reason: 'no-ledger', requested: 'note.md' });
 	});
 });
 
@@ -736,21 +746,125 @@ ModuleNotFoundError: No module named 'pkg_resources'
 		expect(opened).toEqual([]);
 		expect(notices).toEqual(['Fava is not running.']);
 	});
+
+	it('notices when neither Entry ledger nor an active file is set', async () => {
+		const { fava } = processWith();
+		await fava.start({ ...MAIN, entryLedger: '', activePath: null });
+		expect(favaRuns).toEqual([]);
+		expect(opened).toEqual([]);
+		expect(notices).toEqual([
+			'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.',
+		]);
+	});
+
+	it('kills a child that arrives after stop during spawn', async () => {
+		const child = liveChild();
+		let release: ((result: { missing: false; child: ChildProcess }) => void) | undefined;
+		const pending = new Promise<{ missing: false; child: ChildProcess }>((resolve) => {
+			release = resolve;
+		});
+		const { fava } = processWith({
+			runner: async (command, args) => {
+				favaRuns.push({ command, args: [...args] });
+				return pending;
+			},
+		});
+		const started = fava.start(MAIN);
+		await Promise.resolve();
+		fava.stop();
+		expect(notices).toEqual(['Fava stopped.']);
+		expect(opened).toEqual([]);
+		release?.({ missing: false, child });
+		await started;
+		expect(child.exitCode).toBe(0);
+		expect(opened).toEqual([]);
+		notices.length = 0;
+		fava.stop();
+		expect(notices).toEqual(['Fava is not running.']);
+	});
+
+	it('kills a child that arrives after dispose during spawn without noticing', async () => {
+		const child = liveChild();
+		let release: ((result: { missing: false; child: ChildProcess }) => void) | undefined;
+		const pending = new Promise<{ missing: false; child: ChildProcess }>((resolve) => {
+			release = resolve;
+		});
+		const { fava } = processWith({
+			runner: async (command, args) => {
+				favaRuns.push({ command, args: [...args] });
+				return pending;
+			},
+		});
+		const started = fava.start(MAIN);
+		await Promise.resolve();
+		notices.length = 0;
+		fava.dispose();
+		release?.({ missing: false, child });
+		await started;
+		expect(notices).toEqual([]);
+		expect(opened).toEqual([]);
+		expect(child.exitCode).toBe(0);
+	});
+
+	it('starts a new process after stop during an in-flight spawn', async () => {
+		const first = liveChild();
+		const second = liveChild();
+		let release: (() => void) | undefined;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let n = 0;
+		const { fava } = processWith({
+			runner: async (command, args) => {
+				favaRuns.push({ command, args: [...args] });
+				n += 1;
+				if (n === 1) {
+					await pending;
+					return { missing: false, child: first };
+				}
+				return { missing: false, child: second };
+			},
+		});
+		const initial = fava.start(MAIN);
+		await Promise.resolve();
+		fava.stop();
+		const again = fava.start(MAIN);
+		release?.();
+		await Promise.all([initial, again]);
+		expect(favaRuns).toHaveLength(2);
+		expect(first.exitCode).toBe(0);
+		expect(opened).toEqual(['http://127.0.0.1:5000/']);
+		expect(notices.filter((text) => text.startsWith('Fava is running'))).toEqual([
+			'Fava is running at http://127.0.0.1:5000/',
+		]);
+	});
 });
 
 describe('Fava plugin wiring', () => {
-	it('registers Start/Stop Fava and starts silently on activate', async () => {
+	it('registers Start/Stop Fava, starts silently on activate with settings, and kills on unload', async () => {
 		const vault = new FakeVault();
-		vault.write('ledger.bean', '2026-10-01 * "A"\n');
-		const plugin = await loadPlugin(vault, { runFavaOnActivate: true }, 'ledger.bean');
+		vault.write('books.bean', 'option "title" "Books"\n');
+		const child = liveChild();
+		nextChild = child;
+		const plugin = await loadPlugin(vault, {
+			runFavaOnActivate: true,
+			favaPath: '/opt/homebrew/bin/fava',
+			favaPort: 8080,
+			entryLedger: 'books.bean',
+		});
 		const start = plugin.registrations.commands.find((entry) => entry.id === 'start-fava');
 		const stop = plugin.registrations.commands.find((entry) => entry.id === 'stop-fava');
 		expect(start?.name).toBe('Start Fava');
 		expect(stop?.name).toBe('Stop Fava');
 		expect(favaRuns).toEqual([
-			{ command: 'fava', args: ['-H', '127.0.0.1', '-p', '5000', '/vault/ledger.bean'] },
+			{
+				command: '/opt/homebrew/bin/fava',
+				args: ['-H', '127.0.0.1', '-p', '8080', '/vault/books.bean'],
+			},
 		]);
 		expect(opened).toEqual([]);
 		expect(notices).toEqual([]);
+		for (const cleanup of plugin.registrations.cleanups) cleanup();
+		expect(child.exitCode).toBe(0);
 	});
 });
