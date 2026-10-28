@@ -4,7 +4,7 @@
  * all query this index. Rename and delete re-key a single map.
  */
 import type { Plugin, TAbstractFile } from 'obsidian';
-import { isAccountClosed } from './account-index';
+import { ACCOUNT_RE, isAccountClosed } from './account-index';
 import type { AccountRecord } from './account-index';
 import type { Pairing } from './code-actions';
 import { rankCompletions } from './completion-rank';
@@ -13,29 +13,28 @@ import { ledgerDoc, ledgerKind, ledgerKindFromPath } from './fences';
 import type { LedgerRegion } from './fences';
 import type { PayeeTemplate, TemplatePosting } from './payee-template';
 import {
-	ACCOUNT_SEGMENT_CHARS,
 	ACCOUNT_SHAPE,
 	headerPayee,
 	parseHeaderLine,
 	scanLedger,
 	skipSpace,
 	stripComment,
+	stripStringsAndComments,
 } from './scan';
-import type { ScannedEntry, ScannedHeader, ScannedPosting } from './scan';
+import type { LineKind, ScannedEntry, ScannedHeader, ScannedPosting } from './scan';
 import type { CompletionIndex } from './suggest';
 import { isTextFile } from './vault-index';
 
 /** Longest cached string; longer ones are noise, not names. */
 const MAX_VALUE_LENGTH = 256;
 
-const ACCOUNT_RE = new RegExp(`(?<![${ACCOUNT_SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
 const ACCOUNT_AT_START = new RegExp(`^${ACCOUNT_SHAPE}`, 'u');
 const COMMODITY_TOKEN = "[A-Z][A-Z0-9._'-]{0,22}[A-Z0-9]";
 const AMOUNT_RE = new RegExp(`[0-9][ \\t]+(${COMMODITY_TOKEN})(?![A-Z0-9])`, 'g');
 const COMMODITY_NAME_RE = new RegExp(`^(${COMMODITY_TOKEN})(?![A-Z0-9])`);
 const OPEN_CURRENCY_RE = /^[A-Z][A-Z0-9._'-]*$/;
-const TAG_RE = /(?:^|[ \t])#([A-Za-z0-9\-_/.]+)/g;
-const LINK_RE = /(?:^|[ \t])\^([A-Za-z0-9\-_/.]+)/g;
+const TAG_RE = /(?:^|[ \t])#([A-Za-z0-9\-_/.]+)/gm;
+const LINK_RE = /(?:^|[ \t])\^([A-Za-z0-9\-_/.]+)/gm;
 
 interface FileDirective {
 	kind: 'open' | 'close';
@@ -127,7 +126,9 @@ export class LedgerIndex {
 					this.setFile(path, content);
 					revisions.delete(path);
 				})
-				.catch(() => undefined);
+				.catch(() => {
+					if (revisions.get(path) === current) revisions.delete(path);
+				});
 		};
 
 		for (const file of vault.getFiles()) refresh(file);
@@ -380,10 +381,8 @@ function collectFromRegion(region: LedgerRegion, path: string, sink: RegionSink)
 	const text = region.lines.length === 0 ? '' : region.lines.join('\n');
 	collectAccounts(text, sink.accounts);
 	collectTagsAndLinks(text, sink.tags, sink.links);
-	const scan = text === '' ? { lines: [], entries: [] as const } : scanLedger(text);
-	for (let i = 0; i < region.lines.length; i += 1) {
-		collectCommoditiesFromLine(region.lines[i] ?? '', sink.commodities);
-	}
+	const scan = text === '' ? { lines: [] as const, entries: [] as const } : scanLedger(text);
+	collectCommodities(region.lines, scan.lines, sink.commodities);
 	for (const entry of scan.entries) {
 		collectEntry(region, path, entry, sink);
 	}
@@ -391,8 +390,8 @@ function collectFromRegion(region: LedgerRegion, path: string, sink: RegionSink)
 
 function collectEntry(region: LedgerRegion, path: string, entry: ScannedEntry, sink: RegionSink): void {
 	const headerLine = region.lines[entry.startLine] ?? '';
-	const header = entry.header ?? parseHeaderLine(headerLine);
-	if (header === undefined || header === null) return;
+	const header = entry.header;
+	if (header === undefined) return;
 	if (header.kind === 'txn-header') {
 		const payee = headerPayee(headerLine, header);
 		if (payee !== undefined) addValue(sink.payees, payee);
@@ -405,7 +404,7 @@ function collectEntry(region: LedgerRegion, path: string, entry: ScannedEntry, s
 			const postings = templateFromLocated(located);
 			if (postings.length > 0) {
 				const template: PayeeTemplate = {
-					date: header.date.replace(/\//g, '-'),
+					date: isoDate(header.date),
 					path,
 					line: region.hostStartLine + entry.startLine,
 					postings,
@@ -417,21 +416,16 @@ function collectEntry(region: LedgerRegion, path: string, entry: ScannedEntry, s
 		return;
 	}
 	if (header.keyword !== 'open' && header.keyword !== 'close') return;
-	const account = directiveAccount(headerLine, header);
-	if (account === null) return;
-	const date = header.date.replace(/\//g, '-');
-	const current = sink.byAccount.get(account) ?? { currencies: [] };
+	const after = skipSpace(headerLine, header.keywordSpan?.to ?? 0);
+	const match = ACCOUNT_AT_START.exec(headerLine.slice(after));
+	if (match === null) return;
+	const account = match[0];
+	const date = isoDate(header.date);
 	if (header.keyword === 'open') {
 		sink.opened.add(account);
-		if (current.open === undefined || date >= current.open) {
-			sink.byAccount.set(account, {
-				...current,
-				open: date,
-				currencies: parseCurrencies(headerLine.slice(accountEndOnDirective(headerLine, header))),
-			});
-		}
-	} else if (current.close === undefined || date >= current.close) {
-		sink.byAccount.set(account, { ...current, close: date });
+		applyLifecycle(sink.byAccount, account, 'open', date, parseCurrencies(headerLine.slice(after + account.length)));
+	} else {
+		applyLifecycle(sink.byAccount, account, 'close', date);
 	}
 }
 
@@ -466,7 +460,7 @@ function pairingFromPostings(
 	if (first.account === second.account) return null;
 	if (first.commodity === undefined || first.commodity !== second.commodity) return null;
 	return {
-		date: header.date.replace(/\//g, '-'),
+		date: isoDate(header.date),
 		payee: headerPayee(headerLine, header),
 		accounts: [first.account, second.account],
 	};
@@ -487,21 +481,32 @@ function templateFromLocated(located: ReadonlyArray<{ line: string; posting: Sca
 	return postings;
 }
 
-function directiveAccount(line: string, header: ScannedHeader): string | null {
-	const after = skipSpace(line, header.keywordSpan?.to ?? 0);
-	const match = ACCOUNT_AT_START.exec(line.slice(after));
-	return match === null ? null : match[0];
-}
-
-function accountEndOnDirective(line: string, header: ScannedHeader): number {
-	const after = skipSpace(line, header.keywordSpan?.to ?? 0);
-	const name = directiveAccount(line, header);
-	return name === null ? after : after + name.length;
-}
-
 function headerNarration(line: string, header: ScannedHeader): string | undefined {
 	if (header.narration === undefined || header.narration.from >= header.narration.to) return undefined;
 	return line.slice(header.narration.from, header.narration.to);
+}
+
+function isoDate(date: string): string {
+	return date.includes('/') ? date.replace(/\//g, '-') : date;
+}
+
+function applyLifecycle(
+	byAccount: Map<string, AccountRecord>,
+	account: string,
+	kind: 'open' | 'close',
+	date: string,
+	currencies?: readonly string[]
+): void {
+	const current = byAccount.get(account) ?? { currencies: [] };
+	if (kind === 'open') {
+		if (current.open === undefined || date >= current.open) {
+			byAccount.set(account, { ...current, open: date, currencies: currencies ?? current.currencies });
+		}
+		return;
+	}
+	if (current.close === undefined || date >= current.close) {
+		byAccount.set(account, { ...current, close: date });
+	}
 }
 
 function collectAccounts(content: string, into: Set<string>): void {
@@ -540,14 +545,33 @@ function collectTagsAndLinks(content: string, tags: Set<string>, links: Set<stri
 	}
 }
 
-function collectCommoditiesFromLine(line: string, into: Set<string>): void {
-	const first = line.charCodeAt(0);
-	const indented = first === 0x20 || first === 0x09;
-	const header = !indented ? parseHeaderLine(line) : null;
+function collectCommodities(lines: readonly string[], kinds: readonly LineKind[], into: Set<string>): void {
+	for (let i = 0; i < lines.length; i += 1) {
+		const line = lines[i] ?? '';
+		if (line.includes('\u2028') || line.includes('\u2029')) {
+			for (const piece of line.split(/[\u2028\u2029]/)) collectCommodityPiece(piece, into);
+			continue;
+		}
+		const indented = line.charCodeAt(0) === 0x20 || line.charCodeAt(0) === 0x09;
+		if (indented) {
+			addAmounts(line, into);
+			continue;
+		}
+		if (kinds[i] === 'directive') collectDirectiveCommodities(line, into);
+	}
+}
+
+function collectCommodityPiece(line: string, into: Set<string>): void {
+	const indented = line.charCodeAt(0) === 0x20 || line.charCodeAt(0) === 0x09;
 	if (indented) {
 		addAmounts(line, into);
 		return;
 	}
+	collectDirectiveCommodities(line, into);
+}
+
+function collectDirectiveCommodities(line: string, into: Set<string>): void {
+	const header = parseHeaderLine(line);
 	if (header?.kind !== 'directive') return;
 	if (header.keyword === 'commodity') {
 		const rest = line.slice(skipSpace(line, header.keywordSpan?.to ?? 0));
@@ -566,7 +590,7 @@ function collectCommoditiesFromLine(line: string, into: Set<string>): void {
 }
 
 function addAmounts(line: string, into: Set<string>): void {
-	const text = stripComment(line);
+	const text = stripStringsAndComments(line);
 	AMOUNT_RE.lastIndex = 0;
 	for (let match = AMOUNT_RE.exec(text); match !== null; match = AMOUNT_RE.exec(text)) {
 		addValue(into, match[1]);
@@ -574,7 +598,7 @@ function addAmounts(line: string, into: Set<string>): void {
 }
 
 function parseCurrencies(rest: string): string[] {
-	const body = rest.split(';')[0].replace(/"[^"]*"/g, ' ');
+	const body = stripStringsAndComments(rest);
 	const currencies: string[] = [];
 	for (const token of body.split(/[\s,]+/)) {
 		if (OPEN_CURRENCY_RE.test(token)) currencies.push(token);
@@ -632,17 +656,11 @@ function mergeDirectives(byPath: ReadonlyMap<string, FileFacts>): ReadonlyMap<st
 	const files = [...byPath.entries()].sort((left, right) => (left[0] < right[0] ? -1 : 1));
 	for (const [, facts] of files) {
 		for (const directive of facts.directives) {
-			const current = merged.get(directive.account) ?? { currencies: [] };
-			const next: AccountRecord = { ...current };
 			if (directive.kind === 'open') {
-				if (current.open === undefined || directive.date >= current.open) {
-					next.open = directive.date;
-					next.currencies = directive.currencies;
-				}
-			} else if (current.close === undefined || directive.date >= current.close) {
-				next.close = directive.date;
+				applyLifecycle(merged, directive.account, 'open', directive.date, directive.currencies);
+			} else {
+				applyLifecycle(merged, directive.account, 'close', directive.date);
 			}
-			merged.set(directive.account, next);
 		}
 	}
 	return merged;

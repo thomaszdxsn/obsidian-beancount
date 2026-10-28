@@ -269,53 +269,6 @@ export function inferBalancingAccount(
 	return pickOther(account, pairings);
 }
 
-/**
- * Two-leg, single-commodity transactions in `content`. Each pairing is one
- * historical (payee, account ↔ account) used to infer a balancing account.
- */
-export function extractPairings(content: string): readonly Pairing[] {
-	const lines = content.split('\n');
-	const pairings: Pairing[] = [];
-	let line = 0;
-	while (line < lines.length) {
-		const head = lines[line].charCodeAt(0);
-		const headerLine = lines[line] ?? '';
-		const header = head >= 0x30 && head <= 0x39 ? parseHeaderLine(headerLine) : null;
-		if (header === null || header.kind !== 'txn-header') {
-			line += 1;
-			continue;
-		}
-		const range = blockRangeAt(lines, line);
-		let accounts = 0;
-		const postings: Array<{ account: string; commodity?: string }> = [];
-		for (let i = range.from; i <= range.to && accounts <= 2; i += 1) {
-			const parsed = scannedAmount(lines[i]);
-			if (parsed === null) continue;
-			accounts += 1;
-			if (parsed.number !== undefined) postings.push(parsed);
-		}
-		if (accounts === 2 && postings.length === 2) {
-			const [first, second] = postings;
-			if (
-				first.account !== second.account &&
-				first.commodity !== undefined &&
-				first.commodity === second.commodity
-			) {
-				pairings.push({
-					date: header.date.replace(/\//g, '-'),
-					payee: headerPayee(headerLine, header),
-					accounts: [first.account, second.account],
-				});
-			}
-		}
-		line = range.to + 1;
-	}
-	return pairings;
-}
-
-
-
-
 function unknownAccounts(message: string): string[] {
 	const accounts: string[] = [];
 	UNKNOWN_ACCOUNT_RE.lastIndex = 0;

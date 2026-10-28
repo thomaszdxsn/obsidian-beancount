@@ -223,6 +223,21 @@ export function stripComment(line: string): string {
 	return commentAt < 0 ? line : line.slice(0, commentAt);
 }
 
+/** Line with quoted strings and `;` comments removed, for amount/token scans. */
+export function stripStringsAndComments(line: string): string {
+	if (!line.includes('"')) return stripComment(line);
+	const state: QuoteCommentState = { inString: false, inComment: false };
+	let out = '';
+	for (let i = 0; i < line.length; i += 1) {
+		const wasString = state.inString;
+		const skip = stepQuoteComment(line, i, state);
+		if (state.inComment) break;
+		if (!wasString && !state.inString) out += line.charAt(i);
+		i += skip;
+	}
+	return out;
+}
+
 /** Decode `\\` / `\"` in a quoted field body (payee / narration as written). */
 export function unescapeQuoted(text: string): string {
 	return text.includes('\\') ? text.replace(/\\(.)/g, '$1') : text;

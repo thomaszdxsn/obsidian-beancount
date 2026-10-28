@@ -244,6 +244,272 @@ describe('LedgerIndex queries', () => {
 		expect(index.links.match('')).toEqual(['^receipt']);
 		expect(index.commodities.match('')).toEqual(['AAPL', 'CAD', 'USD']);
 	});
+
+	it('indexes a line-start tag and link in a region', () => {
+		const index = new LedgerIndex();
+		index.setFile('a.bean', '#trip\n^receipt');
+		expect(index.tags.match('')).toEqual(['#trip']);
+		expect(index.links.match('')).toEqual(['^receipt']);
+	});
+
+	it('does not treat quoted metadata as commodities', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'a.bean',
+			[
+				'2026-09-30 * "Shell" "Fuel"',
+				'  invoice: "Order 2024 Q1"',
+				'  memo: "paid 2 ATM fees"',
+				'  invoice: "Order; 2 EUR"  10.00 USD ; 3 GBP',
+			].join('\n')
+		);
+		expect(index.commodities.match('')).toEqual(['USD']);
+	});
+
+	it('treats U+2028 as a line break between commodity directives', () => {
+		const index = new LedgerIndex();
+		index.setFile('a.bean', '2026-09-30 commodity AAPL\u20282026-10-01 commodity MSFT');
+		expect(index.commodities.match('')).toEqual(['AAPL', 'MSFT']);
+	});
+
+	it('strips booking methods and comments from open currencies', () => {
+		const index = new LedgerIndex();
+		index.setFile('a.bean', '2020-01-01 open Assets:Cash USD, EUR "STRICT" ; note');
+		expect(index.accounts.record('Assets:Cash')).toEqual({
+			open: '2020-01-01',
+			currencies: ['USD', 'EUR'],
+		});
+	});
+
+	it('lets a later same-date open win and merges latest open/close across files', () => {
+		const index = new LedgerIndex();
+		index.setFile('a.bean', '2020-01-01 open Assets:Cash USD\n2020-01-01 open Assets:Cash EUR');
+		expect(index.accounts.record('Assets:Cash')).toEqual({ open: '2020-01-01', currencies: ['EUR'] });
+		index.setFile('b.bean', '2022-01-01 open Assets:Cash CNY');
+		index.setFile('c.bean', '2021-01-01 open Assets:Cash USD');
+		index.setFile('d.bean', '2023-01-01 close Assets:Cash');
+		index.setFile('e.bean', '2022-06-01 close Assets:Cash');
+		expect(index.accounts.record('Assets:Cash')).toEqual({
+			open: '2022-01-01',
+			close: '2023-01-01',
+			currencies: ['CNY'],
+		});
+		expect(index.accounts.match('Assets:')).toEqual([]);
+	});
+
+	it('skips closed names when filling the popup window', () => {
+		const index = new LedgerIndex();
+		const closed = Array.from({ length: 60 }, (_, i) => {
+			const name = `Assets:Z${String(i).padStart(2, '0')}`;
+			return `2020-01-01 open ${name}\n2021-01-01 close ${name}`;
+		});
+		const open = Array.from({ length: 3 }, (_, i) => `2020-01-01 open Assets:A${i}`);
+		index.setFile('a.bean', [...closed, ...open].join('\n'));
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:A0', 'Assets:A1', 'Assets:A2']);
+	});
+
+	it('reads CRLF commodities and payee templates like LF', () => {
+		const lf = ['2026-03-01 * "Cafe"', '  Expenses:Food * 12.50 USD', '  Assets:Cash !', '2026-09-30 commodity AAPL'].join(
+			'\n'
+		);
+		const crlf = lf.split('\n').join('\r\n');
+		const left = new LedgerIndex();
+		const right = new LedgerIndex();
+		left.setFile('a.bean', lf);
+		right.setFile('a.bean', crlf);
+		expect(right.commodities.match('')).toEqual(left.commodities.match(''));
+		expect(right.templateFor('Cafe')).toEqual(left.templateFor('Cafe'));
+	});
+
+	it('ends a payee template at a blank line, column-0 comment, next header, or directive', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'a.bean',
+			['2026-01-01 * "Blank"', '  Expenses:Food  1.00 USD', '  Assets:Cash', '', '  Expenses:Stolen  9.00 USD'].join('\n')
+		);
+		expect(index.templateFor('Blank')?.postings.map((row) => row.account)).toEqual(['Expenses:Food', 'Assets:Cash']);
+		index.setFile(
+			'a.bean',
+			['2026-01-01 * "Comment"', '  Expenses:Food  1.00 USD', '; column-0 comment', '  Expenses:Stolen  9.00 USD'].join(
+				'\n'
+			)
+		);
+		expect(index.templateFor('Comment')?.postings.map((row) => row.account)).toEqual(['Expenses:Food']);
+		index.setFile(
+			'a.bean',
+			[
+				'2026-01-01 * "Next"',
+				'  Expenses:Food  1.00 USD',
+				'2026-01-02 * "Other"',
+				'  Expenses:Rent  2.00 USD',
+				'  Assets:Bank',
+			].join('\n')
+		);
+		expect(index.templateFor('Next')?.postings.map((row) => row.account)).toEqual(['Expenses:Food']);
+		index.setFile(
+			'a.bean',
+			['2026-01-01 * "Open"', '  Expenses:Food  1.00 USD', '2026-01-02 open Assets:New', '  Expenses:Stolen  9.00 USD'].join(
+				'\n'
+			)
+		);
+		expect(index.templateFor('Open')?.postings.map((row) => row.account)).toEqual(['Expenses:Food']);
+	});
+
+	it('keeps a trailing posting flag off the amount and keys escaped payees as written', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'a.bean',
+			['2026-03-01 * "Cafe"', '  Expenses:Food * 12.50 USD', '  Assets:Cash !'].join('\n')
+		);
+		expect(index.templateFor('Cafe')?.postings).toEqual([
+			{ leadingFlag: '', trailingFlag: '*', account: 'Expenses:Food', amount: '12.50 USD' },
+			{ leadingFlag: '', trailingFlag: '!', account: 'Assets:Cash' },
+		]);
+		index.setFile('a.bean', '2026-01-01 * "Cafe \\"North\\""\n  Expenses:Food  1 USD\n  Assets:Cash');
+		expect(index.templateFor('Cafe \\"North\\"')?.postings[0]?.account).toBe('Expenses:Food');
+	});
+
+	it('does not count open inside a comment or narration', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'notes.bean',
+			['; do not open Assets:Nope', '2026-01-01 * "please open Assets:Narr"', '  Expenses:Opening  1.00 USD'].join('\n')
+		);
+		expect(index.bestOpenFile()).toBeNull();
+		expect([...index.openedIn('notes.bean')]).toEqual([]);
+	});
+
+	it('counts a CJK open line', () => {
+		const index = new LedgerIndex();
+		index.setFile('accounts.bean', '2026-01-01 open Expenses:餐饮 CNY\n');
+		expect(index.bestOpenFile()).toBe('accounts.bean');
+		expect([...index.openedIn('accounts.bean')]).toEqual(['Expenses:餐饮']);
+		expect(index.accounts.has('Expenses:餐饮')).toBe(true);
+	});
+
+	it('covers account-shape boundaries used by completion', () => {
+		const index = new LedgerIndex();
+		index.setFile('a.bean', '（Expenses:餐饮，午饭）记到 Assets:现金。');
+		expect(names(index)).toEqual(['Assets:现金', 'Expenses:餐饮']);
+		index.setFile('a.bean', 'Expenses:Cafe\u0301:Bar Expenses:खर्च');
+		expect(names(index)).toEqual(['Expenses:Cafe\u0301:Bar', 'Expenses:खर्च']);
+		index.setFile('a.bean', '2026-09-30  12:30  https://github.com/user:repo\nplain words');
+		expect(names(index)).toEqual([]);
+		index.setFile('a.bean', '见Expenses:餐饮 日期Assets:现金');
+		expect(names(index)).toEqual([]);
+	});
+
+	it('indexes payee fields across flags, tabs, empties and non-transaction lines', () => {
+		const index = new LedgerIndex();
+		index.setFile('a.bean', '2026/09/30 *"Payee" "N"');
+		expect(index.payees.match('')).toEqual(['Payee']);
+		index.setFile('a.bean', '2026-09-30\t*\t"Payee" "N"');
+		expect(index.payees.match('')).toEqual(['Payee']);
+		index.setFile('a.bean', '2026-09-30 * "" "Narration only"');
+		expect(index.payees.match('')).toEqual([]);
+		index.setFile('a.bean', '2026-09-30 open Assets:Cash "x"');
+		expect(index.payees.match('')).toEqual([]);
+		index.setFile('a.bean', '2026-09-30 *tag "Payee" "N"');
+		expect(index.payees.match('')).toEqual([]);
+	});
+
+	it('reports nothing moved when renaming an untracked path', () => {
+		const index = new LedgerIndex();
+		index.setFile('keep.bean', 'Assets:Cash');
+		expect(index.renameFile('missing.bean', 'gone.bean')).toBe(false);
+		expect(names(index)).toEqual(['Assets:Cash']);
+	});
+
+	it('indexes two-leg pairings and excludes three-leg, mixed-commodity, and same-account rows', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'a.bean',
+			['2026-09-01 * "面馆"', '  Expenses:餐饮  18.00 CNY', '  Assets:Cash  -18.00 CNY'].join('\n')
+		);
+		expect(index.pairings()).toEqual([
+			{ date: '2026-09-01', payee: '面馆', accounts: ['Expenses:餐饮', 'Assets:Cash'] },
+		]);
+		index.setFile(
+			'a.bean',
+			['2026-09-01 * "Split"', '  Expenses:Food  6.00 USD', '  Expenses:Tip  4.00 USD', '  Assets:Cash  -10.00 USD'].join(
+				'\n'
+			)
+		);
+		expect(index.pairings()).toEqual([]);
+		index.setFile(
+			'a.bean',
+			['2026-09-01 * "Split"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD', '  Expenses:Tip'].join('\n')
+		);
+		expect(index.pairings()).toEqual([]);
+		index.setFile(
+			'a.bean',
+			['2026-09-04 * "Mixed"', '  Assets:Cash  1.00 USD', '  Assets:Bank  1.00 EUR'].join('\n')
+		);
+		expect(index.pairings()).toEqual([]);
+		index.setFile(
+			'a.bean',
+			['2026-09-01 * "Same"', '  Assets:Cash  1.00 USD', '  Assets:Cash  -1.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([]);
+	});
+
+	it('pairs flagged legs, metadata-separated postings, slash dates, and txn headers', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'a.bean',
+			['2026-09-01 ! "Cafe"', '  ! Expenses:Food  10.00 USD', '  Assets:Cash * -10.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([
+			{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		]);
+		index.setFile(
+			'a.bean',
+			['2026-09-01 * "Cafe"', '  invoice: "abc"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([
+			{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		]);
+		index.setFile(
+			'a.bean',
+			['2026/09/01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([
+			{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		]);
+		index.setFile(
+			'a.bean',
+			['2026-10-01 txn "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([
+			{ date: '2026-10-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+		]);
+		index.setFile(
+			'a.bean',
+			['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  {1 USD}', '  Assets:Bank  @ 1 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([]);
+		index.setFile(
+			'a.bean',
+			['2026-10-01 * "Cafe"', '  ; not a posting', '  Assets:Cash  leftover', '  Expenses:Food  10.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([]);
+	});
+
+	it('merges two-leg pairings across two files', () => {
+		const index = new LedgerIndex();
+		index.setFile(
+			'a.bean',
+			['2026-09-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash   -10.00 USD'].join('\n')
+		);
+		index.setFile(
+			'b.bean',
+			['2026-09-02 * "Cafe"', '  Expenses:Food  4.00 USD', '  Assets:Bank    -4.00 USD'].join('\n')
+		);
+		expect(index.pairings()).toEqual([
+			{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
+			{ date: '2026-09-02', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Bank'] },
+		]);
+	});
 });
 
 interface Fixture {
@@ -297,12 +563,13 @@ describe('LedgerIndex.applyVault', () => {
 		expect([...vault.handlers.keys()].sort()).toEqual(['create', 'delete', 'modify', 'rename']);
 	});
 
-	it('re-indexes a modified file', async () => {
-		const { vault, index } = setup({ 'a.bean': 'Assets:Old' });
+	it('re-indexes a modified file without touching another path', async () => {
+		const { vault, index } = setup({ 'a.bean': 'Assets:Old', 'b.bean': 'Expenses:Keep' });
 		await flush();
 		const file = vault.write('a.bean', 'Assets:New Expenses:Food');
 		await vault.emit('modify', file);
-		expect(names(index).sort()).toEqual(['Assets:New', 'Expenses:Food']);
+		expect(names(index).sort()).toEqual(['Assets:New', 'Expenses:Food', 'Expenses:Keep']);
+		expect(names(index)).not.toContain('Assets:Old');
 	});
 
 	it('indexes files created after load', async () => {
@@ -329,14 +596,14 @@ describe('LedgerIndex.applyVault', () => {
 		expect(vault.reads).toEqual(['a.bean']);
 	});
 
-	it('keeps cached strings on rename without re-reading', async () => {
+	it('keeps cached strings on rename without re-reading, then drops them on vault delete', async () => {
 		const { vault, index } = setup({ 'dir/a.bean': 'Assets:Cash' });
 		await flush();
 		const renamed = vault.rename('dir/a.bean', 'dir/b.bean');
 		await vault.emit('rename', renamed, 'dir/a.bean');
 		expect(names(index)).toEqual(['Assets:Cash']);
 		expect(vault.reads).toEqual(['dir/a.bean']);
-		index.removeFile('dir/b.bean');
+		await vault.emit('delete', vault.delete('dir/b.bean'));
 		expect(names(index)).toEqual([]);
 	});
 
@@ -557,13 +824,17 @@ describe('LedgerIndex.applyVault', () => {
 		expect(names(index)).toEqual(['Assets:Fresh']);
 	});
 
-	it('keeps the last good cache entry when a read fails', async () => {
+	it('keeps the last good cache entry when a read fails, then applies a later success', async () => {
 		const { vault, index } = setup({ 'a.bean': 'Assets:Old', 'b.bean': 'Expenses:Food' });
 		await flush();
 		vault.failures.add('a.bean');
 		const file = vault.write('a.bean', 'Assets:New');
 		await vault.emit('modify', file);
 		expect(names(index).sort()).toEqual(['Assets:Old', 'Expenses:Food']);
+		vault.failures.delete('a.bean');
+		vault.write('a.bean', 'Assets:Fresh');
+		await vault.emit('modify', file);
+		expect(names(index).sort()).toEqual(['Assets:Fresh', 'Expenses:Food']);
 	});
 
 	it('skips unreadable files during the initial scan', async () => {

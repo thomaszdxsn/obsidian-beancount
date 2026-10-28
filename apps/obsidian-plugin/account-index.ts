@@ -6,7 +6,6 @@
  */
 import { ACCOUNT_SEGMENT_CHARS, ACCOUNT_SHAPE } from './scan';
 
-export { ACCOUNT_SHAPE } from './scan';
 
 /**
  * A complete account name: a capitalized root segment plus one or more
@@ -26,7 +25,7 @@ export { ACCOUNT_SHAPE } from './scan';
  * the prefix regex.
  */
 const SEGMENT = `[${ACCOUNT_SEGMENT_CHARS}]`;
-const ACCOUNT_RE = new RegExp(`(?<![${ACCOUNT_SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
+export const ACCOUNT_RE = new RegExp(`(?<![${ACCOUNT_SEGMENT_CHARS}:/])${ACCOUNT_SHAPE}`, 'gu');
 
 /** The same shape while typing, where the last segment may be partial. */
 export const ACCOUNT_PREFIX_RE = new RegExp(

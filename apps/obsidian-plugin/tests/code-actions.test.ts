@@ -8,7 +8,6 @@ import {
 	FLAG_OKAY_TITLE,
 	FLAGGED_MESSAGE,
 	PAD_TRANSACTION_TITLE,
-	extractPairings,
 	flagDiagnostics,
 	flagDiagnosticsFromRegions,
 	flagOkayEdit,
@@ -90,39 +89,13 @@ describe('mergeDiagnostics', () => {
 	});
 });
 
-describe('extractPairings / inferBalancingAccount', () => {
-	it('indexes two-leg CJK accounts', () => {
-		expect(
-			extractPairings(
-				['2026-09-01 * "面馆"', '  Expenses:餐饮  18.00 CNY', '  Assets:Cash  -18.00 CNY'].join('\n')
-			)
-		).toEqual([{ date: '2026-09-01', payee: '面馆', accounts: ['Expenses:餐饮', 'Assets:Cash'] }]);
-	});
-
-	it('indexes two-leg single-commodity transactions', () => {
-		const content = [
-			'2026-09-01 * "Cafe"',
-			'  Expenses:Food  10.00 USD',
-			'  Assets:Cash   -10.00 USD',
-			'',
-			'2026-09-02 * "Cafe"',
-			'  Expenses:Food  4.00 USD',
-			'  Assets:Bank    -4.00 USD',
-			'',
-			'2026-09-03 * "Rent"',
-			'  Expenses:Rent  1.00 USD',
-			'  Assets:Bank   -1.00 USD',
-			'',
-			'2026-09-04 * "Mixed"',
-			'  Assets:Cash  1.00 USD',
-			'  Assets:Bank  1.00 EUR',
-		].join('\n');
-		const pairings = extractPairings(content);
-		expect(pairings).toEqual([
+describe('inferBalancingAccount', () => {
+	it('prefers same-payee history then overall frequency', () => {
+		const pairings: Pairing[] = [
 			{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
 			{ date: '2026-09-02', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Bank'] },
 			{ date: '2026-09-03', payee: 'Rent', accounts: ['Expenses:Rent', 'Assets:Bank'] },
-		]);
+		];
 		expect(inferBalancingAccount('Expenses:Food', 'Cafe', pairings)).toBe('Assets:Bank');
 		expect(inferBalancingAccount('Assets:Bank', 'Rent', pairings)).toBe('Expenses:Rent');
 		expect(inferBalancingAccount('Assets:Cash', undefined, pairings)).toBe('Expenses:Food');
@@ -133,51 +106,6 @@ describe('extractPairings / inferBalancingAccount', () => {
 				{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Bank'] },
 			])
 		).toBe('Assets:Bank');
-	});
-
-	it('excludes a three-leg transaction, including one whose third leg has no amount', () => {
-		expect(
-			extractPairings(
-				['2026-09-01 * "Split"', '  Expenses:Food  6.00 USD', '  Expenses:Tip  4.00 USD', '  Assets:Cash  -10.00 USD'].join(
-					'\n'
-				)
-			)
-		).toEqual([]);
-		// Stopping at the second amount leg would pair Food with Cash and hide the third account.
-		expect(
-			extractPairings(
-				['2026-09-01 * "Split"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD', '  Expenses:Tip'].join('\n')
-			)
-		).toEqual([]);
-	});
-
-	it('pairs flagged legs of one commodity', () => {
-		expect(
-			extractPairings(
-				['2026-09-01 ! "Cafe"', '  ! Expenses:Food  10.00 USD', '  Assets:Cash * -10.00 USD'].join('\n')
-			)
-		).toEqual([{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
-	});
-
-	it('pairs a transaction whose postings follow metadata lines', () => {
-		expect(
-			extractPairings(
-				[
-					'2026-09-01 * "Cafe"',
-					'  invoice: "abc"',
-					'  Expenses:Food  10.00 USD',
-					'  Assets:Cash  -10.00 USD',
-				].join('\n')
-			)
-		).toEqual([{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
-	});
-
-	it('normalizes a slash date on a pairing', () => {
-		expect(
-			extractPairings(
-				['2026/09/01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
-			)
-		).toEqual([{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
 	});
 });
 
@@ -370,13 +298,6 @@ describe('edge postings and residuals', () => {
 				'Transaction does not balance: (10.00 USD)'
 			)
 		).toBeNull();
-		expect(
-			extractPairings(
-				['2026-10-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  {1 USD}', '  Assets:Bank  @ 1 USD'].join(
-					'\n'
-				)
-			)
-		).toEqual([]);
 	});
 
 	it('refuses a missing commodity, a residual in another currency, and an out-of-range line', () => {
@@ -488,14 +409,7 @@ describe('edge postings and residuals', () => {
 		).toBe('Assets:Cash');
 	});
 
-	it('skips indented comments and account lines whose rest is not an amount', () => {
-		expect(
-			extractPairings(
-				['2026-10-01 * "Cafe"', '  ; not a posting', '  Assets:Cash  leftover', '  Expenses:Food  10.00 USD'].join(
-					'\n'
-				)
-			)
-		).toEqual([]);
+	it('skips account lines whose rest is not an amount', () => {
 		expect(
 			padEdit(
 				['2026-10-01 * "Cafe"', '  Expenses:Food  leftover'],
@@ -516,12 +430,7 @@ describe('edge postings and residuals', () => {
 		);
 	});
 
-	it('indexes a txn header and reports a duplicate unknown account once', () => {
-		expect(
-			extractPairings(
-				['2026-10-01 txn "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash  -10.00 USD'].join('\n')
-			)
-		).toEqual([{ date: '2026-10-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] }]);
+	it('reports a duplicate unknown account once', () => {
 		expect(
 			quickFixesForLine(
 				context({
