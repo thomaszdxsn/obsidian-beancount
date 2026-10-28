@@ -3,18 +3,10 @@ import type { App, Editor, FileSystemAdapter, MarkdownView, PluginManifest, TAbs
 import type { EditorView } from '@codemirror/view';
 import type { ChildProcess } from 'child_process';
 import { isAbsolute, relative, resolve, sep } from 'path';
-import {
-	alignFencedDocument,
-	alignmentRanges,
-	alignmentTarget,
-	alignText,
-	blockRangeAt,
-	computeAlignment,
-	inRanges,
-	intersectRange,
-} from './align';
-import { formatErrorNotice, formatFencedDocument, formatLedger, lineChanges } from './format';
-import type { LineRange } from './align';
+import { editorLedger, isLedgerFile, ledgerKind } from './fences';
+import { formatErrorNotice } from './format';
+import type { EditPlan } from './edits';
+import { AlignOnSave, planAlign, planFormat } from './edits';
 import { beancountMode } from './beancount-mode';
 import { AccountSuggest } from './account-suggest';
 import { accountHoverTooltip } from './account-hover';
@@ -42,7 +34,6 @@ import {
 import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
-import { isLedgerFile } from './fences';
 import { insertTodayDate } from './insert-date';
 import { LedgerIndex } from './ledger-index';
 import { PayeeSuggest } from './payee-suggest';
@@ -108,9 +99,6 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 	};
 }
 
-/** Delay before on-save alignment, so a burst of edits aligns once. */
-const ALIGN_DEBOUNCE_MS = 500;
-
 const MISSING_FAVA_NOTICE =
 	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
 const NO_LEDGER_FAVA_NOTICE =
@@ -140,7 +128,6 @@ function openEditorsFor(app: App, file: TFile): Editor[] {
 	return editors;
 }
 
-
 /** A vault file, not a folder: folders have no `extension` to stamp an mtime on. */
 function isVaultFile(file: TAbstractFile | null): file is TFile {
 	return !!file && 'extension' in file && typeof file.extension === 'string';
@@ -150,118 +137,29 @@ function fileRef(file: TFile): FileRef {
 	return { path: file.path, extension: file.extension, mtime: fileMtime(file) };
 }
 
-/** Every line of the editor, in order. */
-function editorLines(editor: Editor): string[] {
-	const lines: string[] = [];
-	for (let line = 0; line < editor.lineCount(); line += 1) lines.push(editor.getLine(line));
-	return lines;
-}
-
-/**
- * What the command aligns: the selected lines when there is a selection,
- * otherwise the transaction block the cursor sits in — both cut to
- * `bodies`, the lines alignment may touch, so a block never crosses a fence.
- */
-function commandScope(editor: Editor, lines: readonly string[], bodies: readonly LineRange[]): LineRange[] {
-	if (!editor.somethingSelected()) {
-		const line = editor.getCursor().line;
-		const block = blockRangeAt(lines, line);
-		for (const body of bodies) {
-			if (line < body.from || line > body.to) continue;
-			const clipped = intersectRange(block, body);
-			return clipped === null ? [] : [clipped];
-		}
-		return [];
-	}
-	let from = Number.MAX_SAFE_INTEGER;
-	let to = 0;
-	for (const selection of editor.listSelections()) {
-		const start = Math.min(selection.anchor.line, selection.head.line);
-		const end = Math.max(selection.anchor.line, selection.head.line);
-		const endCh = selection.anchor.line === end ? selection.anchor.ch : selection.head.ch;
-		from = Math.min(from, start);
-		// A selection dragged to the start of the next line holds none of its
-		// characters, so the last selected line is the one before it.
-		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
-	}
-	const selected = { from, to };
-	const scopes: LineRange[] = [];
-	for (const body of bodies) {
-		const clipped = intersectRange(selected, body);
-		if (clipped !== null) scopes.push(clipped);
-	}
-	return scopes;
-}
-
-/**
- * Rewrite the gaps in `scope` (the whole buffer when omitted) so the decimal
- * points of each transaction block line up. Several ranges are one
- * transaction so undo is still one step. `ledgerLine` marks a note's fence
- * lines; without it the whole buffer is ledger text.
- */
-function alignInEditor(
-	editor: Editor,
-	scope?: readonly LineRange[],
-	targetColumn?: number,
-	ledgerLine?: (line: number) => boolean
-): void {
-	const lines = editorLines(editor);
-	const edits =
-		scope === undefined
-			? computeAlignment(lines, undefined, targetColumn, ledgerLine)
-			: scope.flatMap((range) => computeAlignment(lines, range, targetColumn, ledgerLine));
-	if (edits.length === 0) return;
-	const changes = edits.map((edit) => ({
-		from: { line: edit.line, ch: edit.from },
-		to: { line: edit.line, ch: edit.to },
-		text: edit.text,
-	}));
-	// One transaction: CodeMirror maps the cursor and undo stack through all
-	// gap rewrites at once. Its offset mapping leaves the caret inside a
-	// widened gap, so a lone caret is mapped onto the text it sat on: just
-	// before the amount — and a caret inside the gap lands there too, while
-	// one exactly at the gap start stays with the account. A range or several
-	// carets are left to the editor's own mapping: forcing a caret there
-	// would collapse what the user has selected.
-	const carets = editor.listSelections();
-	if (carets.length !== 1 || editor.somethingSelected()) {
-		editor.transaction({ changes });
+function applyEditPlan(editor: Editor, plan: EditPlan): void {
+	if (plan.caret) {
+		editor.transaction({ changes: [...plan.changes], selection: { from: plan.caret } });
 		return;
 	}
-	const caret = editor.getCursor();
-	let ch = caret.ch;
-	for (const edit of edits) {
-		if (edit.line !== caret.line) continue;
-		if (ch >= edit.to) ch += edit.text.length - (edit.to - edit.from);
-		else if (ch > edit.from) ch = edit.from + edit.text.length;
-	}
-	editor.transaction({ changes, selection: { from: { line: caret.line, ch } } });
+	editor.transaction({ changes: [...plan.changes] });
 }
 
 /** The `Align decimal points` command. */
 function alignCommand(
 	editor: Editor,
 	file: { path: string; extension: string } | null,
-	separatorColumn: number
+	separatorColumn: number,
 ): void {
-	const lines = editorLines(editor);
-	const ledger = file !== null && isLedgerFile(file);
-	const bodies = alignmentRanges(lines, ledger);
-	const scopes = commandScope(editor, lines, bodies);
-	if (scopes.length === 0) return;
-	alignInEditor(editor, scopes, alignmentTarget(separatorColumn), ledger ? undefined : inRanges(bodies));
-}
-
-/** On-save: a ledger file is the whole buffer; anything else is fence bodies. */
-function alignOpenEditor(
-	editor: Editor,
-	file: { path: string; extension: string },
-	targetColumn: number
-): void {
-	const ledger = isLedgerFile(file);
-	const scopes = alignmentRanges(editorLines(editor), ledger);
-	if (scopes.length === 0) return;
-	alignInEditor(editor, scopes, targetColumn, ledger ? undefined : inRanges(scopes));
+	const ledger = editorLedger(editor, file);
+	const plan = planAlign(editor.getValue(), {
+		carets: editor.listSelections().map((selection) => ({ anchor: selection.anchor, head: selection.head })),
+		mode: editor.somethingSelected() ? 'selection' : 'block',
+		separatorColumn,
+		lineIsLedger: (line) => ledger.lineIsLedger(line),
+	});
+	if (plan === null) return;
+	applyEditPlan(editor, plan);
 }
 
 /**
@@ -271,54 +169,22 @@ function alignOpenEditor(
  * changes nothing. No notice when the text is already formatted — same as
  * alignment finding nothing to do.
  */
-function formatInEditor(
+function formatCommand(
 	editor: Editor,
 	file: { path: string; extension: string } | null,
-	separatorColumn: number
+	separatorColumn: number,
 ): void {
-	const targetColumn = alignmentTarget(separatorColumn);
-	const result =
-		file !== null && isLedgerFile(file)
-			? formatLedger(editor.getValue(), targetColumn)
-			: formatFencedDocument(editor.getValue(), targetColumn);
-	if (!result.ok) {
+	const result = planFormat(editor.getValue(), {
+		carets: editor.listSelections().map((selection) => ({ anchor: selection.anchor, head: selection.head })),
+		separatorColumn,
+		kind: ledgerKind(file),
+	});
+	if (result !== null && 'error' in result) {
 		new Notice(formatErrorNotice(result.error));
 		return;
 	}
-	const before = editor.getValue();
-	const edits = lineChanges(before, result.text);
-	if (edits.length === 0) return;
-	const changes = edits.map((edit) => ({
-		from: { line: edit.fromLine, ch: edit.fromCh },
-		to: { line: edit.toLine, ch: edit.toCh },
-		text: edit.text,
-	}));
-	// One transaction. A lone caret maps through each whitespace run in the
-	// original coordinates: one inside a run lands at the end of that run's
-	// replacement, one past a run shifts by its length delta, and a token
-	// between two runs stays on that token. A selection is left to the editor
-	// so it is not collapsed.
-	const carets = editor.listSelections();
-	if (carets.length !== 1 || editor.somethingSelected()) {
-		editor.transaction({ changes });
-		return;
-	}
-	const caret = editor.getCursor();
-	let ch = caret.ch;
-	let shift = 0;
-	for (const edit of edits) {
-		if (edit.fromLine !== caret.line) continue;
-		if (ch >= edit.toCh) {
-			shift += edit.text.length - (edit.toCh - edit.fromCh);
-		} else if (ch > edit.fromCh) {
-			ch = edit.fromCh + shift + edit.text.length;
-			shift = 0;
-			break;
-		} else {
-			break;
-		}
-	}
-	editor.transaction({ changes, selection: { from: { line: caret.line, ch: ch + shift } } });
+	if (result === null) return;
+	applyEditPlan(editor, result);
 }
 
 function applyEditorEdit(editor: Editor, edit: TextEdit): void {
@@ -337,8 +203,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	beanCheckRunner: BeanCheckRunner = runBeanCheck;
 	private validation!: LedgerValidation;
 	private ledger!: LedgerIndex;
-	/** Pending on-save alignment per file path. */
-	private readonly alignTimers = new Map<string, number>();
+	/** On-save alignment; own timer map, same Clock as validation. */
+	private onSaveAlign!: AlignOnSave;
 	/** Balance-assertion deltas; refreshed when the settings that gate them change. */
 	private readonly balanceInlays = new BalanceInlayController(this);
 	/** Transaction-flag markers; refreshed when flagWarnings change. */
@@ -395,6 +261,32 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				beanCheckPath: () => this.settings.beanCheckPath,
 			},
 		);
+		this.onSaveAlign = new AlignOnSave({
+			clock: this.clock,
+			read: async (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!isVaultFile(file)) throw new Error('missing');
+				return this.app.vault.read(file);
+			},
+			modify: async (path, text) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!isVaultFile(file)) return;
+				await this.app.vault.modify(file, text);
+			},
+			openEditor: (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!isVaultFile(file)) return null;
+				const editor = openEditorFor(this.app, file);
+				if (!editor) return null;
+				return {
+					getValue: () => editor.getValue(),
+					apply: (plan) => applyEditPlan(editor, plan),
+				};
+			},
+			alignOnSave: () => this.settings.alignOnSave,
+			separatorColumn: () => this.settings.separatorColumn,
+			ledgerKind: (file) => ledgerKind(file),
+		});
 		this.usage = CompletionUsage.parse(stored, Date.now, () => {
 			void this.writePluginData();
 		});
@@ -480,7 +372,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			id: 'format-ledger',
 			name: 'Format ledger',
 			editorCallback: (editor, ctx) =>
-				formatInEditor(editor, ctx?.file ?? null, this.settings.separatorColumn),
+				formatCommand(editor, ctx?.file ?? null, this.settings.separatorColumn),
 		});
 		this.addCommand({
 			id: 'insert-today-date',
@@ -534,8 +426,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		);
 		this.register(() => {
 			this.validation.handle({ kind: 'unload' });
-			for (const timer of this.alignTimers.values()) window.clearTimeout(timer);
-			this.alignTimers.clear();
+			this.onSaveAlign.dispose();
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
 			this.ledgerFile.destroy();
@@ -811,7 +702,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private onFileModified(file: TAbstractFile): void {
 		if (!isTextFile(file)) return;
 		const { extension } = file;
-		if (this.settings.alignOnSave) this.scheduleAlign(file);
+		if (this.settings.alignOnSave) this.onSaveAlign.schedule(file);
 		if (isLedgerFile({ extension }) || extension === 'md') {
 			this.validation.handle({ kind: 'saved', file: fileRef(file) });
 		}
@@ -870,46 +761,5 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		};
 	}
 
-	private scheduleAlign(file: TFile): void {
-		window.clearTimeout(this.alignTimers.get(file.path));
-		this.alignTimers.set(
-			file.path,
-			window.setTimeout(() => {
-				this.alignTimers.delete(file.path);
-				// The setting may have been toggled off while waiting; a file
-				// that vanished (or a write that failed) is not worth a retry.
-				if (!this.settings.alignOnSave) return;
-				this.alignFile(file).catch(() => undefined);
-			}, ALIGN_DEBOUNCE_MS)
-		);
-	}
 
-	private async alignFile(file: TFile): Promise<void> {
-		// A file open in a leaf is edited through its editor: the editor buffer
-		// is what Obsidian autosaves, so a vault-level write would be clobbered
-		// by the next autosave from the still-unaligned buffer. Files not open
-		// in any leaf have no buffer to fight with.
-		const editor = openEditorFor(this.app, file);
-		const column = alignmentTarget(this.settings.separatorColumn);
-		if (editor) {
-			// The on-save walk aligns every transaction block of the buffer.
-			alignOpenEditor(editor, file, column);
-			return;
-		}
-		const text = await this.app.vault.read(file);
-		const aligned = isLedgerFile(file) ? alignText(text, column) : alignFencedDocument(text, column);
-		if (aligned === text) return;
-		// The file may have been opened — or edited — while the read was in
-		// flight. An open one is the editor's business again, and a changed
-		// one is left alone: its own `modify` will bring alignment back here.
-		// Write only on change — `vault.process` would write the unchanged
-		// text back and re-arm the debounce forever.
-		const live = openEditorFor(this.app, file);
-		if (live) {
-			alignOpenEditor(live, file, column);
-			return;
-		}
-		if ((await this.app.vault.read(file)) !== text) return;
-		await this.app.vault.modify(file, aligned);
-	}
 }

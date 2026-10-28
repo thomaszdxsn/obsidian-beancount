@@ -25,7 +25,7 @@ import { BalanceInlayController } from '../inlay-hints';
 import { FlagWarningController, DEFAULT_FLAG_WARNINGS } from '../flag-warnings';
 import { LedgerFileController } from '../ledger-file-view';
 import { includeLinksExtension } from '../include-links';
-import { instantAlignmentPlan } from '../instant-alignment';
+import { instantAlignmentPlan } from '../edits';
 import { postingIndentPlan } from '../posting-indent';
 import { transactionFoldAt } from '../transaction-fold';
 import { ledgerDoc as ledgerOf, ledgerKind } from '../fences';
