@@ -31,6 +31,8 @@ import { transactionFoldAt } from '../transaction-fold';
 import { ledgerDoc as ledgerOf, ledgerKind } from '../fences';
 import { flagDiagnostics, flagDiagnosticsFromRegions } from '../code-actions';
 import { LedgerIndex } from '../ledger-index';
+import { ownSlot } from '../suggest';
+import type { SlotKind } from '../slot';
 import type { App } from 'obsidian';
 import { editorInfoField } from 'obsidian';
 import { updateFlagOkayDiagnostics } from '../diagnostics';
@@ -248,6 +250,22 @@ function foldWorkload(): [() => unknown, () => unknown] {
 	return [run, run];
 }
 
+const SLOT_KINDS: SlotKind[] = ['snippet', 'payee', 'narration', 'account', 'commodity', 'tag', 'link'];
+
+function completeKinds(doc: Text, file: typeof ledgerFile, line: number, ch: number): Array<SlotKind | null> {
+	const text = doc.toString();
+	const editor = {
+		getLine: (n: number) => doc.line(n + 1).text,
+		getValue: () => text,
+		cm: { state: { doc } },
+	};
+	const cursor = { line: line - 1, ch };
+	return SLOT_KINDS.map((kind) => ownSlot(kind, cursor, editor as never, file as never, true)?.kind ?? null);
+}
+
+const postingAccountCh = ledgerDoc.line(ledgerLine).text.indexOf(' ', 2);
+const journalCh = markdownDoc.line(1).text.length;
+
 const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['key_inlay', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.inlay])],
 	['key_flags', typingWorkload(ledgerDoc, ledgerFile, ledgerLine, [cls.flags])],
@@ -261,6 +279,8 @@ const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['enter', pure(() => postingIndentPlan(ledgerDoc.toString(), [{ anchor: ledgerDoc.line(ledgerLine).to, head: ledgerDoc.line(ledgerLine).to }]))],
 	['save', saveWorkload()],
 	['fold', foldWorkload()],
+	['complete', pure(() => completeKinds(ledgerDoc, ledgerFile, ledgerLine, postingAccountCh))],
+	['md_complete', pure(() => completeKinds(markdownDoc, noteFile, 1, journalCh))],
 ];
 
 const expectedPath = 'bench/editor-expected.json';

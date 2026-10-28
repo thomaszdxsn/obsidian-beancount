@@ -23,13 +23,11 @@
  * through later edits; undo/redo or a change outside its stops ends it.
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { editorLedger } from './fences';
-import { completionSlot } from './slot';
 import { buildPayeeAutofill } from './payee-template';
 import type { TemplatePosting } from './payee-template';
 import { SnippetSession } from './snippet-suggest';
 import type { TabStop } from './snippets';
-import { IndexSuggest } from './suggest';
+import { IndexSuggest, ownSlot } from './suggest';
 import type { CompletionIndex } from './suggest';
 
 /** What payee completion needs to fill postings after a pick. */
@@ -140,15 +138,9 @@ export class PayeeSuggest extends IndexSuggest {
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		if (!this.enabled()) return null;
-		const line = editor.getLine(cursor.line);
-		const slot = completionSlot({
-			line,
-			ch: cursor.ch,
-			lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
-			completeNarration: true,
-		});
-		if (slot?.kind !== 'payee') return null;
-		return this.triggerInfo(cursor, slot.query);
+		const slot = ownSlot('payee', cursor, editor, file, true);
+		if (!slot) return null;
+		return this.triggerInfo(cursor, slot);
 	}
 
 	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {

@@ -16,7 +16,7 @@ import { WARNING_LINE_CLASS } from '../flag-warnings';
 import type { MockViewPlugin } from './mocks/codemirror';
 import { notices } from './mocks/obsidian';
 import type { Plugin as RecordingPlugin } from './mocks/obsidian';
-import { createEditor, FakeVault, flush } from './fakes';
+import { createEditor, FakeVault, flush, registered } from './fakes';
 import type { FakeEditor, FakeFile } from './fakes';
 
 vi.mock('@codemirror/view', async (original) => {
@@ -28,14 +28,6 @@ vi.mock('@codemirror/view', async (original) => {
 const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
 
-function registered<T>(
-	plugin: { registrations: { editorSuggests: unknown[] } },
-	ctor: new (...args: never[]) => T
-): T {
-	const found = plugin.registrations.editorSuggests.find((s): s is T => s instanceof ctor);
-	if (!found) throw new Error(`missing ${ctor.name}`);
-	return found;
-}
 
 interface OpenLeaf {
 	view: { file: FakeFile | null; editor: FakeEditor | null };

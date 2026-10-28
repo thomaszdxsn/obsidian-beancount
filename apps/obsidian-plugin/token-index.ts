@@ -25,6 +25,11 @@ export const COMMODITY_PREFIX_RE = new RegExp(
 export const TAG_PREFIX_RE = /(?:^|[ \t])#([A-Za-z0-9\-_/.]*)$/;
 export const LINK_PREFIX_RE = /(?:^|[ \t])\^([A-Za-z0-9\-_/.]*)$/;
 
+/** Characters that continue a tag or link token after the sigil. */
+export const TAG_LINK_CHAR_RE = /[A-Za-z0-9\-_/.]/;
+/** Characters that continue a commodity token. */
+export const COMMODITY_CHAR_RE = /[A-Za-z0-9._'-]/;
+
 /**
  * The narration field while typing: the payee string closed, the narration
  * string still open at the cursor. A closed second field cannot match —

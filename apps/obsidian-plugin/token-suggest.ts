@@ -11,26 +11,8 @@
  * are ordinary prose elsewhere (headings, "Meeting with The", "10 US dollars").
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { editorLedger } from './fences';
-import { completionSlot, type SlotKind } from './slot';
 import type { CompletionIndex } from './suggest';
-import { IndexSuggest } from './suggest';
-
-function ownSlot(
-	kind: SlotKind,
-	cursor: EditorPosition,
-	editor: Editor,
-	file: TFile | null,
-	completeNarration: boolean
-) {
-	const slot = completionSlot({
-		line: editor.getLine(cursor.line),
-		ch: cursor.ch,
-		lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
-		completeNarration,
-	});
-	return slot?.kind === kind ? slot : null;
-}
+import { IndexSuggest, ownSlot } from './suggest';
 
 /**
  * Tag completion: typing `#` (plus a partial name) inside ledger text
@@ -42,7 +24,7 @@ export class TagSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		const slot = ownSlot('tag', cursor, editor, file, true);
 		if (!slot) return null;
-		return this.triggerInfo(cursor, slot.query);
+		return this.triggerInfo(cursor, slot);
 	}
 }
 
@@ -51,7 +33,7 @@ export class LinkSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		const slot = ownSlot('link', cursor, editor, file, true);
 		if (!slot) return null;
-		return this.triggerInfo(cursor, slot.query);
+		return this.triggerInfo(cursor, slot);
 	}
 }
 
@@ -65,7 +47,7 @@ export class CommoditySuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		const slot = ownSlot('commodity', cursor, editor, file, true);
 		if (!slot) return null;
-		return this.triggerInfo(cursor, slot.query);
+		return this.triggerInfo(cursor, slot);
 	}
 }
 
@@ -90,9 +72,10 @@ export class NarrationSuggest extends IndexSuggest {
 	}
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		const slot = ownSlot('narration', cursor, editor, file, this.enabled());
+		if (!this.enabled()) return null;
+		const slot = ownSlot('narration', cursor, editor, file, true);
 		if (!slot) return null;
-		return this.triggerInfo(cursor, slot.query);
+		return this.triggerInfo(cursor, slot);
 	}
 
 	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {

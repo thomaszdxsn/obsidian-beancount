@@ -10,9 +10,7 @@
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { describeAccount } from './account-index';
 import type { AccountQuery } from './ledger-index';
-import { editorLedger } from './fences';
-import { completionSlot } from './slot';
-import { IndexSuggest } from './suggest';
+import { IndexSuggest, ownSlot } from './suggest';
 
 export class AccountSuggest extends IndexSuggest {
 	constructor(
@@ -30,14 +28,8 @@ export class AccountSuggest extends IndexSuggest {
 	}
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		const line = editor.getLine(cursor.line);
-		const slot = completionSlot({
-			line,
-			ch: cursor.ch,
-			lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
-			completeNarration: true,
-		});
-		if (slot?.kind !== 'account') return null;
-		return this.triggerInfo(cursor, slot.query);
+		const slot = ownSlot('account', cursor, editor, file, true);
+		if (!slot) return null;
+		return this.triggerInfo(cursor, slot);
 	}
 }

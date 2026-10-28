@@ -13,12 +13,63 @@ import type {
 	EditorSuggestTriggerInfo,
 	TFile,
 } from 'obsidian';
+import { editorLedger } from './fences';
+import { completionSlot } from './slot';
+import type { CompletionSlot, SlotKind } from './slot';
 
 /** Anything `IndexSuggest` can rank against. */
 export interface CompletionIndex {
 	match(query: string): string[];
 	remember?(value: string): void;
 }
+
+type SlotCache = {
+	editor: Editor;
+	line: number;
+	ch: number;
+	completeNarration: boolean;
+	slot: CompletionSlot | null;
+};
+
+let slotCache: SlotCache | null = null;
+
+/** Shared slot for this keystroke: one `completionSlot` per editor/line/ch. */
+export function ownSlot(
+	kind: SlotKind,
+	cursor: EditorPosition,
+	editor: Editor,
+	file: TFile | null,
+	completeNarration: boolean
+): CompletionSlot | null {
+	const slot = cachedSlot(cursor, editor, file, completeNarration);
+	return slot?.kind === kind ? slot : null;
+}
+
+function cachedSlot(
+	cursor: EditorPosition,
+	editor: Editor,
+	file: TFile | null,
+	completeNarration: boolean
+): CompletionSlot | null {
+	if (
+		slotCache &&
+		slotCache.editor === editor &&
+		slotCache.line === cursor.line &&
+		slotCache.ch === cursor.ch &&
+		slotCache.completeNarration === completeNarration
+	) {
+		return slotCache.slot;
+	}
+	const slot = completionSlot({
+		line: editor.getLine(cursor.line),
+		ch: cursor.ch,
+		lineIsLedger: () => editorLedger(editor, file).lineIsLedger(cursor.line),
+		completeNarration,
+	});
+	slotCache = { editor, line: cursor.line, ch: cursor.ch, completeNarration, slot };
+	return slot;
+}
+
 
 export abstract class IndexSuggest extends EditorSuggest<string> {
 	constructor(
@@ -49,15 +100,15 @@ export abstract class IndexSuggest extends EditorSuggest<string> {
 		this.close();
 	}
 
-	/** Trigger info for `query` typed at `cursor`, or null when nothing matches. */
-	protected triggerInfo(cursor: EditorPosition, query: string): EditorSuggestTriggerInfo | null {
+	/** Trigger info for `slot` at `cursor`, or null when nothing matches. */
+	protected triggerInfo(cursor: EditorPosition, slot: CompletionSlot): EditorSuggestTriggerInfo | null {
 		// Stay quiet unless the query prefixes a cached string; a bare token
 		// or the just-typed string itself has nothing to offer.
-		if (this.candidates(query).length === 0) return null;
+		if (this.candidates(slot.query).length === 0) return null;
 		return {
-			start: { line: cursor.line, ch: cursor.ch - query.length },
-			end: cursor,
-			query,
+			start: { line: cursor.line, ch: slot.startCh },
+			end: { line: cursor.line, ch: slot.endCh },
+			query: slot.query,
 		};
 	}
 

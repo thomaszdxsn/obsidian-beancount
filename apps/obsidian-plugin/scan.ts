@@ -284,7 +284,7 @@ function txnHeader(line: string, date: string, flag: string, flagFrom: number, r
 }
 
 /** YYYY-MM-DD or YYYY/MM/DD at column 0, plus the first non-blank after it. */
-function datedPrefix(line: string): { text: string; date: string; afterDate: number } | null {
+export function datedPrefix(line: string): { text: string; date: string; afterDate: number } | null {
 	const text = stripCR(line);
 	if (text.length < 10) return null;
 	const y0 = text.charCodeAt(0);

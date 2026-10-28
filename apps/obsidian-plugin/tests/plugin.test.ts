@@ -15,7 +15,7 @@ import type {
 } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
-import { createEditor, FakeClock, FakeVault, flush } from './fakes';
+import { createEditor, FakeClock, FakeVault, flush, registered } from './fakes';
 import { alignLines, alignText } from '../align';
 import { FLAG_OKAY_TITLE, FLAGGED_MESSAGE, PAD_TRANSACTION_TITLE, openAccountTitle } from '../code-actions';
 import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
@@ -100,14 +100,6 @@ async function loadPlugin(
 	return { plugin, vault };
 }
 
-function registered<T>(
-	plugin: { registrations: { editorSuggests: unknown[] } },
-	ctor: new (...args: never[]) => T
-): T {
-	const found = plugin.registrations.editorSuggests.find((s): s is T => s instanceof ctor);
-	if (!found) throw new Error(`missing ${ctor.name}`);
-	return found;
-}
 
 /** Plugin tests drive suggesters with partial fakes, not a full EditorSuggestContext. */
 type QueryIndex = { getSuggestions(context: { query: string }): string[] };
@@ -306,16 +298,9 @@ describe('BeancountPlugin', () => {
 		const line = createEditor(['2026-09-30 * "Shell" "Fu']);
 		const cursor = { line: 0, ch: line.lines[0].length };
 		const ledger = { path: 'ledger.bean', extension: 'bean' };
-		// Default settings leave the field alone…
 		expect(narrations.onTrigger(cursor, line, ledger)).toBeNull();
-		// …the toggle turns it on…
 		plugin.settings.completeNarration = true;
 		expect(narrations.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
-		// …and a stored true loads enabled.
-		const loaded = await loadPlugin(vault, { completeNarration: true });
-		await flush();
-		const enabled = registered(loaded.plugin, NarrationSuggest) as TriggerSuggest;
-		expect(enabled.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
 	});
 
 

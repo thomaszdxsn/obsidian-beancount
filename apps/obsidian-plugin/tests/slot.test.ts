@@ -16,7 +16,7 @@ function slotOf(
 	return completionSlot({
 		line,
 		ch,
-		lineIsLedger: opts.lineIsLedger ?? true,
+		lineIsLedger: () => opts.lineIsLedger ?? true,
 		completeNarration: opts.completeNarration ?? true,
 	});
 }
@@ -43,6 +43,10 @@ describe('completionSlot', () => {
 		['#t|r', null],
 		['^r|e', null],
 		['10.00 U|S', null],
+		['#Foo|/x', null],
+		['^Re|/', null],
+		['  Assets:Cash  10.00 US|.', null],
+		['  Assets:Cash  10.00 US|\'', null],
 		['"Who|le Foods"', null],
 		['"Fu|el"', null],
 		['2026-09-30 * "Shel|"', { kind: 'payee', query: 'Shel', startCh: 14, endCh: 18 }],
@@ -62,6 +66,12 @@ describe('completionSlot', () => {
 
 	it('stays quiet on a narration field when completeNarration is off', () => {
 		expect(slotOf('2026-09-30 * "Shell" "Fu|', { completeNarration: false })).toBeNull();
+		expect(slotOf('2026-09-30 * "Shel|', { completeNarration: false })).toEqual({
+			kind: 'payee',
+			query: 'Shel',
+			startCh: 14,
+			endCh: 18,
+		});
 	});
 
 	it.each(['txn|', '#tr|', '^re|', '  Assets:Cash  10.00 US|'])(
@@ -70,6 +80,25 @@ describe('completionSlot', () => {
 			expect(slotOf(marked, { lineIsLedger: false })).toBeNull();
 		}
 	);
+
+	it('does not ask lineIsLedger until a field shape matches', () => {
+		let asked = 0;
+		const lineIsLedger = () => {
+			asked += 1;
+			return true;
+		};
+		expect(
+			completionSlot({ line: 'hello there', ch: 11, lineIsLedger, completeNarration: true })
+		).toBeNull();
+		expect(asked).toBe(0);
+		expect(completionSlot({ line: 'txn', ch: 3, lineIsLedger, completeNarration: true })).toEqual({
+			kind: 'snippet',
+			query: 'txn',
+			startCh: 0,
+			endCh: 3,
+		});
+		expect(asked).toBe(1);
+	});
 });
 
 describe('PopoverOpen', () => {

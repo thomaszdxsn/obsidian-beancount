@@ -331,3 +331,13 @@ export class FakeClock implements Clock {
 		this.current = until;
 	}
 }
+
+/** The plugin's registered EditorSuggest of class `ctor`. */
+export function registered<T>(
+	plugin: { registrations: { editorSuggests: unknown[] } },
+	ctor: new (...args: never[]) => T
+): T {
+	const found = plugin.registrations.editorSuggests.find((s): s is T => s instanceof ctor);
+	if (!found) throw new Error(`missing ${ctor.name}`);
+	return found;
+}

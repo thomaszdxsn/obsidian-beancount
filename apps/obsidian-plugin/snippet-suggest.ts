@@ -14,8 +14,8 @@ import { keymap, ViewPlugin } from '@codemirror/view';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
-import { editorLedger } from './fences';
-import { completionSlot, PopoverOpen } from './slot';
+import { PopoverOpen } from './slot';
+import { ownSlot } from './suggest';
 import { expandSnippet, matchSnippets } from './snippets';
 import type { Expansion, Snippet } from './snippets';
 
@@ -101,17 +101,11 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 	}
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		const line = editor.getLine(cursor.line);
-		const slot = completionSlot({
-			line,
-			ch: cursor.ch,
-			lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
-			completeNarration: true,
-		});
-		if (slot?.kind !== 'snippet') return null;
+		const slot = ownSlot('snippet', cursor, editor, file, true);
+		if (!slot) return null;
 		return {
-			start: { line: cursor.line, ch: 0 },
-			end: cursor,
+			start: { line: cursor.line, ch: slot.startCh },
+			end: { line: cursor.line, ch: slot.endCh },
 			query: slot.query,
 		};
 	}
