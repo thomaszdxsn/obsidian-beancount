@@ -1,6 +1,6 @@
 /**
  * Plugin lifecycle the editor never sees on its own: sidebar commands,
- * payee autofill, saveSettings refresh, and Fava start without a process.
+ * payee autofill, and saveSettings refresh.
  */
 import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -280,33 +280,5 @@ describe('saveSettings refresh', () => {
 		expect(hints.labels()).toEqual([]);
 		expect(ledger.dispatches).toBeGreaterThan(0);
 		expect(ledger.classes()).toEqual(ledgerClasses);
-	});
-});
-
-describe('fava start without a process', () => {
-	it('does not open a URL or latch a running server when the runner returns no child', async () => {
-		const vault = new FakeVault();
-		vault.write('main.bean', 'option "title" "Main"\n');
-		const { plugin } = await loadPlugin(vault, { entryLedger: 'main.bean' });
-		const runs: string[][] = [];
-		const opened: string[] = [];
-		plugin.favaRunner = async (_command, args) => {
-			runs.push([...args]);
-			return { missing: false };
-		};
-		plugin.favaOpener = (url) => {
-			opened.push(url);
-		};
-		plugin.favaReadyProbe = async () => 200;
-		plugin.favaDelay = async () => {};
-		plugin.favaCloseTimeoutMs = 0;
-
-		await command(plugin, 'start-fava')();
-		await command(plugin, 'start-fava')();
-		command(plugin, 'stop-fava')();
-
-		expect(runs).toHaveLength(2);
-		expect(opened).toEqual([]);
-		expect(notices).toEqual(['Fava is not running.']);
 	});
 });

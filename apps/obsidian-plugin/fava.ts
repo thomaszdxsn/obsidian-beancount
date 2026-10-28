@@ -6,6 +6,8 @@
 import type { ChildProcess } from 'child_process';
 import { spawn } from 'child_process';
 import { get as httpGet } from 'http';
+import { clipText } from './bean-check';
+import { resolveInVault } from './vault-path';
 
 /** Failures that mean "no such program" — everything else is a tool problem. */
 const SPAWN_FAILURES = new Set(['ENOENT', 'EACCES', 'ENOTDIR', 'EPERM']);
@@ -217,4 +219,204 @@ export function normalizeFavaPort(value: unknown): number {
 
 export function favaUrl(port: number): string {
 	return `http://${FAVA_HOST}:${normalizeFavaPort(port)}/`;
+}
+
+
+export const MISSING_FAVA_NOTICE =
+	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
+export const NO_LEDGER_FAVA_NOTICE =
+	'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.';
+
+export function resolveFavaLedger(
+	root: string,
+	entryLedger: string,
+	activePath: string | null,
+): { ok: true; absPath: string } | { ok: false; reason: 'no-ledger' | 'escape' } {
+	const requested = entryLedger.trim() || activePath || '';
+	if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
+		return { ok: false, reason: 'no-ledger' };
+	}
+	const resolved = resolveInVault(root, requested);
+	if (!resolved.ok) return { ok: false, reason: 'escape' };
+	return { ok: true, absPath: resolved.absPath };
+}
+
+export interface FavaPorts {
+	runner: FavaRunner;
+	opener: FavaOpener;
+	probe: FavaReadyProbe;
+	delay: (ms: number) => Promise<void>;
+	notify: (text: string) => void;
+	resolveLedger: (
+		entryLedger: string,
+		activePath: string | null,
+	) => { ok: true; absPath: string } | { ok: false; reason: 'no-ledger' | 'escape' };
+}
+
+export type FavaStartRequest = {
+	announce: boolean;
+	command: string;
+	port: number;
+	entryLedger: string;
+	activePath: string | null;
+};
+
+export class FavaProcess {
+	private child: ChildProcess | null = null;
+	private boundPort: number | null = null;
+	private serving = false;
+	private expectExit = false;
+	private stderr: () => string = () => '';
+	private inFlight: Promise<boolean> | null = null;
+	private readonly readyMs: number;
+	private readonly closeMs: number;
+
+	constructor(
+		private readonly ports: FavaPorts,
+		timeouts?: { readyMs: number; closeMs: number },
+	) {
+		this.readyMs = timeouts?.readyMs ?? FAVA_READY_TIMEOUT_MS;
+		this.closeMs = timeouts?.closeMs ?? FAVA_CLOSE_TIMEOUT_MS;
+	}
+
+	async start(req: FavaStartRequest): Promise<void> {
+		if (this.inFlight) {
+			const started = await this.inFlight;
+			if (started && this.isRunning()) this.reveal(req);
+			return;
+		}
+		if (this.isRunning() && this.serving) {
+			this.reveal(req);
+			return;
+		}
+		this.inFlight =
+			this.isRunning() && this.child ? this.waitUntilServes(this.child) : this.spawn(req);
+		try {
+			const started = await this.inFlight;
+			if (started && this.isRunning()) this.reveal(req);
+		} finally {
+			this.inFlight = null;
+		}
+	}
+
+	stop(): void {
+		if (!this.isRunning()) {
+			this.clear();
+			this.ports.notify('Fava is not running.');
+			return;
+		}
+		this.expectExit = true;
+		this.child?.kill();
+		this.clear();
+		this.ports.notify('Fava stopped.');
+	}
+
+	dispose(): void {
+		this.expectExit = true;
+		this.child?.kill();
+		this.clear();
+	}
+
+	private isRunning(): boolean {
+		return this.child != null && this.child.exitCode === null;
+	}
+
+	private clear(): void {
+		this.child = null;
+		this.boundPort = null;
+		this.serving = false;
+		this.stderr = () => '';
+	}
+
+	private reveal(req: FavaStartRequest): void {
+		if (!req.announce) return;
+		const bound = this.boundPort ?? normalizeFavaPort(req.port);
+		const wanted = normalizeFavaPort(req.port);
+		const url = favaUrl(bound);
+		this.ports.opener(url);
+		if (bound !== wanted) {
+			this.ports.notify(
+				`Fava is already running on port ${bound}; stop it and start again to use port ${wanted}.`,
+			);
+			return;
+		}
+		this.ports.notify(`Fava is running at ${url}`);
+	}
+
+	private async waitUntilServes(child: ChildProcess): Promise<boolean> {
+		const url = favaUrl(this.boundPort ?? DEFAULT_FAVA_PORT);
+		const getStderr = this.stderr;
+		const outcome = await waitForFavaReady(child, url, this.ports.probe, {
+			timeoutMs: this.readyMs,
+			delay: this.ports.delay,
+			closeTimeoutMs: this.closeMs,
+		});
+		if (outcome === 'ready') {
+			this.serving = true;
+			return true;
+		}
+		if (outcome === 'timeout') {
+			if (!this.expectExit) this.ports.notify(`Fava did not answer at ${url}`);
+			return false;
+		}
+		if (!this.expectExit) {
+			this.ports.notify(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
+		}
+		if (this.child === child) this.clear();
+		return false;
+	}
+
+	private async spawn(req: FavaStartRequest): Promise<boolean> {
+		if (!isFavaBinary(req.command)) {
+			this.ports.notify(MISSING_FAVA_NOTICE);
+			return false;
+		}
+		const requested = req.entryLedger.trim() || req.activePath || '';
+		const ledger = this.ports.resolveLedger(req.entryLedger, req.activePath);
+		if (!ledger.ok) {
+			if (ledger.reason === 'no-ledger') this.ports.notify(NO_LEDGER_FAVA_NOTICE);
+			else this.ports.notify(`Fava: entry ledger must be a vault file, not "${clipText(requested)}"`);
+			return false;
+		}
+		const port = normalizeFavaPort(req.port);
+		const result = await this.ports.runner(req.command, [
+			'-H',
+			FAVA_HOST,
+			'-p',
+			String(port),
+			ledger.absPath,
+		]);
+		if (result.missing) {
+			this.ports.notify(MISSING_FAVA_NOTICE);
+			return false;
+		}
+		const child = result.child ?? null;
+		if (!child) return false;
+		const getStderr = captureFavaStderr(child);
+		this.stderr = getStderr;
+		this.expectExit = false;
+		this.serving = false;
+		this.child = child;
+		this.boundPort = port;
+		let closed = false;
+		child.once('close', () => {
+			closed = true;
+		});
+		child.once('exit', (code) => {
+			const unexpected = !this.expectExit && this.serving && this.child === child;
+			void (async () => {
+				await waitForChildClose(child, {
+					alreadyClosed: closed,
+					timeoutMs: this.closeMs,
+					delay: this.ports.delay,
+				});
+				const stderr = getStderr();
+				if (this.child === child) this.clear();
+				if (unexpected && !this.expectExit) {
+					this.ports.notify(`Fava exited: ${favaExitReason(stderr, code)}`);
+				}
+			})();
+		});
+		return this.waitUntilServes(child);
+	}
 }

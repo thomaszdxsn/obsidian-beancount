@@ -1,8 +1,6 @@
 import { Menu, Notice, Plugin } from 'obsidian';
 import type { App, Editor, FileSystemAdapter, MarkdownView, PluginManifest, TAbstractFile, TFile } from 'obsidian';
 import type { EditorView } from '@codemirror/view';
-import type { ChildProcess } from 'child_process';
-import { isAbsolute, relative, resolve, sep } from 'path';
 import { isLedgerFile, ledgerKind } from './fences';
 import { formatErrorNotice } from './format';
 import {
@@ -17,27 +15,21 @@ import { beancountMode } from './beancount-mode';
 import { AccountSuggest } from './account-suggest';
 import { accountHoverTooltip } from './account-hover';
 import type { BeanCheckRunner } from './bean-check';
-import { clipText, runBeanCheck } from './bean-check';
+import { runBeanCheck } from './bean-check';
 import { flagOkayEdit, insertOpenDirective, padEdit, quickFixesForLine } from './code-actions';
 import type { QuickFix, TextEdit } from './code-actions';
 import { beanDiagnostics, createDiagnosticsExtension, flagOkayDiagnostics, setEditorBeanDiagnostics } from './diagnostics';
 import type { DiagnosticClickHost } from './diagnostics';
 import {
-	captureFavaStderr,
 	FAVA_CLOSE_TIMEOUT_MS,
-	FAVA_HOST,
 	FAVA_READY_TIMEOUT_MS,
-	favaExitReason,
-	favaUrl,
-	isFavaBinary,
-	normalizeFavaPort,
+	FavaProcess,
 	openFavaUrl,
 	probeFavaUrl,
+	resolveFavaLedger,
 	runFavaProcess,
-	waitForChildClose,
-	waitForFavaReady,
 } from './fava';
-import type { FavaOpener, FavaReadyProbe, FavaRunner } from './fava';
+import type { FavaStartRequest } from './fava';
 import { FlagWarningController } from './flag-warnings';
 import { BalanceInlayController } from './inlay-hints';
 import { insertTodayDate } from './insert-date';
@@ -105,11 +97,6 @@ function installBeancountModes(registry: CmModeRegistry | undefined): (() => voi
 	};
 }
 
-const MISSING_FAVA_NOTICE =
-	'fava not found — install fava (pip install fava) or set the Fava path in the plugin settings.';
-const NO_LEDGER_FAVA_NOTICE =
-	'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.';
-
 
 /** A vault file, not a folder: folders have no `extension` to stamp an mtime on. */
 function isVaultFile(file: TAbstractFile | null): file is TFile {
@@ -145,31 +132,8 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private readonly flagWarnings = new FlagWarningController(this);
 	/** Ledger-file token colors and the separator ruler; refreshed with those settings. */
 	private readonly ledgerFile = new LedgerFileController(this);
-	/** How Fava is started; tests swap in their own runner. */
-	favaRunner: FavaRunner = runFavaProcess;
-	/** Opens the Fava UI after start or reuse; tests swap this. */
-	favaOpener: FavaOpener = openFavaUrl;
-	/** HTTP GET of Fava's root; tests swap this so they never open sockets. */
-	favaReadyProbe: FavaReadyProbe = probeFavaUrl;
-	/** Bound on waiting for Fava to answer; tests shrink this. */
-	favaReadyTimeoutMs = FAVA_READY_TIMEOUT_MS;
-	/** Pause between readiness probes and bound on the close wait; tests no-op this. */
-	favaDelay: (ms: number) => Promise<void> = (ms) =>
-		new Promise((resolve) => window.setTimeout(resolve, ms));
-	/** Bound on waiting for stdio close after Fava exits; tests shrink this. */
-	favaCloseTimeoutMs = FAVA_CLOSE_TIMEOUT_MS;
-	/** Live Fava child, killed when the plugin unloads. */
-	private favaChild: ChildProcess | null = null;
-	/** Port the live child was started with; reuse must open this URL. */
-	private favaBoundPort: number | null = null;
-	/** True once the live child answered HTTP with status < 400. */
-	private favaServing = false;
-	/** True when Stop Fava or unload is the reason the child will exit. */
-	private favaExpectExit = false;
-	/** Stderr tail of the live child; captured once at spawn. */
-	private favaStderr: () => string = () => '';
-	/** In-flight start so a second command cannot spawn another process. */
-	private favaStart: Promise<boolean> | null = null;
+	/** Fava child lifecycle; tests assign a process with fake ports before onload. */
+	fava!: FavaProcess;
 	/** Completion pick counts persisted beside settings in data.json. */
 	private usage: CompletionUsage = CompletionUsage.parse(null);
 
@@ -332,17 +296,27 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			name: 'Show account balances',
 			callback: () => revealBalancesView(this.app),
 		});
+		this.fava ??= new FavaProcess(
+			{
+				runner: runFavaProcess,
+				opener: openFavaUrl,
+				probe: probeFavaUrl,
+				delay: (ms) => new Promise((r) => window.setTimeout(r, ms)),
+				notify: (text) => new Notice(text),
+				resolveLedger: (entryLedger, activePath) =>
+					resolveFavaLedger(this.vaultRootPath(), entryLedger, activePath),
+			},
+			{ readyMs: FAVA_READY_TIMEOUT_MS, closeMs: FAVA_CLOSE_TIMEOUT_MS },
+		);
 		this.addCommand({
 			id: 'start-fava',
 			name: 'Start Fava',
-			callback: () => this.launchFava(true),
+			callback: () => void this.fava.start(this.favaRequest(true)),
 		});
 		this.addCommand({
 			id: 'stop-fava',
 			name: 'Stop Fava',
-			callback: () => {
-				this.stopFava();
-			},
+			callback: () => this.fava.stop(),
 		});
 		this.addSettingTab(new BeancountSettingTab(this.app, this));
 		this.registerEvent(this.app.vault.on('modify', (file) => this.onFileModified(file)));
@@ -363,12 +337,10 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			this.balanceInlays.destroy();
 			this.flagWarnings.destroy();
 			this.ledgerFile.destroy();
-			this.favaExpectExit = true;
-			this.favaChild?.kill();
-			this.clearFavaChild();
+			this.fava.dispose();
 		});
 		if (this.settings.runFavaOnActivate) {
-			this.app.workspace.onLayoutReady(() => void this.launchFava(false));
+			this.app.workspace.onLayoutReady(() => void this.fava.start(this.favaRequest(false)));
 		}
 	}
 
@@ -403,142 +375,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		await this.saveData({ ...this.settings, completionUsage: usage });
 	}
 
-	private isFavaRunning(): boolean {
-		return this.favaChild != null && this.favaChild.exitCode === null;
-	}
-
-	private clearFavaChild(): void {
-		this.favaChild = null;
-		this.favaBoundPort = null;
-		this.favaServing = false;
-		this.favaStderr = () => '';
-	}
-
-	private revealFava(announce: boolean): void {
-		if (!announce) return;
-		const bound = this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort);
-		const wanted = normalizeFavaPort(this.settings.favaPort);
-		const url = favaUrl(bound);
-		this.favaOpener(url);
-		if (bound !== wanted) {
-			new Notice(
-				`Fava is already running on port ${bound}; stop it and start again to use port ${wanted}.`
-			);
-			return;
-		}
-		new Notice(`Fava is running at ${url}`);
-	}
-
-	private stopFava(): void {
-		if (!this.isFavaRunning()) {
-			this.clearFavaChild();
-			new Notice('Fava is not running.');
-			return;
-		}
-		this.favaExpectExit = true;
-		this.favaChild?.kill();
-		this.clearFavaChild();
-		new Notice('Fava stopped.');
-	}
-
-	private async launchFava(announce: boolean): Promise<void> {
-		if (this.favaStart) {
-			const started = await this.favaStart;
-			if (started && this.isFavaRunning()) this.revealFava(announce);
-			return;
-		}
-		if (this.isFavaRunning() && this.favaServing) {
-			this.revealFava(announce);
-			return;
-		}
-		this.favaStart =
-			this.isFavaRunning() && this.favaChild
-				? this.waitUntilFavaServes(this.favaChild)
-				: this.startFavaProcess();
-		try {
-			const started = await this.favaStart;
-			if (started && this.isFavaRunning()) this.revealFava(announce);
-		} finally {
-			this.favaStart = null;
-		}
-	}
-
-	private async waitUntilFavaServes(child: ChildProcess): Promise<boolean> {
-		const url = favaUrl(this.favaBoundPort ?? normalizeFavaPort(this.settings.favaPort));
-		const getStderr = this.favaStderr;
-		const outcome = await waitForFavaReady(child, url, this.favaReadyProbe, {
-			timeoutMs: this.favaReadyTimeoutMs,
-			delay: this.favaDelay,
-			closeTimeoutMs: this.favaCloseTimeoutMs,
-		});
-		if (outcome === 'ready') {
-			this.favaServing = true;
-			return true;
-		}
-		if (outcome === 'timeout') {
-			if (!this.favaExpectExit) new Notice(`Fava did not answer at ${url}`);
-			return false;
-		}
-		if (!this.favaExpectExit) {
-			new Notice(`Fava exited: ${favaExitReason(getStderr(), child.exitCode)}`);
-		}
-		if (this.favaChild === child) this.clearFavaChild();
-		return false;
-	}
-
-	private async startFavaProcess(): Promise<boolean> {
-		const command = this.settings.favaPath.trim() || 'fava';
-		if (!isFavaBinary(command)) {
-			new Notice(MISSING_FAVA_NOTICE);
-			return false;
-		}
-		const requested = this.settings.entryLedger.trim() || this.app.workspace.getActiveFile()?.path || '';
-		if (!requested.endsWith('.bean') && !requested.endsWith('.beancount')) {
-			new Notice(NO_LEDGER_FAVA_NOTICE);
-			return false;
-		}
-		const adapter = this.app.vault.adapter as FileSystemAdapter;
-		const root = vaultRoot(adapter.getBasePath());
-		const confined = resolve(root, requested);
-		const rel = relative(root, confined);
-		if (rel === '' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-			new Notice(`Fava: entry ledger must be a vault file, not "${clipText(requested)}"`);
-			return false;
-		}
-		const port = normalizeFavaPort(this.settings.favaPort);
-		const result = await this.favaRunner(command, ['-H', FAVA_HOST, '-p', String(port), confined]);
-		if (result.missing) {
-			new Notice(MISSING_FAVA_NOTICE);
-			return false;
-		}
-		const child = result.child ?? null;
-		if (!child) return false;
-		const getStderr = captureFavaStderr(child);
-		this.favaStderr = getStderr;
-		this.favaExpectExit = false;
-		this.favaServing = false;
-		this.favaChild = child;
-		this.favaBoundPort = port;
-		let closed = false;
-		child.once('close', () => {
-			closed = true;
-		});
-		child.once('exit', (code) => {
-			const unexpected = !this.favaExpectExit && this.favaServing && this.favaChild === child;
-			void (async () => {
-				await waitForChildClose(child, {
-					alreadyClosed: closed,
-					timeoutMs: this.favaCloseTimeoutMs,
-					delay: this.favaDelay,
-				});
-				const stderr = getStderr();
-				if (this.favaChild === child) this.clearFavaChild();
-				if (unexpected && !this.favaExpectExit) {
-					new Notice(`Fava exited: ${favaExitReason(stderr, code)}`);
-				}
-			})();
-		});
-		return this.waitUntilFavaServes(child);
+	private favaRequest(announce: boolean): FavaStartRequest {
+		return {
+			announce,
+			command: this.settings.favaPath.trim() || 'fava',
+			port: this.settings.favaPort,
+			entryLedger: this.settings.entryLedger,
+			activePath: this.app.workspace.getActiveFile()?.path ?? null,
+		};
 	}
 
 	onDiagnosticClick(view: EditorView, line: number, event: MouseEvent): boolean {

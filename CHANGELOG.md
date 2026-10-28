@@ -77,6 +77,7 @@ UI/UX fixes from the architecture review (#75).
 - Ledger index 对每个 vault 文件按 Ledger region 扫描一次得到 File facts，改名/删除只保留一份（#72）。
 - Completion slot：光标处该谁补全只判断一次（#71）。
 - 对齐、Format ledger 与按 `.` 共用同一份改写计划（#73）。
+- Start/Stop Fava 的子进程生命周期收进 `FavaProcess`（#74）。
 
 ## 0.2.2
 
