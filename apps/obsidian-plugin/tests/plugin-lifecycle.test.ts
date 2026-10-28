@@ -8,6 +8,7 @@ import type { App, PluginManifest } from 'obsidian';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import type * as CMState from '@codemirror/state';
 import BeancountPlugin from '../main';
+import { PayeeSuggest } from '../payee-suggest';
 import { VIEW_TYPE_OUTLINE } from '../outline-view';
 import { VIEW_TYPE_PROBLEMS } from '../problems-view';
 import { BeancountBalancesView, VIEW_TYPE_BALANCES } from '../report-view';
@@ -26,6 +27,15 @@ vi.mock('@codemirror/view', async (original) => {
 
 const { Text } = createRequire(import.meta.url)('@codemirror/state') as typeof CMState;
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
+
+function registered<T>(
+	plugin: { registrations: { editorSuggests: unknown[] } },
+	ctor: new (...args: never[]) => T
+): T {
+	const found = plugin.registrations.editorSuggests.find((s): s is T => s instanceof ctor);
+	if (!found) throw new Error(`missing ${ctor.name}`);
+	return found;
+}
 
 interface OpenLeaf {
 	view: { file: FakeFile | null; editor: FakeEditor | null };
@@ -213,13 +223,10 @@ describe('payee autofill', () => {
 		);
 		const { plugin } = await loadPlugin(vault);
 		await flush();
-		const suggest = plugin.registrations.editorSuggests[1];
-		if (!suggest || typeof suggest !== 'object' || !('getSuggestions' in suggest) || !('selectSuggestion' in suggest)) {
-			throw new Error('missing payee suggest');
-		}
-		if (typeof suggest.getSuggestions !== 'function' || typeof suggest.selectSuggestion !== 'function') {
-			throw new Error('missing payee suggest');
-		}
+		const suggest = registered(plugin, PayeeSuggest) as {
+			getSuggestions(context: { query: string }): string[];
+			selectSuggestion(value: string, evt: MouseEvent): void;
+		};
 		expect(suggest.getSuggestions({ query: 'Ca' })).toContain('Cafe');
 
 		const typing = createEditor(['2026-10-02 * "Ca']);

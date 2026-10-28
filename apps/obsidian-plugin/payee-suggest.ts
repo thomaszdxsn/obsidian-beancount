@@ -24,7 +24,7 @@
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { editorLedger } from './fences';
-import { PAYEE_PREFIX_RE } from './payee-index';
+import { completionSlot } from './slot';
 import { buildPayeeAutofill } from './payee-template';
 import type { TemplatePosting } from './payee-template';
 import { SnippetSession } from './snippet-suggest';
@@ -141,15 +141,14 @@ export class PayeeSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		if (!this.enabled()) return null;
 		const line = editor.getLine(cursor.line);
-		// Mid-field edits (any character but the closing quote right after the
-		// cursor) would make selection replace only the typed prefix and garble
-		// the rest of the field.
-		const after = line.charAt(cursor.ch);
-		if (after !== '' && after !== '"') return null;
-		const match = PAYEE_PREFIX_RE.exec(line.slice(0, cursor.ch));
-		if (!match) return null;
-		if (!editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
-		return this.triggerInfo(cursor, match[1]);
+		const slot = completionSlot({
+			line,
+			ch: cursor.ch,
+			lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
+			completeNarration: true,
+		});
+		if (slot?.kind !== 'payee') return null;
+		return this.triggerInfo(cursor, slot.query);
 	}
 
 	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {

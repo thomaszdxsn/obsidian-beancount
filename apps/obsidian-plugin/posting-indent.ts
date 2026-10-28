@@ -21,6 +21,7 @@ import { editorInfoField } from 'obsidian';
 import { blockRangeInLedger } from './align';
 import { ledgerDoc, ledgerKind } from './fences';
 import { classifyLine } from './scan';
+import { PopoverOpen } from './slot';
 
 /** The text Enter inserts where an entry continues: newline plus its indent. */
 const ENTRY_INDENT = '\n  ';
@@ -114,20 +115,15 @@ export function postingIndentPlan(
 	return indented ? { changes, carets: landed } : null;
 }
 
-/** A completion popover whose open state decides who owns Enter. */
-interface SuggestState {
-	context: unknown;
-}
-
 /**
  * The `Enter` keymap binding. `Prec.high` so it is asked before the editor's
  * own Enter bindings, but returning false hands the key straight on to them.
  */
-export function postingIndentExtension(suggests: readonly SuggestState[]): Extension {
+export function postingIndentExtension(popovers: PopoverOpen): Extension {
 	const run = (view: EditorView): boolean => {
 		// Enter accepts the open completion popover, ours included; the
 		// indent must not steal the keystroke from under it.
-		if (suggests.some((suggest) => suggest.context !== null)) return false;
+		if (popovers.isOpen) return false;
 		const carets = view.state.selection.ranges.map((range) => ({ anchor: range.anchor, head: range.head }));
 		const file = view.state.field(editorInfoField, false)?.file;
 		const ledger = ledgerDoc(ledgerKind(file), view.state.doc);

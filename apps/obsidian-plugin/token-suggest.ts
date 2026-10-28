@@ -12,17 +12,25 @@
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { editorLedger } from './fences';
-import { COMMODITY_PREFIX_RE, LINK_PREFIX_RE, NARRATION_PREFIX_RE, TAG_PREFIX_RE } from './token-index';
-import { inStringOrComment } from './scan';
+import { completionSlot, type SlotKind } from './slot';
 import type { CompletionIndex } from './suggest';
 import { IndexSuggest } from './suggest';
 
-/** Whether a token character follows the cursor: a pick would garble it. */
-function tokenAfter(line: string, cursor: EditorPosition, tokenChars: RegExp): boolean {
-	const after = line.charAt(cursor.ch);
-	return after !== '' && tokenChars.test(after);
+function ownSlot(
+	kind: SlotKind,
+	cursor: EditorPosition,
+	editor: Editor,
+	file: TFile | null,
+	completeNarration: boolean
+) {
+	const slot = completionSlot({
+		line: editor.getLine(cursor.line),
+		ch: cursor.ch,
+		lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
+		completeNarration,
+	});
+	return slot?.kind === kind ? slot : null;
 }
-
 
 /**
  * Tag completion: typing `#` (plus a partial name) inside ledger text
@@ -32,31 +40,18 @@ function tokenAfter(line: string, cursor: EditorPosition, tokenChars: RegExp): b
  */
 export class TagSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		const line = editor.getLine(cursor.line);
-		if (tokenAfter(line, cursor, /[A-Za-z0-9\-_/.]/)) return null;
-		const prefix = line.slice(0, cursor.ch);
-		const match = TAG_PREFIX_RE.exec(prefix);
-		if (!match) return null;
-		// The `#` transaction flag: `2026-09-30 #` is a date and flag, not a
-		// tag with an empty name.
-		if (match[1] === '' && new RegExp(`^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}[ \\t]*#$`).test(prefix)) return null;
-		// The context scan reads the whole buffer, so it runs only for a line
-		// that has already matched its trigger shape.
-		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
-		return this.triggerInfo(cursor, `#${match[1]}`);
+		const slot = ownSlot('tag', cursor, editor, file, true);
+		if (!slot) return null;
+		return this.triggerInfo(cursor, slot.query);
 	}
 }
 
 /** Link completion: the same as tags, triggered by `^`. */
 export class LinkSuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		const line = editor.getLine(cursor.line);
-		if (tokenAfter(line, cursor, /[A-Za-z0-9\-_/.]/)) return null;
-		const prefix = line.slice(0, cursor.ch);
-		const match = LINK_PREFIX_RE.exec(prefix);
-		if (!match) return null;
-		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
-		return this.triggerInfo(cursor, `^${match[1]}`);
+		const slot = ownSlot('link', cursor, editor, file, true);
+		if (!slot) return null;
+		return this.triggerInfo(cursor, slot.query);
 	}
 }
 
@@ -68,13 +63,9 @@ export class LinkSuggest extends IndexSuggest {
  */
 export class CommoditySuggest extends IndexSuggest {
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		const line = editor.getLine(cursor.line);
-		if (tokenAfter(line, cursor, /[A-Za-z0-9._'-]/)) return null;
-		const prefix = line.slice(0, cursor.ch);
-		const match = COMMODITY_PREFIX_RE.exec(prefix);
-		if (!match) return null;
-		if (inStringOrComment(prefix) || !editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
-		return this.triggerInfo(cursor, match[1]);
+		const slot = ownSlot('commodity', cursor, editor, file, true);
+		if (!slot) return null;
+		return this.triggerInfo(cursor, slot.query);
 	}
 }
 
@@ -99,17 +90,9 @@ export class NarrationSuggest extends IndexSuggest {
 	}
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
-		if (!this.enabled()) return null;
-		const line = editor.getLine(cursor.line);
-		// Mid-field edits (any character but the closing quote right after the
-		// cursor) would make selection replace only the typed prefix and garble
-		// the rest of the field.
-		const after = line.charAt(cursor.ch);
-		if (after !== '' && after !== '"') return null;
-		const match = NARRATION_PREFIX_RE.exec(line.slice(0, cursor.ch));
-		if (!match) return null;
-		if (!editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
-		return this.triggerInfo(cursor, match[1]);
+		const slot = ownSlot('narration', cursor, editor, file, this.enabled());
+		if (!slot) return null;
+		return this.triggerInfo(cursor, slot.query);
 	}
 
 	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {

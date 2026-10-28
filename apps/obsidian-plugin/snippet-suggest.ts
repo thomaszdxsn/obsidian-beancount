@@ -15,13 +15,9 @@ import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { EditorSuggest } from 'obsidian';
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { editorLedger } from './fences';
-import { expandSnippet, matchSnippets, SNIPPETS } from './snippets';
+import { completionSlot, PopoverOpen } from './slot';
+import { expandSnippet, matchSnippets } from './snippets';
 import type { Expansion, Snippet } from './snippets';
-
-/** A completion popover whose open state decides who owns Tab. */
-interface SuggestState {
-	context: unknown;
-}
 
 /**
  * Tab-stop session for one in-progress expansion.
@@ -106,18 +102,17 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
 
 	onTrigger(cursor: EditorPosition, editor: Editor, file: TFile | null): EditorSuggestTriggerInfo | null {
 		const line = editor.getLine(cursor.line);
-		const after = line.charAt(cursor.ch);
-		if (after !== '' && after !== ' ' && after !== '\t') return null;
-		const query = line.slice(0, cursor.ch);
-		if (query.length === 0) return null;
-		// Directives live at column 0 of the ledger (or fence) line.
-		if (query.includes(' ') || query.includes('\t')) return null;
-		if (!SNIPPETS.some((snippet) => snippet.prefix.startsWith(query))) return null;
-		if (!editorLedger(editor, file).lineIsLedger(cursor.line)) return null;
+		const slot = completionSlot({
+			line,
+			ch: cursor.ch,
+			lineIsLedger: editorLedger(editor, file).lineIsLedger(cursor.line),
+			completeNarration: true,
+		});
+		if (slot?.kind !== 'snippet') return null;
 		return {
 			start: { line: cursor.line, ch: 0 },
 			end: cursor,
-			query,
+			query: slot.query,
 		};
 	}
 
@@ -154,9 +149,9 @@ export class SnippetSuggest extends EditorSuggest<Snippet> {
  * The same extension maps the stops through every transaction of the
  * editor that owns the session, and ends it on undo/redo.
  */
-export function snippetTabExtension(session: SnippetSession, suggests: readonly SuggestState[]): Extension {
+export function snippetTabExtension(session: SnippetSession, popovers: PopoverOpen): Extension {
 	const run = (view: EditorView): boolean => {
-		if (suggests.some((suggest) => suggest.context !== null)) return false;
+		if (popovers.isOpen) return false;
 		if (!session.active) return false;
 		const cursor = view.state.selection.ranges[0].head;
 		if (cursor > view.state.doc.toString().length) {
