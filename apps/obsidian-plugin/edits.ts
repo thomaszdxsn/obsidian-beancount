@@ -198,6 +198,7 @@ export function planInstantDot(
 	return { changes, carets: landed };
 }
 
+/** Apply `plan` in one transaction. Only a lone caret is forced; multi-cursor and selections are left to the editor. */
 export function applyEditPlan(editor: PlanEditor, plan: EditPlan): void {
 	if (plan.caret) {
 		editor.transaction({ changes: [...plan.changes], selection: { from: plan.caret } });
@@ -206,6 +207,7 @@ export function applyEditPlan(editor: PlanEditor, plan: EditPlan): void {
 	editor.transaction({ changes: [...plan.changes] });
 }
 
+/** Align decimal points. A lone caret is mapped; several carets or a selection are left to the editor. */
 export function runAlignCommand(
 	editor: AlignEditor,
 	file: { path: string; extension: string } | null,
@@ -223,6 +225,14 @@ export function runAlignCommand(
 	applyEditPlan(editor, plan);
 }
 
+/**
+ * Format ledger: a `.bean` / `.beancount` buffer is one ledger. Any other
+ * file, including an untitled buffer, formats each ```beancount / ```bean
+ * fence and leaves the rest. A syntax error names the document line and
+ * changes nothing. No notice when the text is already formatted — same as
+ * alignment finding nothing to do. Only a lone caret is mapped; multi-cursor
+ * and selections are left to the editor.
+ */
 export function runFormatCommand(
 	editor: AlignEditor,
 	file: { path: string; extension: string } | null,
@@ -306,13 +316,13 @@ export class AlignOnSave {
 		const kind = this.ports.ledgerKind(file);
 		const editor = this.ports.openEditor(file.path);
 		if (editor) {
+			// A file open in a leaf is edited through its editor: the editor buffer
+			// is what Obsidian autosaves, so a vault-level write would be clobbered
+			// by the next autosave from the still-unaligned buffer.
 			applyDocumentAlign(editor, separatorColumn, kind);
 			return;
 		}
-		// A file open in a leaf is edited through its editor: the editor buffer
-		// is what Obsidian autosaves, so a vault-level write would be clobbered
-		// by the next autosave from the still-unaligned buffer. Files not open
-		// in any leaf have no buffer to fight with.
+		// Files not open in any leaf have no buffer to fight with.
 		const text = await this.ports.read(file.path);
 		const aligned = alignByKind(kind, text, alignmentTarget(separatorColumn));
 		if (aligned === text) return;
@@ -345,8 +355,6 @@ function applyDocumentAlign(editor: OpenAlignEditor, separatorColumn: number, ki
 function isLedgerKind(kind: LedgerKind): boolean {
 	return kind === 'ledger-file';
 }
-
-
 
 function formatByKind(kind: LedgerKind, text: string, targetColumn: number) {
 	return isLedgerKind(kind) ? formatLedger(text, targetColumn) : formatFencedDocument(text, targetColumn);
