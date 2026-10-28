@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { App, Editor, EditorSuggestContext, Plugin, PluginManifest, TFile } from 'obsidian';
 import { Plugin as RecordingPlugin } from './mocks/obsidian';
-import { AccountIndex } from '../account-index';
 import { AccountSuggest } from '../account-suggest';
 import { CompletionUsage } from '../completion-rank';
-import { registerVaultIndex } from '../vault-index';
+import { LedgerIndex } from '../ledger-index';
 import { createEditor, FakeVault, flush } from './fakes';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
@@ -53,7 +52,7 @@ function contextFor(query: string): EditorSuggestContext {
 
 interface Fixture {
 	vault: FakeVault;
-	index: AccountIndex;
+	index: LedgerIndex;
 	suggest: AccountSuggest;
 	plugin: RecordingPlugin;
 }
@@ -62,9 +61,9 @@ function setup(files: Record<string, string> = {}): Fixture {
 	const vault = new FakeVault();
 	for (const [path, content] of Object.entries(files)) vault.write(path, content);
 	const plugin = new RecordingPlugin({ vault: vault.api }, manifest);
-	const index = new AccountIndex();
-	registerVaultIndex(plugin as unknown as Plugin, index);
-	return { vault, index, suggest: new AccountSuggest({} as App, index), plugin };
+	const index = new LedgerIndex();
+	index.applyVault(plugin as unknown as Plugin);
+	return { vault, index, suggest: new AccountSuggest({} as App, index.accounts), plugin };
 }
 
 describe('AccountSuggest.onTrigger', () => {
@@ -331,9 +330,9 @@ describe('AccountSuggest suggestions', () => {
 
 	it('remembers a pick so later prefix ties rank it first', () => {
 		const usage = CompletionUsage.parse({}, () => 1);
-		const index = new AccountIndex(usage);
-		index.setFileContent('a.bean', '2020-01-01 open Assets:Broker\n2020-01-01 open Assets:Cash');
-		const suggest = new AccountSuggest({} as App, index);
+		const index = new LedgerIndex(usage);
+		index.setFile('a.bean', '2020-01-01 open Assets:Broker\n2020-01-01 open Assets:Cash');
+		const suggest = new AccountSuggest({} as App, index.accounts);
 		const editor = createEditor(['  Assets:']);
 		suggest.context = {
 			start: { line: 0, ch: 2 },
@@ -342,19 +341,19 @@ describe('AccountSuggest suggestions', () => {
 			editor: editor as unknown as Editor,
 			file: {} as TFile,
 		} as EditorSuggestContext;
-		expect(index.match('Assets:')).toEqual(['Assets:Broker', 'Assets:Cash']);
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:Broker', 'Assets:Cash']);
 		suggest.selectSuggestion('Assets:Cash', {} as MouseEvent);
-		expect(index.match('Assets:')).toEqual(['Assets:Cash', 'Assets:Broker']);
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:Cash', 'Assets:Broker']);
 	});
 
 	it('does not remember a pick when no context is active', () => {
 		const usage = CompletionUsage.parse({}, () => 1);
-		const index = new AccountIndex(usage);
-		index.setFileContent('a.bean', '2020-01-01 open Assets:Broker\n2020-01-01 open Assets:Cash');
-		const suggest = new AccountSuggest({} as App, index);
+		const index = new LedgerIndex(usage);
+		index.setFile('a.bean', '2020-01-01 open Assets:Broker\n2020-01-01 open Assets:Cash');
+		const suggest = new AccountSuggest({} as App, index.accounts);
 		suggest.context = null;
 		suggest.selectSuggestion('Assets:Cash', {} as MouseEvent);
-		expect(index.match('Assets:')).toEqual(['Assets:Broker', 'Assets:Cash']);
+		expect(index.accounts.match('Assets:')).toEqual(['Assets:Broker', 'Assets:Cash']);
 	});
 	it('does nothing when no context is active', () => {
 		const { suggest } = setup();

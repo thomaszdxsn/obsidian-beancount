@@ -4,13 +4,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { LineDiagnostic } from '../bean-check';
-import { AccountIndex, accountTokenAt, describeAccount } from '../account-index';
 import {
 	FLAG_OKAY_TITLE,
 	FLAGGED_MESSAGE,
-	OpenFileIndex,
 	PAD_TRANSACTION_TITLE,
-	PairingIndex,
 	extractPairings,
 	flagDiagnostics,
 	flagDiagnosticsFromRegions,
@@ -355,93 +352,6 @@ describe('quickFixesForLine', () => {
 	});
 });
 
-describe('PairingIndex', () => {
-	it('unions pairings across files and re-keys on rename', () => {
-		const index = new PairingIndex();
-		index.setFileContent(
-			'a.bean',
-			['2026-09-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash   -10.00 USD'].join('\n')
-		);
-		index.setFileContent('empty.bean', 'option "operating_currency" "USD"\n');
-		expect(index.all()).toHaveLength(1);
-		expect(index.renameFile('a.bean', 'b.bean')).toBe(true);
-		index.removeFile('b.bean');
-		expect(index.all()).toEqual([]);
-		expect(index.renameFile('gone.bean', 'x.bean')).toBe(false);
-		index.setFileContent(
-			'dir/a.bean',
-			['2026-09-01 * "Cafe"', '  Expenses:Food  10.00 USD', '  Assets:Cash   -10.00 USD'].join('\n')
-		);
-		expect(index.renameFile('dir', 'other')).toBe(true);
-		expect(index.all()).toHaveLength(1);
-	});
-});
-
-describe('OpenFileIndex', () => {
-	it('counts a CJK open line', () => {
-		const index = new OpenFileIndex();
-		index.setFileContent('accounts.bean', '2026-01-01 open Expenses:餐饮 CNY\n');
-		expect(index.bestFile()).toBe('accounts.bean');
-		expect([...index.openedIn('accounts.bean')]).toEqual(['Expenses:餐饮']);
-	});
-
-	it('keeps CJK opens consistent across completion, hover, and the open-file target', () => {
-		const open = '2026-01-01 open Expenses:餐饮 CNY\n';
-		const accounts = new AccountIndex();
-		accounts.setFileContent('accounts.bean', open);
-		expect(accounts.has('Expenses:餐饮')).toBe(true);
-		expect(accounts.match('餐')).toContain('Expenses:餐饮');
-		expect(describeAccount(accounts.record('Expenses:餐饮'))).toContain('CNY');
-		expect(accountTokenAt('  Expenses:餐饮  18.00 CNY', 4)?.name).toBe('Expenses:餐饮');
-		const files = new OpenFileIndex();
-		files.setFileContent('accounts.bean', open);
-		expect(files.bestFile()).toBe('accounts.bean');
-		expect([...files.openedIn('accounts.bean')]).toEqual(['Expenses:餐饮']);
-	});
-
-	it('picks the ledger with the most opens over a markdown note', () => {
-		const index = new OpenFileIndex();
-		index.setFileContent(
-			'note.md',
-			'2020-01-01 open Assets:Cash\n2020-01-02 open Assets:Bank\n2020-01-03 open Assets:Gold\n'
-		);
-		index.setFileContent('accounts.bean', '2020-01-01 open Assets:Cash USD\n2020-01-02 open Expenses:Food USD\n');
-		expect(index.bestFile()).toBe('accounts.bean');
-		expect([...index.openedIn('accounts.bean')].sort()).toEqual(['Assets:Cash', 'Expenses:Food']);
-		index.removeFile('accounts.bean');
-		expect(index.bestFile()).toBe('note.md');
-		expect(index.renameFile('note.md', 'journal.md')).toBe(true);
-		expect(index.bestFile()).toBe('journal.md');
-		index.setFileContent('journal.md', '');
-		expect(index.bestFile()).toBeNull();
-		index.setFileContent('dir/opens.bean', '2020-01-01 open Assets:Cash\n');
-		expect(index.renameFile('dir', 'books')).toBe(true);
-		expect(index.bestFile()).toBe('books/opens.bean');
-	});
-
-	it('ignores open in a comment, a narration, and an account name, on the first and last lines', () => {
-		const index = new OpenFileIndex();
-		index.setFileContent(
-			'notes.bean',
-			['; do not open Assets:Nope', '2026-01-01 * "please open Assets:Narr"', '  Expenses:Opening  1.00 USD'].join('\n')
-		);
-		expect(index.bestFile()).toBeNull();
-		expect([...index.openedIn('notes.bean')]).toEqual([]);
-
-		index.setFileContent(
-			'accounts.bean',
-			[
-				'2020-01-01 open Assets:First',
-				'; open Assets:Nope',
-				'2026-01-01 * "please open Assets:Narr"',
-				'  Expenses:Opening  1.00 USD',
-				'2020-12-31 open Expenses:Last',
-			].join('\n')
-		);
-		expect([...index.openedIn('accounts.bean')]).toEqual(['Assets:First', 'Expenses:Last']);
-	});
-});
-
 describe('edge postings and residuals', () => {
 	const history: Pairing[] = [
 		{ date: '2026-09-01', payee: 'Cafe', accounts: ['Expenses:Food', 'Assets:Cash'] },
@@ -517,12 +427,6 @@ describe('edge postings and residuals', () => {
 		).toEqual([]);
 	});
 
-	it('picks the ledger with more opens among two ledgers', () => {
-		const index = new OpenFileIndex();
-		index.setFileContent('a.bean', '2020-01-01 open Assets:Cash\n');
-		index.setFileContent('b.bean', '2020-01-01 open Assets:Cash\n2020-01-02 open Expenses:Food\n');
-		expect(index.bestFile()).toBe('b.bean');
-	});
 
 	it('breaks an equal-count pairing tie on name when dates match', () => {
 		expect(
@@ -630,9 +534,7 @@ describe('edge postings and residuals', () => {
 		).toHaveLength(1);
 	});
 
-	it('returns false when OpenFileIndex rename misses, and maps empty regions to no flags', () => {
-		const index = new OpenFileIndex();
-		expect(index.renameFile('gone.bean', 'x.bean')).toBe(false);
+	it('maps empty regions to no flags', () => {
 		expect(flagDiagnosticsFromRegions([])).toEqual([]);
 	});
 

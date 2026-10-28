@@ -2,7 +2,7 @@
  * Account hover: a CodeMirror tooltip on a known vault account name.
  *
  * Hovering a complete account token shows open/close dates and constrained
- * currencies from `AccountIndex`. Unknown names — tokens the vault has never
+ * currencies from the account query. Unknown names — tokens the vault has never
  * seen — produce no tooltip. Closed accounts still hover: the card is how
  * their close date is visible. Balances are not computed (same reason as
  * completion).
@@ -10,7 +10,7 @@
 import type { Extension } from '@codemirror/state';
 import { hoverTooltip } from '@codemirror/view';
 import { accountHoverCard, accountTokenAt } from './account-index';
-import type { AccountIndex } from './account-index';
+import type { AccountQuery } from './ledger-index';
 
 /** The CSS contract between the tooltip and `styles.css`. */
 export const ACCOUNT_HOVER_CLASS = 'beancount-account-hover';
@@ -27,7 +27,7 @@ export function renderAccountHover(card: { name: string; lines: readonly string[
 }
 
 /** Tooltip source: a card on a known account token, otherwise nothing. */
-export function accountHoverTooltip(accounts: AccountIndex): Extension {
+export function accountHoverTooltip(accounts: AccountQuery): Extension {
 	return hoverTooltip((view, pos) => {
 		const line = view.state.doc.lineAt(pos);
 		const token = accountTokenAt(line.text, pos - line.from);

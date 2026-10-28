@@ -28,13 +28,9 @@ import { includeLinksExtension } from '../include-links';
 import { instantAlignmentPlan } from '../instant-alignment';
 import { postingIndentPlan } from '../posting-indent';
 import { transactionFoldAt } from '../transaction-fold';
-import { AccountIndex } from '../account-index';
-import { VaultIndex } from '../vault-index';
-import { extractPayees } from '../payee-index';
-import { extractCommodities, extractLinks, extractNarrations, extractTags } from '../token-index';
 import { ledgerDoc as ledgerOf, ledgerKind } from '../fences';
-import { OpenFileIndex, PairingIndex, flagDiagnostics, flagDiagnosticsFromRegions } from '../code-actions';
-import { PayeeTemplateIndex } from '../payee-template';
+import { flagDiagnostics, flagDiagnosticsFromRegions } from '../code-actions';
+import { LedgerIndex } from '../ledger-index';
 import type { App } from 'obsidian';
 import { editorInfoField } from 'obsidian';
 import { updateFlagOkayDiagnostics } from '../diagnostics';
@@ -199,18 +195,10 @@ const integerOnly = Text.of(
 const integerCaret = integerOnly.line(ledgerLine).from + integerOnly.line(ledgerLine).text.lastIndexOf(' USD');
 
 function saveWorkload(): [() => unknown, () => unknown] {
-	const accounts = new AccountIndex();
-	const payees = new VaultIndex(extractPayees);
-	const commodities = new VaultIndex(extractCommodities);
-	const tags = new VaultIndex(extractTags);
-	const links = new VaultIndex(extractLinks);
-	const narrations = new VaultIndex(extractNarrations);
-	const caches = [accounts, payees, commodities, tags, links, narrations, new PairingIndex(), new OpenFileIndex(), new PayeeTemplateIndex()];
+	const index = new LedgerIndex();
 	const run = () => {
-		// What `registerVaultIndex` does per read: ledger text once, then every cache.
-		const text = ledgerOf(ledgerKind(ledgerFile), ledger).ledgerSource();
-		for (const cache of caches) cache.setFileContent(ledgerFile.path, text);
-		return [accounts.match('Ex'), payees.match('W'), commodities.match('U')];
+		index.setFile(ledgerFile.path, ledger);
+		return [index.accounts.match('Ex'), index.payees.match('W'), index.commodities.match('U')];
 	};
 	return [run, run];
 }

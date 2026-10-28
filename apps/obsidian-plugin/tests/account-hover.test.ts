@@ -5,7 +5,7 @@
  * and what its DOM contains.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { AccountIndex } from '../account-index';
+import { LedgerIndex } from '../ledger-index';
 import {
 	ACCOUNT_HOVER_CLASS,
 	ACCOUNT_HOVER_NAME_CLASS,
@@ -34,8 +34,8 @@ function view(text: string) {
 	return { state: { doc: fakeDoc(text) } };
 }
 
-function source(accounts: AccountIndex) {
-	return (accountHoverTooltip(accounts) as unknown as MockHoverTooltip).source;
+function source(index: LedgerIndex) {
+	return (accountHoverTooltip(index.accounts) as unknown as MockHoverTooltip).source;
 }
 
 /** The slice of Obsidian's `DomElementInfo` the hover card passes. */
@@ -71,9 +71,9 @@ function installDom(): void {
 	});
 }
 
-function ledger(): AccountIndex {
-	const index = new AccountIndex();
-	index.setFileContent(
+function ledger(): LedgerIndex {
+	const index = new LedgerIndex();
+	index.setFile(
 		'a.bean',
 		[
 			'2020-01-01 open Assets:Cash USD',

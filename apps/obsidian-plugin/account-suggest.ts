@@ -1,5 +1,5 @@
 /**
- * Account completion: an `IndexSuggest` popup fed by `AccountIndex`.
+ * Account completion: an `IndexSuggest` popup fed by vault account facts.
  *
  * Typing an account-shaped token (`Assets:Ca…`) triggers a prefix-match
  * popup over still-open account names cached from the vault; picking one
@@ -9,7 +9,7 @@
  */
 import type { App, Editor, EditorPosition, EditorSuggestTriggerInfo, TFile } from 'obsidian';
 import { ACCOUNT_CHAR_RE, ACCOUNT_PREFIX_RE, describeAccount } from './account-index';
-import type { AccountIndex } from './account-index';
+import type { AccountQuery } from './ledger-index';
 import { editorLedger } from './fences';
 import { COMMODITY_PREFIX_RE, LINK_PREFIX_RE, TAG_PREFIX_RE } from './token-index';
 import { inStringOrComment } from './scan';
@@ -18,7 +18,7 @@ import { IndexSuggest } from './suggest';
 export class AccountSuggest extends IndexSuggest {
 	constructor(
 		app: App,
-		private readonly accounts: AccountIndex
+		private readonly accounts: AccountQuery
 	) {
 		super(app, accounts);
 	}
