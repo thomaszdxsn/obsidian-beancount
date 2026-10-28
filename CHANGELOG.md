@@ -33,6 +33,9 @@ UI/UX fixes from the architecture review (#75).
 
 ### Fixed
 
+- **Stop Fava** while Fava is still launching now stops that process instead of
+  saying it is not running and leaving it behind. **Start Fava** right after
+  that stop launches again.
 - Typing an ordinary capitalized word such as `The`, `I` or `Tea` in a
   note's prose no longer opens account completion, where Enter would replace
   the word with an account name. Account completion also stays quiet in `;`
@@ -77,6 +80,7 @@ UI/UX fixes from the architecture review (#75).
 - Ledger index 对每个 vault 文件按 Ledger region 扫描一次得到 File facts，改名/删除只保留一份（#72）。
 - Completion slot：光标处该谁补全只判断一次（#71）。
 - 对齐、Format ledger 与按 `.` 共用同一份改写计划（#73）。
+- Start/Stop Fava 的子进程生命周期收进 `FavaProcess`（#74）。
 
 ## 0.2.2
 
