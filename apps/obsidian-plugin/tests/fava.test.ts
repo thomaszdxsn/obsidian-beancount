@@ -472,6 +472,68 @@ describe('FavaProcess', () => {
 		expect(notices).toEqual(['Fava stopped.']);
 	});
 
+	it('spawns once when two starts fire before a stopped wait finishes', async () => {
+		const children: ChildProcess[] = [];
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		let probes = 0;
+		const { ports, fava } = processWith({
+			runner: async (command, args) => {
+				favaRuns.push({ command, args: [...args] });
+				const child = liveChild();
+				children.push(child);
+				return { missing: false, child };
+			},
+		});
+		ports.probe = async () => {
+			probes += 1;
+			if (probes === 1) return pending;
+			return 200;
+		};
+		const first = fava.start(MAIN);
+		await Promise.resolve();
+		fava.stop();
+		const again = fava.start(MAIN);
+		const also = fava.start(MAIN);
+		release?.(403);
+		await Promise.all([first, again, also]);
+		expect(favaRuns).toHaveLength(2);
+		expect(children.filter((child) => child.exitCode === null)).toHaveLength(1);
+	});
+
+	it('spawns once more when three starts straddle a stop', async () => {
+		const children: ChildProcess[] = [];
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		let probes = 0;
+		const { ports, fava } = processWith({
+			runner: async (command, args) => {
+				favaRuns.push({ command, args: [...args] });
+				const child = liveChild();
+				children.push(child);
+				return { missing: false, child };
+			},
+		});
+		ports.probe = async () => {
+			probes += 1;
+			if (probes === 1) return pending;
+			return 200;
+		};
+		const first = fava.start(MAIN);
+		await Promise.resolve();
+		const joined = fava.start(MAIN);
+		fava.stop();
+		const after = fava.start(MAIN);
+		release?.(403);
+		await Promise.all([first, joined, after]);
+		expect(favaRuns).toHaveLength(2);
+		expect(children.filter((child) => child.exitCode === null)).toHaveLength(1);
+	});
+
 	it('does not respawn or notice when a joined start wakes after dispose', async () => {
 		let release: ((status: number) => void) | undefined;
 		const pending = new Promise<number>((resolve) => {

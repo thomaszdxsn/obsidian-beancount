@@ -270,8 +270,7 @@ export class FavaProcess {
 	private disposed = false;
 	private launching = false;
 	private generation = 0;
-	private inFlight: Promise<boolean> | null = null;
-	private inFlightGen = 0;
+	private inFlight: { gen: number; promise: Promise<boolean> } | null = null;
 	private stderr: () => string = () => '';
 	private readonly readyMs: number;
 	private readonly closeMs: number;
@@ -286,29 +285,27 @@ export class FavaProcess {
 
 	async start(req: FavaStartRequest): Promise<void> {
 		if (this.disposed) return;
-		const gen = this.generation;
-		if (this.inFlight) {
-			const flightGen = this.inFlightGen;
-			const started = await this.inFlight;
-			if (this.disposed || this.generation !== gen) return;
-			if (started && this.isRunning()) {
-				this.reveal(req);
+		while (this.inFlight) {
+			if (this.inFlight.gen === this.generation) {
+				const started = await this.inFlight.promise;
+				if (this.disposed) return;
+				if (started && this.isRunning()) this.reveal(req);
 				return;
 			}
-			if (flightGen === gen) return;
+			await this.inFlight.promise.catch(() => {});
+			if (this.disposed) return;
 		}
-		if (this.disposed || this.generation !== gen) return;
 		if (this.isRunning() && this.serving) {
 			this.reveal(req);
 			return;
 		}
-		const flight =
+		const promise =
 			this.isRunning() && this.child ? this.waitUntilServes(this.child) : this.spawn(req);
-		this.inFlightGen = gen;
+		const flight = { gen: this.generation, promise };
 		this.inFlight = flight;
 		try {
-			const started = await flight;
-			if (this.disposed || this.generation !== gen) return;
+			const started = await promise;
+			if (this.disposed) return;
 			if (started && this.isRunning()) this.reveal(req);
 		} finally {
 			if (this.inFlight === flight) this.inFlight = null;
