@@ -50,6 +50,7 @@ import { SnippetSession, SnippetSuggest, snippetTabExtension } from './snippet-s
 import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from './token-suggest';
 import { transactionFoldExtension } from './transaction-fold';
 import { postingIndentExtension } from './posting-indent';
+import { PopoverOpen } from './slot';
 import { fenceLanguageExtension } from './fence-language';
 import { includeLinksExtension } from './include-links';
 import { LedgerFileController } from './ledger-file-view';
@@ -431,15 +432,14 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		this.registerEditorSuggest(linkSuggest);
 		this.registerEditorSuggest(narrationSuggest);
 		this.registerEditorSuggest(snippetSuggest);
-		const popovers = [
-			accountSuggest,
-			payeeSuggest,
-			commoditySuggest,
-			tagSuggest,
-			linkSuggest,
-			narrationSuggest,
-			snippetSuggest,
-		];
+		const popovers = new PopoverOpen();
+		popovers.add(accountSuggest);
+		popovers.add(payeeSuggest);
+		popovers.add(commoditySuggest);
+		popovers.add(tagSuggest);
+		popovers.add(linkSuggest);
+		popovers.add(narrationSuggest);
+		popovers.add(snippetSuggest);
 		// Enter opens the next line of a beancount entry already indented;
 		// the binding defers to the completion popovers while they are open.
 		this.registerEditorExtension(postingIndentExtension(popovers));

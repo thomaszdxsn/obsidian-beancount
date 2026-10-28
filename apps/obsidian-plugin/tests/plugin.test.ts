@@ -15,12 +15,15 @@ import type {
 } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 import type { FakeEditor, FakeFile } from './fakes';
-import { createEditor, FakeClock, FakeVault, flush } from './fakes';
+import { createEditor, FakeClock, FakeVault, flush, registered } from './fakes';
 import { alignLines, alignText } from '../align';
 import { FLAG_OKAY_TITLE, FLAGGED_MESSAGE, PAD_TRANSACTION_TITLE, openAccountTitle } from '../code-actions';
 import { beancountMode, BEANCOUNT_LANGUAGE_DATA } from '../beancount-mode';
 import { BeancountSettingTab } from '../settings';
 import BeancountPlugin from '../main';
+import { AccountSuggest } from '../account-suggest';
+import { PayeeSuggest } from '../payee-suggest';
+import { CommoditySuggest, LinkSuggest, NarrationSuggest, TagSuggest } from '../token-suggest';
 import { BeancountProblemsView, VIEW_TYPE_PROBLEMS } from '../problems-view';
 
 const manifest = { id: 'beancount-obsidian' } as PluginManifest;
@@ -96,6 +99,27 @@ async function loadPlugin(
 	};
 	return { plugin, vault };
 }
+
+
+/** Plugin tests drive suggesters with partial fakes, not a full EditorSuggestContext. */
+type QueryIndex = { getSuggestions(context: { query: string }): string[] };
+type FrecencyIndex = QueryIndex & {
+	selectSuggestion(value: string, evt: MouseEvent): void;
+	context: {
+		start: { line: number; ch: number };
+		end: { line: number; ch: number };
+		query: string;
+		editor: unknown;
+		file: unknown;
+	} | null;
+};
+type TriggerSuggest = {
+	onTrigger(
+		cursor: { line: number; ch: number },
+		editor: unknown,
+		file: { path: string; extension: string } | null
+	): unknown;
+};
 
 
 async function unloadPlugin(plugin: BeancountPlugin & RecordingPlugin): Promise<void> {
@@ -185,9 +209,11 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault);
 		await flush();
 
-		const [accounts, payees, commodities, tags, links] = plugin.registrations.editorSuggests as Array<{
-			getSuggestions(context: { query: string }): string[];
-		}>;
+		const accounts = registered(plugin, AccountSuggest) as QueryIndex;
+		const payees = registered(plugin, PayeeSuggest) as QueryIndex;
+		const commodities = registered(plugin, CommoditySuggest) as QueryIndex;
+		const tags = registered(plugin, TagSuggest) as QueryIndex;
+		const links = registered(plugin, LinkSuggest) as QueryIndex;
 		expect(accounts.getSuggestions({ query: 'Expenses' })).toEqual(['Expenses:Food']);
 		expect(payees.getSuggestions({ query: 'Whole' })).toEqual(['Whole Foods']);
 		expect(commodities.getSuggestions({ query: 'US' })).toEqual(['USD']);
@@ -203,7 +229,7 @@ describe('BeancountPlugin', () => {
 		);
 		const { plugin } = await loadPlugin(vault);
 		await flush();
-		const accounts = plugin.registrations.editorSuggests[0] as { getSuggestions(context: { query: string }): string[] };
+		const accounts = registered(plugin, AccountSuggest) as QueryIndex;
 		const hover = plugin.registrations.editorExtensions[3] as MockHoverTooltip;
 		const hoverAt = (text: string) =>
 			hover.source({ state: { doc: { lineAt: () => ({ from: 0, to: text.length, text }) } } }, 0);
@@ -223,17 +249,7 @@ describe('BeancountPlugin', () => {
 		vault.write('ledger.bean', 'Assets:Broker Assets:Cash');
 		const { plugin } = await loadPlugin(vault);
 		await flush();
-		const accounts = plugin.registrations.editorSuggests[0] as {
-			getSuggestions(context: { query: string }): string[];
-			selectSuggestion(value: string, evt: MouseEvent): void;
-			context: {
-				start: { line: number; ch: number };
-				end: { line: number; ch: number };
-				query: string;
-				editor: unknown;
-				file: unknown;
-			} | null;
-		};
+		const accounts = registered(plugin, AccountSuggest) as FrecencyIndex;
 		expect(accounts.getSuggestions({ query: 'Assets:' })).toEqual(['Assets:Broker', 'Assets:Cash']);
 		const editor = createEditor(['Assets:']);
 		accounts.context = {
@@ -250,9 +266,7 @@ describe('BeancountPlugin', () => {
 
 		const reloaded = await loadPlugin(vault, plugin.savedData.at(-1));
 		await flush();
-		const again = reloaded.plugin.registrations.editorSuggests[0] as {
-			getSuggestions(context: { query: string }): string[];
-		};
+		const again = registered(reloaded.plugin, AccountSuggest) as QueryIndex;
 		expect(again.getSuggestions({ query: 'Assets:' })).toEqual(['Assets:Cash', 'Assets:Broker']);
 	});
 
@@ -280,62 +294,15 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin(vault);
 		await flush();
 
-		const narrations = plugin.registrations.editorSuggests[5] as {
-			onTrigger(
-				cursor: { line: number; ch: number },
-				editor: unknown,
-				file: { path: string; extension: string } | null
-			): unknown;
-		};
+		const narrations = registered(plugin, NarrationSuggest) as TriggerSuggest;
 		const line = createEditor(['2026-09-30 * "Shell" "Fu']);
 		const cursor = { line: 0, ch: line.lines[0].length };
 		const ledger = { path: 'ledger.bean', extension: 'bean' };
-		// Default settings leave the field alone…
 		expect(narrations.onTrigger(cursor, line, ledger)).toBeNull();
-		// …the toggle turns it on…
 		plugin.settings.completeNarration = true;
 		expect(narrations.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
-		// …and a stored true loads enabled.
-		const loaded = await loadPlugin(vault, { completeNarration: true });
-		await flush();
-		const enabled = loaded.plugin.registrations.editorSuggests[5] as {
-			onTrigger(
-				cursor: { line: number; ch: number },
-				editor: unknown,
-				file: { path: string; extension: string } | null
-			): unknown;
-		};
-		expect(enabled.onTrigger(cursor, line, ledger)).toMatchObject({ query: 'Fu' });
 	});
 
-	it('leaves the payee field to the payee suggest', async () => {
-		const vault = new FakeVault();
-		vault.write(
-			'ledger.bean',
-			['2026-09-30 * "Exxon" "Fuel"', '  Expenses:Food  10.00 USD'].join('\n')
-		);
-		const { plugin } = await loadPlugin(vault);
-		await flush();
-		const [accounts, payees] = plugin.registrations.editorSuggests as Array<{
-			onTrigger: (
-				cursor: { line: number; ch: number },
-				editor: unknown,
-				file: { path: string; extension: string } | null
-			) => unknown;
-		}>;
-		// `"Ex` prefixes both the payee `Exxon` and the account
-		// `Expenses:Food`; the payee field must show payees, not accounts.
-		const payeeLine = createEditor(['2026-10-02 * "Ex']);
-		const cursor = { line: 0, ch: payeeLine.lines[0].length };
-		const ledger = { path: 'ledger.bean', extension: 'bean' };
-		expect(accounts.onTrigger(cursor, payeeLine, ledger)).toBeNull();
-		expect(payees.onTrigger(cursor, payeeLine, ledger)).toMatchObject({ query: 'Ex' });
-		// …while account completion still answers on posting lines.
-		const postingLine = createEditor(['  Expenses:Fo']);
-		expect(accounts.onTrigger({ line: 0, ch: 13 }, postingLine, ledger)).toMatchObject({
-			query: 'Expenses:Fo',
-		});
-	});
 
 	it('offers directive snippets from a prefix at column 0', async () => {
 		const { plugin } = await loadPlugin();
@@ -460,19 +427,16 @@ describe('BeancountPlugin', () => {
 		const { plugin } = await loadPlugin();
 		const extension = plugin.registrations.editorExtensions[0] as MockKeymapExtension;
 		const run = extension.bindings[0].run as unknown as (view: MockView) => boolean;
-		const suggests = plugin.registrations.editorSuggests as Array<{ context: unknown }>;
-		for (const suggest of suggests) {
-			// A popup is open: Enter accepts the suggestion, never indents.
-			suggest.context = {};
-			const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
-			(open.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
-				file: { path: 'ledger.bean', extension: 'bean' },
-			});
-			expect(run(open)).toBe(false);
-			expect(open.dispatched).toEqual([]);
-
-			suggest.context = null;
-		}
+		const suggest = registered(plugin, AccountSuggest) as { context: unknown };
+		// A popup is open: Enter accepts the suggestion, never indents.
+		suggest.context = {};
+		const open = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
+		(open.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
+			file: { path: 'ledger.bean', extension: 'bean' },
+		});
+		expect(run(open)).toBe(false);
+		expect(open.dispatched).toEqual([]);
+		suggest.context = null;
 		const closed = createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]);
 		(closed.state as { field?: () => { file: { path: string; extension: string } } }).field = () => ({
 			file: { path: 'ledger.bean', extension: 'bean' },

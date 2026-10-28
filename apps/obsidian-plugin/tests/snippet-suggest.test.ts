@@ -5,6 +5,7 @@ import type { EditorView } from '@codemirror/view';
 import { LedgerIndex } from '../ledger-index';
 import { PayeeSuggest } from '../payee-suggest';
 import { SnippetSession, SnippetSuggest, snippetTabExtension } from '../snippet-suggest';
+import { PopoverOpen } from '../slot';
 import { expandSnippet, SNIPPETS } from '../snippets';
 import type { MockKeymapExtension } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
@@ -218,8 +219,8 @@ describe('payee completion after txn', () => {
 
 type Run = (view: EditorView) => boolean;
 
-function tabRun(session: SnippetSession, suggests: Array<{ context: unknown }> = []): Run {
-	const extension = snippetTabExtension(session, suggests);
+function tabRun(session: SnippetSession, popovers: PopoverOpen = new PopoverOpen()): Run {
+	const extension = snippetTabExtension(session, popovers);
 	const list = Array.isArray(extension) ? extension : [extension];
 	const keymap = list.find(
 		(item): item is MockKeymapExtension => typeof item === 'object' && item !== null && 'bindings' in item
@@ -270,7 +271,9 @@ describe('snippetTabExtension', () => {
 	it('leaves Tab to an open completion popover', () => {
 		const session = new SnippetSession();
 		session.start(0, { text: 'x', stops: [{ index: 1, from: 0, to: 0 }] });
-		const run = tabRun(session, [{ context: {} }]);
+		const popovers = new PopoverOpen();
+		popovers.add({ context: {} });
+		const run = tabRun(session, popovers);
 		const view = createView('x', [{ anchor: 0 }]);
 		expect(run(view as unknown as EditorView)).toBe(false);
 		expect(view.dispatched).toEqual([]);
@@ -356,7 +359,7 @@ function mapPos(changes: readonly Change[], pos: number, assoc: number): number 
 
 /** Drive the session guard the way CodeMirror reports one transaction. */
 function guard(session: SnippetSession): (view: unknown, userEvent: string | undefined, changes: Change[]) => void {
-	const extension = snippetTabExtension(session, []);
+	const extension = snippetTabExtension(session, new PopoverOpen());
 	const list = Array.isArray(extension) ? extension : [extension];
 	const plugin = list.find((item): item is GuardPlugin => typeof item === 'object' && item !== null && 'cls' in item);
 	if (!plugin) throw new Error('missing session guard');

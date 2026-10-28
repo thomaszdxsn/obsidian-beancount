@@ -1,6 +1,7 @@
 import type { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
 import { postingIndentExtension, postingIndentPlan, wantsIndent } from '../posting-indent';
+import { PopoverOpen } from '../slot';
 import type { MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 
@@ -14,11 +15,10 @@ function attachFile(view: MockView, file: { path: string; extension: string }): 
 	return view;
 }
 
-type Suggest = { context: unknown };
 type Run = (view: EditorView) => boolean;
 
-function runOf(suggests: Suggest[] = []): Run {
-	const extension = postingIndentExtension(suggests) as unknown as MockKeymapExtension;
+function runOf(popovers: PopoverOpen = new PopoverOpen()): Run {
+	const extension = postingIndentExtension(popovers) as unknown as MockKeymapExtension;
 	return extension.bindings[0].run as unknown as Run;
 }
 
@@ -183,7 +183,7 @@ describe('postingIndentPlan', () => {
 
 describe('postingIndentExtension', () => {
 	it('binds plain Enter only', () => {
-		const extension = postingIndentExtension([]) as unknown as MockKeymapExtension;
+		const extension = postingIndentExtension(new PopoverOpen()) as unknown as MockKeymapExtension;
 		expect(extension.bindings.map((binding) => binding.key)).toEqual(['Enter']);
 	});
 
@@ -205,8 +205,10 @@ describe('postingIndentExtension', () => {
 	});
 
 	it('lets an open completion popover keep Enter', () => {
-		const suggest: Suggest = { context: null };
-		const run = runOf([suggest]);
+		const suggest: { context: unknown } = { context: null };
+		const popovers = new PopoverOpen();
+		popovers.add(suggest);
+		const run = runOf(popovers);
 		suggest.context = {};
 		const open: MockView = attachFile(
 			createView('2026-10-01 * "Store"', [{ anchor: 20, head: 20 }]),
