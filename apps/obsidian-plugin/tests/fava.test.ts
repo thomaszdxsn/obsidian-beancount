@@ -454,6 +454,65 @@ describe('FavaProcess', () => {
 		expect(opened).toEqual(['http://127.0.0.1:5000/', 'http://127.0.0.1:5000/']);
 	});
 
+	it('does not respawn when a joined start wakes after stop', async () => {
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		const { ports, fava } = processWith();
+		ports.probe = async () => pending;
+		const first = fava.start(MAIN);
+		await Promise.resolve();
+		const joined = fava.start(MAIN);
+		fava.stop();
+		release?.(403);
+		await Promise.all([first, joined]);
+		expect(favaRuns).toHaveLength(1);
+		expect(opened).toEqual([]);
+		expect(notices).toEqual(['Fava stopped.']);
+	});
+
+	it('does not respawn or notice when a joined start wakes after dispose', async () => {
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		const { ports, fava } = processWith();
+		ports.probe = async () => pending;
+		const first = fava.start(MAIN);
+		await Promise.resolve();
+		const joined = fava.start(MAIN);
+		notices.length = 0;
+		fava.dispose();
+		release?.(403);
+		await Promise.all([first, joined]);
+		expect(favaRuns).toHaveLength(1);
+		expect(opened).toEqual([]);
+		expect(notices).toEqual([]);
+	});
+
+	it('notices a failed concurrent start only once', async () => {
+		const { fava } = processWith();
+		const missing = { ...MAIN, entryLedger: '', activePath: null };
+		await Promise.all([fava.start(missing), fava.start(missing)]);
+		expect(favaRuns).toEqual([]);
+		expect(notices).toEqual([
+			'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.',
+		]);
+	});
+
+	it('does not say Fava stopped when stop races a start that never spawned', async () => {
+		const { fava } = processWith();
+		const pending = fava.start({ ...MAIN, entryLedger: '', activePath: null });
+		fava.stop();
+		await pending;
+		expect(favaRuns).toEqual([]);
+		expect(notices).toEqual([
+			'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.',
+			'Fava is not running.',
+		]);
+	});
+
 	it('joins an in-flight wait instead of probing twice', async () => {
 		let release: ((status: number) => void) | undefined;
 		const pending = new Promise<number>((resolve) => {

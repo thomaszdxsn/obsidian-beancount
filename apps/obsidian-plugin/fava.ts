@@ -267,8 +267,12 @@ export class FavaProcess {
 	private boundPort: number | null = null;
 	private serving = false;
 	private expectExit = false;
-	private stderr: () => string = () => '';
+	private disposed = false;
+	private launching = false;
+	private generation = 0;
 	private inFlight: Promise<boolean> | null = null;
+	private inFlightGen = 0;
+	private stderr: () => string = () => '';
 	private readonly readyMs: number;
 	private readonly closeMs: number;
 
@@ -281,23 +285,30 @@ export class FavaProcess {
 	}
 
 	async start(req: FavaStartRequest): Promise<void> {
-		while (this.inFlight) {
+		if (this.disposed) return;
+		const gen = this.generation;
+		if (this.inFlight) {
+			const flightGen = this.inFlightGen;
 			const started = await this.inFlight;
+			if (this.disposed || this.generation !== gen) return;
 			if (started && this.isRunning()) {
 				this.reveal(req);
 				return;
 			}
-			if (this.isRunning()) return;
+			if (flightGen === gen) return;
 		}
+		if (this.disposed || this.generation !== gen) return;
 		if (this.isRunning() && this.serving) {
 			this.reveal(req);
 			return;
 		}
 		const flight =
 			this.isRunning() && this.child ? this.waitUntilServes(this.child) : this.spawn(req);
+		this.inFlightGen = gen;
 		this.inFlight = flight;
 		try {
 			const started = await flight;
+			if (this.disposed || this.generation !== gen) return;
 			if (started && this.isRunning()) this.reveal(req);
 		} finally {
 			if (this.inFlight === flight) this.inFlight = null;
@@ -305,14 +316,13 @@ export class FavaProcess {
 	}
 
 	stop(): void {
+		if (this.disposed) return;
+		this.generation += 1;
 		this.expectExit = true;
-		if (this.isRunning()) {
+		if (this.isRunning() || this.launching) {
 			this.child?.kill();
 			this.clear();
-			this.ports.notify('Fava stopped.');
-			return;
-		}
-		if (this.inFlight) {
+			this.launching = false;
 			this.ports.notify('Fava stopped.');
 			return;
 		}
@@ -321,7 +331,10 @@ export class FavaProcess {
 	}
 
 	dispose(): void {
+		this.disposed = true;
+		this.generation += 1;
 		this.expectExit = true;
+		this.launching = false;
 		this.child?.kill();
 		this.clear();
 	}
@@ -376,6 +389,7 @@ export class FavaProcess {
 	}
 
 	private async spawn(req: FavaStartRequest): Promise<boolean> {
+		if (this.disposed) return false;
 		this.expectExit = false;
 		if (!isFavaBinary(req.command)) {
 			this.ports.notify(MISSING_FAVA_NOTICE);
@@ -388,52 +402,56 @@ export class FavaProcess {
 			return false;
 		}
 		const port = normalizeFavaPort(req.port);
-		const result = await this.ports.runner(req.command, [
-			'-H',
-			FAVA_HOST,
-			'-p',
-			String(port),
-			ledger.absPath,
-		]);
-		if (result.missing) {
-			if (!this.expectExit) this.ports.notify(MISSING_FAVA_NOTICE);
-			return false;
+		this.launching = true;
+		try {
+			const result = await this.ports.runner(req.command, [
+				'-H',
+				FAVA_HOST,
+				'-p',
+				String(port),
+				ledger.absPath,
+			]);
+			if (this.disposed) {
+				result.child?.kill();
+				return false;
+			}
+			if (result.missing) {
+				if (!this.expectExit) this.ports.notify(MISSING_FAVA_NOTICE);
+				return false;
+			}
+			const child = result.child ?? null;
+			if (!child) return false;
+			if (this.expectExit) {
+				child.kill();
+				return false;
+			}
+			const getStderr = captureFavaStderr(child);
+			this.stderr = getStderr;
+			this.serving = false;
+			this.child = child;
+			this.boundPort = port;
+			let closed = false;
+			child.once('close', () => {
+				closed = true;
+			});
+			child.once('exit', (code) => {
+				const unexpected = !this.expectExit && this.serving && this.child === child;
+				void (async () => {
+					await waitForChildClose(child, {
+						alreadyClosed: closed,
+						timeoutMs: this.closeMs,
+						delay: this.ports.delay,
+					});
+					const stderr = getStderr();
+					if (this.child === child) this.clear();
+					if (unexpected && !this.expectExit) {
+						this.ports.notify(`Fava exited: ${favaExitReason(stderr, code)}`);
+					}
+				})();
+			});
+			return this.waitUntilServes(child);
+		} finally {
+			this.launching = false;
 		}
-		const child = result.child ?? null;
-		if (!child) return false;
-		if (this.expectExit) {
-			child.kill();
-			return false;
-		}
-		const getStderr = captureFavaStderr(child);
-		this.stderr = getStderr;
-		this.serving = false;
-		this.child = child;
-		this.boundPort = port;
-		if (this.expectExit) {
-			child.kill();
-			this.clear();
-			return false;
-		}
-		let closed = false;
-		child.once('close', () => {
-			closed = true;
-		});
-		child.once('exit', (code) => {
-			const unexpected = !this.expectExit && this.serving && this.child === child;
-			void (async () => {
-				await waitForChildClose(child, {
-					alreadyClosed: closed,
-					timeoutMs: this.closeMs,
-					delay: this.ports.delay,
-				});
-				const stderr = getStderr();
-				if (this.child === child) this.clear();
-				if (unexpected && !this.expectExit) {
-					this.ports.notify(`Fava exited: ${favaExitReason(stderr, code)}`);
-				}
-			})();
-		});
-		return this.waitUntilServes(child);
 	}
 }
