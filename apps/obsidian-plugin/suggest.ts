@@ -24,7 +24,7 @@ export interface CompletionIndex {
 }
 
 type SlotCache = {
-	editor: Editor;
+	doc: object;
 	filePath: string | null;
 	line: number;
 	ch: number;
@@ -35,7 +35,12 @@ type SlotCache = {
 
 let slotCache: SlotCache | null = null;
 
-/** Shared slot for this keystroke: one `completionSlot` per editor/line/ch. */
+/** The live CodeMirror `Text`, or undefined when this editor has no CM doc. */
+function cmDoc(editor: Editor): object | undefined {
+	return (editor as { cm?: { state?: { doc?: object } } }).cm?.state?.doc;
+}
+
+/** Shared slot for this keystroke: one `completionSlot` per CM doc/line/ch. */
 export function ownSlot(
 	kind: SlotKind,
 	cursor: EditorPosition,
@@ -55,9 +60,11 @@ function cachedSlot(
 ): CompletionSlot | null {
 	const lineText = editor.getLine(cursor.line);
 	const filePath = file?.path ?? null;
+	const doc = cmDoc(editor);
 	if (
+		doc &&
 		slotCache &&
-		slotCache.editor === editor &&
+		slotCache.doc === doc &&
 		slotCache.filePath === filePath &&
 		slotCache.line === cursor.line &&
 		slotCache.ch === cursor.ch &&
@@ -72,7 +79,9 @@ function cachedSlot(
 		lineIsLedger: () => editorLedger(editor, file).lineIsLedger(cursor.line),
 		completeNarration,
 	});
-	slotCache = { editor, filePath, line: cursor.line, ch: cursor.ch, lineText, completeNarration, slot };
+	slotCache = doc
+		? { doc, filePath, line: cursor.line, ch: cursor.ch, lineText, completeNarration, slot }
+		: null;
 	return slot;
 }
 
