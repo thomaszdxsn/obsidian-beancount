@@ -3,10 +3,16 @@ import type { App, Editor, FileSystemAdapter, MarkdownView, PluginManifest, TAbs
 import type { EditorView } from '@codemirror/view';
 import type { ChildProcess } from 'child_process';
 import { isAbsolute, relative, resolve, sep } from 'path';
-import { editorLedger, isLedgerFile, ledgerKind } from './fences';
+import { isLedgerFile, ledgerKind } from './fences';
 import { formatErrorNotice } from './format';
-import type { EditPlan } from './edits';
-import { AlignOnSave, planAlign, planFormat } from './edits';
+import {
+	AlignOnSave,
+	bindAlignOnSaveOpenEditor,
+	maybeScheduleAlign,
+	runAlignCommand,
+	runFormatCommand,
+} from './edits';
+import { openEditorFor, openEditorsFor } from './open-editors';
 import { beancountMode } from './beancount-mode';
 import { AccountSuggest } from './account-suggest';
 import { accountHoverTooltip } from './account-hover';
@@ -104,29 +110,6 @@ const MISSING_FAVA_NOTICE =
 const NO_LEDGER_FAVA_NOTICE =
 	'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.';
 
-/** The editor of a leaf showing `file`, if any. */
-function openEditorFor(app: App, file: TFile): Editor | null {
-	return openEditorsFor(app, file)[0] ?? null;
-}
-
-/**
- * Every editor showing `file` — the active one first, then background leaves.
- * Each pane holds its own view of the file, and each carries its own markers.
- */
-function openEditorsFor(app: App, file: TFile): Editor[] {
-	// The active editor answers for any leaf type; the scan covers other
-	// markdown tabs (Obsidian opens text files like `.bean` there too).
-	const editors: Editor[] = [];
-	const active = app.workspace.activeEditor;
-	if (active && active.file?.path === file.path && active.editor) editors.push(active.editor);
-	for (const leaf of app.workspace.getLeavesOfType('markdown')) {
-		const view = leaf.view as MarkdownView | null;
-		if (view && view.file?.path === file.path && view.editor && !editors.includes(view.editor)) {
-			editors.push(view.editor);
-		}
-	}
-	return editors;
-}
 
 /** A vault file, not a folder: folders have no `extension` to stamp an mtime on. */
 function isVaultFile(file: TAbstractFile | null): file is TFile {
@@ -137,55 +120,6 @@ function fileRef(file: TFile): FileRef {
 	return { path: file.path, extension: file.extension, mtime: fileMtime(file) };
 }
 
-function applyEditPlan(editor: Editor, plan: EditPlan): void {
-	if (plan.caret) {
-		editor.transaction({ changes: [...plan.changes], selection: { from: plan.caret } });
-		return;
-	}
-	editor.transaction({ changes: [...plan.changes] });
-}
-
-/** The `Align decimal points` command. */
-function alignCommand(
-	editor: Editor,
-	file: { path: string; extension: string } | null,
-	separatorColumn: number,
-): void {
-	const ledger = editorLedger(editor, file);
-	const plan = planAlign(editor.getValue(), {
-		carets: editor.listSelections().map((selection) => ({ anchor: selection.anchor, head: selection.head })),
-		mode: editor.somethingSelected() ? 'selection' : 'block',
-		separatorColumn,
-		lineIsLedger: (line) => ledger.lineIsLedger(line),
-	});
-	if (plan === null) return;
-	applyEditPlan(editor, plan);
-}
-
-/**
- * `Format ledger`: a `.bean` / `.beancount` buffer is one ledger. Any other
- * file, including an untitled buffer, formats each ```beancount / ```bean
- * fence and leaves the rest. A syntax error names the document line and
- * changes nothing. No notice when the text is already formatted — same as
- * alignment finding nothing to do.
- */
-function formatCommand(
-	editor: Editor,
-	file: { path: string; extension: string } | null,
-	separatorColumn: number,
-): void {
-	const result = planFormat(editor.getValue(), {
-		carets: editor.listSelections().map((selection) => ({ anchor: selection.anchor, head: selection.head })),
-		separatorColumn,
-		kind: ledgerKind(file),
-	});
-	if (result !== null && 'error' in result) {
-		new Notice(formatErrorNotice(result.error));
-		return;
-	}
-	if (result === null) return;
-	applyEditPlan(editor, result);
-}
 
 function applyEditorEdit(editor: Editor, edit: TextEdit): void {
 	editor.transaction({
@@ -273,16 +207,13 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 				if (!isVaultFile(file)) return;
 				await this.app.vault.modify(file, text);
 			},
-			openEditor: (path) => {
-				const file = this.app.vault.getAbstractFileByPath(path);
-				if (!isVaultFile(file)) return null;
-				const editor = openEditorFor(this.app, file);
-				if (!editor) return null;
-				return {
-					getValue: () => editor.getValue(),
-					apply: (plan) => applyEditPlan(editor, plan),
-				};
-			},
+			openEditor: bindAlignOnSaveOpenEditor({
+				getFile: (path) => {
+					const located = this.app.vault.getAbstractFileByPath(path);
+					return isVaultFile(located) ? located : null;
+				},
+				findEditor: (path) => openEditorFor(this.app.workspace, { path }),
+			}),
 			alignOnSave: () => this.settings.alignOnSave,
 			separatorColumn: () => this.settings.separatorColumn,
 			ledgerKind: (file) => ledgerKind(file),
@@ -366,13 +297,15 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			id: 'align-decimal-points',
 			name: 'Align decimal points',
 			editorCallback: (editor, ctx) =>
-				alignCommand(editor, ctx?.file ?? null, this.settings.separatorColumn),
+				runAlignCommand(editor, ctx?.file ?? null, this.settings.separatorColumn),
 		});
 		this.addCommand({
 			id: 'format-ledger',
 			name: 'Format ledger',
 			editorCallback: (editor, ctx) =>
-				formatCommand(editor, ctx?.file ?? null, this.settings.separatorColumn),
+				runFormatCommand(editor, ctx?.file ?? null, this.settings.separatorColumn, (error) => {
+					new Notice(formatErrorNotice(error));
+				}),
 		});
 		this.addCommand({
 			id: 'insert-today-date',
@@ -686,7 +619,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 		fix: Extract<QuickFix, { kind: 'open-account' }>
 	): Promise<void> {
 		const target = this.app.vault.getFiles().find((entry) => entry.path === fix.path) ?? currentFile;
-		const editor = openEditorFor(this.app, target);
+		const editor = openEditorFor(this.app.workspace, target);
 		const text = editor ? editor.getValue() : await this.app.vault.read(target);
 		const lines = text.split('\n');
 		const edit = insertOpenDirective(lines, fix.date, fix.account, fix.commodity);
@@ -702,7 +635,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 	private onFileModified(file: TAbstractFile): void {
 		if (!isTextFile(file)) return;
 		const { extension } = file;
-		if (this.settings.alignOnSave) this.onSaveAlign.schedule(file);
+		if (this.settings.alignOnSave) maybeScheduleAlign(this.onSaveAlign, file);
 		if (isLedgerFile({ extension }) || extension === 'md') {
 			this.validation.handle({ kind: 'saved', file: fileRef(file) });
 		}
@@ -717,7 +650,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			this.validation.handle({ kind: 'opened', file: ref, text: '' });
 			return;
 		}
-		const editor = openEditorFor(this.app, file);
+		const editor = openEditorFor(this.app.workspace, file);
 		if (editor) {
 			this.validation.handle({ kind: 'opened', file: ref, text: editor.getValue() });
 			return;
@@ -754,7 +687,7 @@ export default class BeancountPlugin extends Plugin implements DiagnosticClickHo
 			setBean: (path, diagnostics) => {
 				const located = this.app.vault.getAbstractFileByPath(path);
 				if (!isVaultFile(located)) return;
-				for (const editor of openEditorsFor(this.app, located)) {
+				for (const editor of openEditorsFor(this.app.workspace, located)) {
 					setEditorBeanDiagnostics(editor, diagnostics);
 				}
 			},

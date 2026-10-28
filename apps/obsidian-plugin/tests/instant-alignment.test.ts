@@ -5,11 +5,9 @@
  */
 import type { EditorView } from '@codemirror/view';
 import { describe, expect, it } from 'vitest';
-import {
-	instantAlignmentExtension,
-	instantAlignmentPlan,
-} from '../instant-alignment';
-import type { InstantPlan } from '../instant-alignment';
+import { instantAlignmentExtension } from '../instant-alignment';
+import type { InstantPlan } from '../edits';
+import { planInstantDot } from '../edits';
 import type { MockKeymapExtension, MockView } from './mocks/codemirror';
 import { createView } from './mocks/codemirror';
 
@@ -42,11 +40,11 @@ function apply(text: string, plan: Pick<InstantPlan, 'changes'>): string {
 
 const COLUMN = 20;
 
-describe('instantAlignmentPlan', () => {
+describe('planInstantDot', () => {
 	it('inserts the decimal, pads the amount to the separator column, and parks the caret after the point', () => {
 		const text = '2026-10-01 * "S"\n  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;
-		const plan = instantAlignmentPlan(text, [{ anchor: caret, head: caret }], COLUMN);
+		const plan = planInstantDot(text, [{ anchor: caret, head: caret }], COLUMN);
 		expect(plan).not.toBeNull();
 		const next = apply(text, plan!);
 		expect(next).toBe('2026-10-01 * "S"\n  Assets:Cash    12. USD');
@@ -60,7 +58,7 @@ describe('instantAlignmentPlan', () => {
 			'  Assets:Cash -12 USD',
 		].join('\n');
 		const caret = text.indexOf('12') + 2;
-		const next = apply(text, instantAlignmentPlan(text, [{ anchor: caret, head: caret }], COLUMN)!);
+		const next = apply(text, planInstantDot(text, [{ anchor: caret, head: caret }], COLUMN)!);
 		expect(next.split('\n')).toEqual([
 			'2026-10-01 * "S"',
 			'  Expenses:Food  12. USD',
@@ -76,7 +74,7 @@ describe('instantAlignmentPlan', () => {
 			'  Assets:Cash 34 USD',
 		].join('\n');
 		const caret = text.indexOf('12') + 2;
-		const next = apply(text, instantAlignmentPlan(text, [{ anchor: caret, head: caret }], COLUMN)!);
+		const next = apply(text, planInstantDot(text, [{ anchor: caret, head: caret }], COLUMN)!);
 		expect(next.split('\n')[3]).toBe('  Assets:Cash 34 USD');
 		expect(next.split('\n')[1]).toBe('  Assets:Cash    12. USD');
 	});
@@ -89,7 +87,7 @@ describe('instantAlignmentPlan', () => {
 		].join('\n');
 		const a = text.indexOf('12') + 2;
 		const b = text.indexOf('-34') + 3;
-		const plan = instantAlignmentPlan(
+		const plan = planInstantDot(
 			text,
 			[
 				{ anchor: b, head: b },
@@ -110,7 +108,7 @@ describe('instantAlignmentPlan', () => {
 		const text = 'note\n  Assets:Cash 12 USD';
 		const prose = 4;
 		const amount = text.indexOf('12') + 2;
-		const plan = instantAlignmentPlan(
+		const plan = planInstantDot(
 			text,
 			[
 				{ anchor: prose, head: prose },
@@ -127,13 +125,13 @@ describe('instantAlignmentPlan', () => {
 
 	it('has nothing to say outside a posting amount and falls through', () => {
 		const prose = 'Hello there';
-		expect(instantAlignmentPlan(prose, [{ anchor: 5, head: 5 }], COLUMN)).toBeNull();
+		expect(planInstantDot(prose, [{ anchor: 5, head: 5 }], COLUMN)).toBeNull();
 		const payee = '2026-10-01 * "Store"';
-		expect(instantAlignmentPlan(payee, [{ anchor: 16, head: 16 }], COLUMN)).toBeNull();
+		expect(planInstantDot(payee, [{ anchor: 16, head: 16 }], COLUMN)).toBeNull();
 		const already = '  Assets:Cash 12.5 USD';
 		const insideFraction = already.indexOf('5');
 		expect(
-			instantAlignmentPlan(already, [{ anchor: insideFraction, head: insideFraction }], COLUMN)
+			planInstantDot(already, [{ anchor: insideFraction, head: insideFraction }], COLUMN)
 		).toBeNull();
 	});
 
@@ -141,21 +139,21 @@ describe('instantAlignmentPlan', () => {
 		const text = '  Assets:Cash 12 USD';
 		const caret = text.indexOf('12') + 2;
 		expect(
-			instantAlignmentPlan(text, [{ anchor: caret - 2, head: caret }], COLUMN)
+			planInstantDot(text, [{ anchor: caret - 2, head: caret }], COLUMN)
 		).toBeNull();
 	});
 
 	it('still inserts a decimal when the amount has no commodity yet', () => {
 		const text = '  Assets:Cash 12';
 		const caret = text.length;
-		const next = apply(text, instantAlignmentPlan(text, [{ anchor: caret, head: caret }], COLUMN)!);
+		const next = apply(text, planInstantDot(text, [{ anchor: caret, head: caret }], COLUMN)!);
 		expect(next).toBe('  Assets:Cash    12.');
 	});
 
 	it('measures a CJK account as two cells when padding to the column', () => {
 		const text = '  Expenses:餐饮 12 USD';
 		const caret = text.indexOf('12') + 2;
-		const next = apply(text, instantAlignmentPlan(text, [{ anchor: caret, head: caret }], COLUMN)!);
+		const next = apply(text, planInstantDot(text, [{ anchor: caret, head: caret }], COLUMN)!);
 		// `  Expenses:` = 11, `餐饮` = 4 cells → prefix 15; beforeDot 2; target 19
 		// → gap of 2 spaces.
 		expect(next).toBe('  Expenses:餐饮  12. USD');
@@ -172,7 +170,7 @@ describe('instantAlignmentPlan', () => {
 		const restaurant = text.indexOf('12') + 2;
 		const note = text.indexOf('; note') + '; note'.length;
 		const cash = text.indexOf('3 USD') + 1;
-		const plan = instantAlignmentPlan(
+		const plan = planInstantDot(
 			text,
 			[
 				{ anchor: cash, head: cash },
@@ -203,7 +201,7 @@ describe('instantAlignmentPlan', () => {
 		const text = ['2026-10-01 * "A"', '  Assets:Cash 12 USD', '  Expenses:Food 34 USD'].join('\n');
 		const amount = text.indexOf('12') + 2;
 		const lineStart = text.indexOf('  Expenses');
-		const plan = instantAlignmentPlan(
+		const plan = planInstantDot(
 			text,
 			[
 				{ anchor: amount, head: amount },
@@ -215,9 +213,7 @@ describe('instantAlignmentPlan', () => {
 		expect(next).toBe('2026-10-01 * "A"\n  Assets:Cash    12. USD\n.  Expenses:Food 34 USD');
 		expect(plan.carets).toEqual([next.indexOf('12.') + 3, next.indexOf('\n.') + 2]);
 	});
-
 });
-
 
 describe('instantAlignmentExtension', () => {
 	const host: Host = { settings: { instantAlignment: true, separatorColumn: COLUMN } };

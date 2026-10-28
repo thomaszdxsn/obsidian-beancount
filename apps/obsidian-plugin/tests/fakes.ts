@@ -29,6 +29,24 @@ export interface FakePosition {
 	ch: number;
 }
 
+/** Apply line/ch replacements from the right, including spans that cross lines. */
+export function applyTextChanges(
+	text: string,
+	changes: readonly { from: { line: number; ch: number }; to: { line: number; ch: number }; text: string }[],
+): string {
+	const lines = text.split('\n');
+	const ordered = [...changes].sort((a, b) => b.from.line - a.from.line || b.from.ch - a.from.ch);
+	for (const change of ordered) {
+		const fromLine = change.from.line;
+		const toLine = change.to.line;
+		const start = (lines[fromLine] ?? '').slice(0, change.from.ch);
+		const end = (lines[toLine] ?? '').slice(change.to.ch);
+		const inserted = (start + change.text + end).split('\n');
+		lines.splice(fromLine, toLine - fromLine + 1, ...inserted);
+	}
+	return lines.join('\n');
+}
+
 export function flush(): Promise<void> {
 	return delay(0);
 }
@@ -171,6 +189,8 @@ export interface FakeEditor {
 	cm: FakeCm;
 	/** Editor selections; a caret is a selection whose anchor equals its head. */
 	selections: FakeSelection[];
+	/** Primary caret; independent of `selections[0]` so multi-cursor tests can diverge. */
+	cursor: FakePosition;
 	/** Ranges passed to `scrollIntoView`, in order. */
 	scrollIntoViewCalls: Array<{ range: { from: FakePosition; to: FakePosition }; center?: boolean }>;
 	getLine(line: number): string;
@@ -201,6 +221,7 @@ export function createEditor(lines: string[]): FakeEditor {
 		transactions: [],
 		cm,
 		selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
+		cursor: { line: 0, ch: 0 },
 		scrollIntoViewCalls: [],
 		getLine(line: number): string {
 			return this.lines[line] ?? '';
@@ -212,9 +233,10 @@ export function createEditor(lines: string[]): FakeEditor {
 			return this.lines.join('\n');
 		},
 		getCursor(): FakePosition {
-			return this.selections[0].head;
+			return this.cursor;
 		},
 		setCursor(pos: FakePosition): void {
+			this.cursor = pos;
 			this.selections = [{ anchor: pos, head: pos }];
 		},
 		setSelection(anchor: FakePosition, head: FakePosition): void {
@@ -249,6 +271,7 @@ export function createEditor(lines: string[]): FakeEditor {
 			this.lines = (text.slice(0, from) + replacement + text.slice(to)).split('\n');
 			const pos = positionAt(from + replacement.length, this.lines);
 			this.selections = [{ anchor: pos, head: pos }];
+			this.cursor = pos;
 		},
 		transaction(tx: {
 			changes: FakeEditorChange[];
@@ -264,6 +287,7 @@ export function createEditor(lines: string[]): FakeEditor {
 				this.lines[change.from.line] = line.slice(0, change.from.ch) + change.text + line.slice(toCh);
 			}
 			if (tx.selection) {
+				this.cursor = tx.selection.from;
 				this.selections = [{ anchor: tx.selection.from, head: tx.selection.to ?? tx.selection.from }];
 			}
 		},

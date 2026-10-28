@@ -3,10 +3,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { EditPlan } from '../edits';
-import { AlignOnSave } from '../edits';
+import { AlignOnSave, maybeScheduleAlign } from '../edits';
 import type { LedgerKind } from '../fences';
 import { ledgerKind } from '../fences';
-import { FakeClock, flush } from './fakes';
+import { applyTextChanges, FakeClock, flush } from './fakes';
 
 const TIGHT = '  Expenses:Food 12.5 USD\n  Assets:Cash -12.5 USD';
 const AT50 =
@@ -17,6 +17,7 @@ const TIGHT_COL1 = '  Expenses:Food 12.5 USD\n  Assets:Cash  -12.5 USD';
 interface OpenBuf {
 	text: string;
 	applied: EditPlan[];
+	selections: Array<{ anchor: { line: number; ch: number }; head: { line: number; ch: number } }>;
 }
 
 function harness(opts?: {
@@ -61,18 +62,11 @@ function harness(opts?: {
 			if (!buf) return null;
 			return {
 				getValue: () => buf.text,
+				listSelections: () => buf.selections,
 				apply(plan: EditPlan) {
 					buf.applied.push(plan);
-					const lines = buf.text.split('\n');
-					const ordered = [...plan.changes].sort(
-						(a, b) => b.from.line - a.from.line || b.from.ch - a.from.ch,
-					);
-					for (const change of ordered) {
-						const line = lines[change.from.line] ?? '';
-						const toCh = change.to.line === change.from.line ? change.to.ch : line.length;
-						lines[change.from.line] = line.slice(0, change.from.ch) + change.text + line.slice(toCh);
-					}
-					buf.text = lines.join('\n');
+					buf.text = applyTextChanges(buf.text, plan.changes);
+					if (plan.caret) buf.selections = [{ anchor: plan.caret, head: plan.caret }];
 				},
 			};
 		},
@@ -147,14 +141,18 @@ describe('AlignOnSave', () => {
 
 	it('does not write a png', async () => {
 		const h = harness({ contents: { 'ledger.png': TIGHT } });
-		h.align.schedule(h.file('ledger.png', 'png'));
+		maybeScheduleAlign(h.align, h.file('ledger.png', 'png'));
 		h.clock.tick(500);
 		await settle();
 		expect(h.writes).toEqual([]);
 	});
 
 	it('applies planAlign to an open editor and does not modify the vault', async () => {
-		const buf: OpenBuf = { text: TIGHT, applied: [] };
+		const buf: OpenBuf = {
+			text: TIGHT,
+			applied: [],
+			selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
+		};
 		const h = harness({ contents: { 'ledger.bean': TIGHT }, open: { 'ledger.bean': buf } });
 		h.align.schedule(h.file('ledger.bean', 'bean'));
 		h.clock.tick(500);
@@ -162,6 +160,22 @@ describe('AlignOnSave', () => {
 		expect(buf.text).toBe(AT50);
 		expect(buf.applied).toHaveLength(1);
 		expect(h.writes).toEqual([]);
+	});
+
+	it('maps a caret inside the gap to the amount when aligning an open editor', async () => {
+		const buf: OpenBuf = {
+			text: '  Assets:Cash  12.5 CNY\n  Expenses:A:B:C -1234.5 CNY',
+			applied: [],
+			selections: [{ anchor: { line: 0, ch: 14 }, head: { line: 0, ch: 14 } }],
+		};
+		const h = harness({
+			contents: { 'ledger.bean': buf.text },
+			open: { 'ledger.bean': buf },
+		});
+		h.align.schedule(h.file('ledger.bean', 'bean'));
+		h.clock.tick(500);
+		await settle();
+		expect(buf.selections).toEqual([{ anchor: { line: 0, ch: 47 }, head: { line: 0, ch: 47 } }]);
 	});
 
 	it('does not write a stale snapshot when the file changes during the read', async () => {
@@ -177,7 +191,11 @@ describe('AlignOnSave', () => {
 	});
 
 	it('redirects to the editor when the file opens during the read', async () => {
-		const buf: OpenBuf = { text: TIGHT, applied: [] };
+		const buf: OpenBuf = {
+			text: TIGHT,
+			applied: [],
+			selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
+		};
 		const h = harness({ contents: { 'ledger.bean': TIGHT }, holdFirstRead: true });
 		h.align.schedule(h.file('ledger.bean', 'bean'));
 		h.clock.tick(500);
@@ -256,7 +274,11 @@ describe('AlignOnSave', () => {
 			'```',
 			'',
 		].join('\n');
-		const buf: OpenBuf = { text: content, applied: [] };
+		const buf: OpenBuf = {
+			text: content,
+			applied: [],
+			selections: [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
+		};
 		const h = harness({ contents: { 'note.md': content }, open: { 'note.md': buf } });
 		h.align.schedule(h.file('note.md', 'md'));
 		h.clock.tick(500);

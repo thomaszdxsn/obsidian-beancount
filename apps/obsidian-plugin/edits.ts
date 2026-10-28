@@ -15,18 +15,27 @@ import {
 import type { LineEdit, LineRange } from './align';
 import type { Clock } from './clock';
 import type { LedgerKind } from './fences';
-import { ledgerDoc } from './fences';
+import { editorLedger, ledgerDoc, ledgerKind } from './fences';
 import type { FormatError, LineChange } from './format';
 import { formatFencedDocument, formatLedger, lineChanges } from './format';
+import { isTextFile } from './vault-index';
 
 /** Delay before on-save alignment, so a burst of edits aligns once. */
 const ALIGN_DEBOUNCE_MS = 500;
 
-const TEXT_EXTENSIONS: Record<string, true> = { md: true, beancount: true, bean: true };
-
 export interface EditCaret {
 	line: number;
 	ch: number;
+}
+
+export interface EditSelection {
+	anchor: EditCaret;
+	head: EditCaret;
+}
+
+export interface OffsetCaret {
+	anchor: number;
+	head: number;
 }
 
 export interface TextChange {
@@ -52,6 +61,17 @@ export interface InstantPlan {
 	carets: number[];
 }
 
+export interface PlanEditor {
+	transaction(tx: { changes: TextChange[]; selection?: { from: EditCaret } }): void;
+}
+
+export interface AlignEditor extends PlanEditor {
+	getValue(): string;
+	listSelections(): readonly EditSelection[];
+	getCursor(): EditCaret;
+	somethingSelected(): boolean;
+}
+
 interface Lines {
 	text: string[];
 	starts: number[];
@@ -60,7 +80,9 @@ interface Lines {
 export function planAlign(
 	text: string,
 	input: {
-		carets: readonly { anchor: EditCaret; head: EditCaret }[];
+		carets: readonly EditSelection[];
+		/** Block mode uses this line. Adapter passes `getCursor()`; tests may omit it. */
+		primary?: EditCaret;
 		mode: 'block' | 'selection' | 'document';
 		separatorColumn: number;
 		lineIsLedger?: (hostLine0: number) => boolean;
@@ -68,7 +90,7 @@ export function planAlign(
 ): EditPlan | null {
 	const lines = text.split('\n');
 	const bodies = ledgerBodies(lines.length, input.lineIsLedger);
-	const scopes = alignScopes(lines, bodies, input.carets, input.mode);
+	const scopes = alignScopes(lines, bodies, input.carets, input.mode, input.primary);
 	if (scopes.length === 0) return null;
 	const targetColumn = alignmentTarget(input.separatorColumn);
 	const edits = scopes.flatMap((range) => computeAlignment(lines, range, targetColumn, input.lineIsLedger));
@@ -76,19 +98,19 @@ export function planAlign(
 	const changes = edits.map(lineEditToChange);
 	const caret = loneCollapsedCaret(input.carets);
 	if (caret === null) return { changes };
-	return { changes, caret: mapAlignCaret(edits, caret) };
+	return { changes, caret: { line: caret.line, ch: mapGapCaret(edits, caret.line, caret.ch) } };
 }
 
 export function planFormat(
 	text: string,
 	input: {
-		carets: readonly { anchor: EditCaret; head: EditCaret }[];
+		carets: readonly EditSelection[];
 		separatorColumn: number;
 		kind: LedgerKind;
 	},
 ): EditPlan | { error: FormatError } | null {
 	const targetColumn = alignmentTarget(input.separatorColumn);
-	const result = input.kind === 'ledger-file' ? formatLedger(text, targetColumn) : formatFencedDocument(text, targetColumn);
+	const result = formatByKind(input.kind, text, targetColumn);
 	if (!result.ok) return { error: result.error };
 	const edits = lineChanges(text, result.text);
 	if (edits.length === 0) return null;
@@ -98,9 +120,15 @@ export function planFormat(
 	return { changes, caret: mapFormatCaret(edits, caret) };
 }
 
+/**
+ * The `.` handling for `text` and its carets, or null when no caret sits
+ * where an amount decimal belongs. Every collapsed caret still receives a
+ * `.` once the key is claimed, so multi-cursor does not drop a prose
+ * caret's insert; only the blocks that gained an amount decimal are aligned.
+ */
 export function planInstantDot(
 	text: string,
-	carets: readonly { anchor: number; head: number }[],
+	carets: readonly OffsetCaret[],
 	separatorColumn: number,
 	lineIsLedger?: (hostLine0: number) => boolean,
 ): InstantPlan | null {
@@ -164,28 +192,91 @@ export function planInstantDot(
 		const line = lineAt(lines, caret.head);
 		const origCh = caret.head - lines.starts[line];
 		const dots = (dotsOfLine.get(line) ?? []).filter((ch) => ch <= origCh).length;
-		let ch = origCh + dots;
-		for (const edit of edits) {
-			if (edit.line !== line) continue;
-			if (ch >= edit.to) ch += edit.text.length - (edit.to - edit.from);
-			else if (ch > edit.from) ch = edit.from + edit.text.length;
-		}
-		landed.push(newStart(line) + ch);
+		landed.push(newStart(line) + mapGapCaret(edits, line, origCh + dots));
 	}
 
 	return { changes, carets: landed };
 }
 
-export const instantAlignmentPlan = planInstantDot;
+export function applyEditPlan(editor: PlanEditor, plan: EditPlan): void {
+	if (plan.caret) {
+		editor.transaction({ changes: [...plan.changes], selection: { from: plan.caret } });
+		return;
+	}
+	editor.transaction({ changes: [...plan.changes] });
+}
+
+export function runAlignCommand(
+	editor: AlignEditor,
+	file: { path: string; extension: string } | null,
+	separatorColumn: number,
+): void {
+	const ledger = editorLedger(editor, file);
+	const plan = planAlign(editor.getValue(), {
+		carets: editor.listSelections(),
+		primary: editor.getCursor(),
+		mode: editor.somethingSelected() ? 'selection' : 'block',
+		separatorColumn,
+		lineIsLedger: (line) => ledger.lineIsLedger(line),
+	});
+	if (plan === null) return;
+	applyEditPlan(editor, plan);
+}
+
+export function runFormatCommand(
+	editor: AlignEditor,
+	file: { path: string; extension: string } | null,
+	separatorColumn: number,
+	onError: (error: FormatError) => void,
+): void {
+	const result = planFormat(editor.getValue(), {
+		carets: editor.listSelections(),
+		separatorColumn,
+		kind: ledgerKind(file),
+	});
+	if (result !== null && 'error' in result) {
+		onError(result.error);
+		return;
+	}
+	if (result === null) return;
+	applyEditPlan(editor, result);
+}
+
+export function maybeScheduleAlign(align: AlignOnSave, file: { path: string; extension?: string }): void {
+	if (!isTextFile(file) || file.extension === undefined) return;
+	align.schedule({ path: file.path, extension: file.extension });
+}
+
+export interface OpenAlignEditor {
+	getValue(): string;
+	apply(plan: EditPlan): void;
+	listSelections(): readonly EditSelection[];
+}
 
 export interface AlignOnSavePorts {
 	clock: Clock;
 	read(path: string): Promise<string>;
 	modify(path: string, text: string): Promise<void>;
-	openEditor(path: string): { getValue(): string; apply(plan: EditPlan): void } | null;
+	openEditor(path: string): OpenAlignEditor | null;
 	alignOnSave(): boolean;
 	separatorColumn(): number;
 	ledgerKind(file: { path: string; extension: string }): LedgerKind;
+}
+
+export function bindAlignOnSaveOpenEditor(deps: {
+	getFile(path: string): { path: string } | null;
+	findEditor(path: string): AlignEditor | null;
+}): (path: string) => OpenAlignEditor | null {
+	return (path) => {
+		if (!deps.getFile(path)) return null;
+		const editor = deps.findEditor(path);
+		if (!editor) return null;
+		return {
+			getValue: () => editor.getValue(),
+			listSelections: () => editor.listSelections(),
+			apply: (plan) => applyEditPlan(editor, plan),
+		};
+	};
 }
 
 export class AlignOnSave {
@@ -194,7 +285,6 @@ export class AlignOnSave {
 	constructor(private readonly ports: AlignOnSavePorts) {}
 
 	schedule(file: { path: string; extension: string }): void {
-		if (TEXT_EXTENSIONS[file.extension] !== true) return;
 		this.ports.clock.clearTimeout(this.timers.get(file.path) ?? 0);
 		this.timers.set(
 			file.path,
@@ -212,19 +302,28 @@ export class AlignOnSave {
 	}
 
 	private async alignFile(file: { path: string; extension: string }): Promise<void> {
+		const separatorColumn = this.ports.separatorColumn();
+		const kind = this.ports.ledgerKind(file);
 		const editor = this.ports.openEditor(file.path);
-		const column = alignmentTarget(this.ports.separatorColumn());
 		if (editor) {
-			applyDocumentAlign(editor, this.ports.separatorColumn(), this.ports.ledgerKind(file));
+			applyDocumentAlign(editor, separatorColumn, kind);
 			return;
 		}
+		// A file open in a leaf is edited through its editor: the editor buffer
+		// is what Obsidian autosaves, so a vault-level write would be clobbered
+		// by the next autosave from the still-unaligned buffer. Files not open
+		// in any leaf have no buffer to fight with.
 		const text = await this.ports.read(file.path);
-		const kind = this.ports.ledgerKind(file);
-		const aligned = kind === 'ledger-file' ? alignText(text, column) : alignFencedDocument(text, column);
+		const aligned = alignByKind(kind, text, alignmentTarget(separatorColumn));
 		if (aligned === text) return;
+		// The file may have been opened — or edited — while the read was in
+		// flight. An open one is the editor's business again, and a changed
+		// one is left alone: its own `modify` will bring alignment back here.
+		// Write only on change — `vault.process` would write the unchanged
+		// text back and re-arm the debounce forever.
 		const live = this.ports.openEditor(file.path);
 		if (live) {
-			applyDocumentAlign(live, this.ports.separatorColumn(), kind);
+			applyDocumentAlign(live, separatorColumn, kind);
 			return;
 		}
 		if ((await this.ports.read(file.path)) !== text) return;
@@ -232,20 +331,35 @@ export class AlignOnSave {
 	}
 }
 
-function applyDocumentAlign(
-	editor: { getValue(): string; apply(plan: EditPlan): void },
-	separatorColumn: number,
-	kind: LedgerKind,
-): void {
+function applyDocumentAlign(editor: OpenAlignEditor, separatorColumn: number, kind: LedgerKind): void {
 	const text = editor.getValue();
-	const doc = kind === 'ledger-file' ? null : ledgerDoc(kind, text);
 	const plan = planAlign(text, {
-		carets: [],
+		carets: editor.listSelections(),
 		mode: 'document',
 		separatorColumn,
-		lineIsLedger: doc === null ? undefined : (hostLine0) => doc.lineIsLedger(hostLine0),
+		lineIsLedger: lineFilter(kind, text),
 	});
 	if (plan !== null) editor.apply(plan);
+}
+
+function isLedgerKind(kind: LedgerKind): boolean {
+	return kind === 'ledger-file';
+}
+
+
+
+function formatByKind(kind: LedgerKind, text: string, targetColumn: number) {
+	return isLedgerKind(kind) ? formatLedger(text, targetColumn) : formatFencedDocument(text, targetColumn);
+}
+
+function alignByKind(kind: LedgerKind, text: string, targetColumn: number): string {
+	return isLedgerKind(kind) ? alignText(text, targetColumn) : alignFencedDocument(text, targetColumn);
+}
+
+function lineFilter(kind: LedgerKind, text: string): ((hostLine0: number) => boolean) | undefined {
+	if (isLedgerKind(kind)) return undefined;
+	const doc = ledgerDoc(kind, text);
+	return (hostLine0) => doc.lineIsLedger(hostLine0);
 }
 
 function ledgerBodies(lineCount: number, lineIsLedger?: (hostLine0: number) => boolean): LineRange[] {
@@ -270,13 +384,14 @@ function ledgerBodies(lineCount: number, lineIsLedger?: (hostLine0: number) => b
 function alignScopes(
 	lines: readonly string[],
 	bodies: readonly LineRange[],
-	carets: readonly { anchor: EditCaret; head: EditCaret }[],
+	carets: readonly EditSelection[],
 	mode: 'block' | 'selection' | 'document',
+	primary: EditCaret | undefined,
 ): LineRange[] {
 	if (mode === 'document') return [...bodies];
-	if (carets.length === 0) return [];
 	if (mode === 'block') {
-		const line = carets[0].head.line;
+		const line = (primary ?? carets[0]?.head)?.line;
+		if (line === undefined) return [];
 		const block = blockRangeAt(lines, line);
 		for (const body of bodies) {
 			if (line < body.from || line > body.to) continue;
@@ -295,7 +410,7 @@ function alignScopes(
 	return scopes;
 }
 
-function selectionRange(carets: readonly { anchor: EditCaret; head: EditCaret }[]): LineRange | null {
+function selectionRange(carets: readonly EditSelection[]): LineRange | null {
 	let from = Number.MAX_SAFE_INTEGER;
 	let to = 0;
 	for (const selection of carets) {
@@ -303,26 +418,27 @@ function selectionRange(carets: readonly { anchor: EditCaret; head: EditCaret }[
 		const end = Math.max(selection.anchor.line, selection.head.line);
 		const endCh = selection.anchor.line === end ? selection.anchor.ch : selection.head.ch;
 		from = Math.min(from, start);
+		// A selection dragged to the start of the next line holds none of its
+		// characters, so the last selected line is the one before it.
 		to = Math.max(to, endCh === 0 && end > start ? end - 1 : end);
 	}
 	return from === Number.MAX_SAFE_INTEGER ? null : { from, to };
 }
 
-function loneCollapsedCaret(carets: readonly { anchor: EditCaret; head: EditCaret }[]): EditCaret | null {
+function loneCollapsedCaret(carets: readonly EditSelection[]): EditCaret | null {
 	if (carets.length !== 1) return null;
 	const caret = carets[0];
 	if (caret.anchor.line !== caret.head.line || caret.anchor.ch !== caret.head.ch) return null;
 	return caret.head;
 }
 
-function mapAlignCaret(edits: readonly LineEdit[], caret: EditCaret): EditCaret {
-	let ch = caret.ch;
+function mapGapCaret(edits: readonly { line: number; from: number; to: number; text: string }[], line: number, ch: number): number {
 	for (const edit of edits) {
-		if (edit.line !== caret.line) continue;
+		if (edit.line !== line) continue;
 		if (ch >= edit.to) ch += edit.text.length - (edit.to - edit.from);
 		else if (ch > edit.from) ch = edit.from + edit.text.length;
 	}
-	return { line: caret.line, ch };
+	return ch;
 }
 
 function mapFormatCaret(edits: readonly LineChange[], caret: EditCaret): EditCaret {

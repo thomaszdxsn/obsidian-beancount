@@ -17,15 +17,6 @@ import { editorInfoField } from 'obsidian';
 import { planInstantDot } from './edits';
 import { ledgerDoc, ledgerKind } from './fences';
 
-export type { InstantChange, InstantPlan } from './edits';
-export { planInstantDot, instantAlignmentPlan } from './edits';
-
-/** A caret as whole-text offsets; `head` is the active end. */
-export interface Caret {
-	anchor: number;
-	head: number;
-}
-
 /** Live settings the period binding reads on each keystroke. */
 export interface InstantAlignmentHost {
 	settings: { instantAlignment: boolean; separatorColumn: number };

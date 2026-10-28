@@ -7,10 +7,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { EditPlan } from '../edits';
-import { planAlign, planFormat, planInstantDot } from '../edits';
+import { applyEditPlan, planAlign, planFormat, planInstantDot, runAlignCommand, runFormatCommand } from '../edits';
 import { ledgerDoc } from '../fences';
-import { createEditor } from './fakes';
-import type { FakeEditor } from './fakes';
+import { applyTextChanges, createEditor } from './fakes';
 
 const COL50 = 50;
 const COL1 = 1;
@@ -32,22 +31,7 @@ function range(fromLine: number, fromCh: number, toLine: number, toCh: number) {
 }
 
 function apply(text: string, plan: EditPlan): string {
-	const lines = text.split('\n');
-	const ordered = [...plan.changes].sort((a, b) => b.from.line - a.from.line || b.from.ch - a.from.ch);
-	for (const change of ordered) {
-		const line = lines[change.from.line] ?? '';
-		const toCh = change.to.line === change.from.line ? change.to.ch : line.length;
-		lines[change.from.line] = line.slice(0, change.from.ch) + change.text + line.slice(toCh);
-	}
-	return lines.join('\n');
-}
-
-function applyToEditor(editor: FakeEditor, plan: EditPlan | null): void {
-	if (plan === null || plan.changes.length === 0) return;
-	editor.transaction({
-		changes: [...plan.changes],
-		...(plan.caret ? { selection: { from: plan.caret } } : {}),
-	});
+	return applyTextChanges(text, plan.changes);
 }
 
 function fenceFilter(text: string): (line: number) => boolean {
@@ -197,6 +181,34 @@ describe('planAlign', () => {
 		expect(selected!.caret).toBeUndefined();
 		expect(apply(text, selected!).split('\n')[0]).toBe(AT50_CASH_POS_CNY);
 		expect(apply(text, selected!).split('\n')[1]).toBe('  Expenses:A:B:C -1234.5 CNY');
+	});
+
+	it('aligns the block at the primary caret when carets[0] is another cursor', () => {
+		const text = [
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash -1234.5 CNY',
+		].join('\n');
+		const plan = planAlign(text, {
+			carets: [caret(1, 1), caret(6, 1)],
+			primary: { line: 6, ch: 1 },
+			mode: 'block',
+			separatorColumn: COL50,
+		});
+		expect(plan!.caret).toBeUndefined();
+		expect(apply(text, plan!).split('\n')).toEqual([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			AT50_REST_CNY,
+			AT50_CASH_REST_CNY,
+		]);
 	});
 
 	it('does not rewrite Host lines that are not ledger text', () => {
@@ -565,7 +577,7 @@ describe('planInstantDot', () => {
 	});
 });
 
-describe('apply EditPlan', () => {
+describe('applyEditPlan', () => {
 	it('rewrites the buffer in one transaction and parks a lone caret', () => {
 		const editor = createEditor(['  Expenses:Food 12.5 USD', '  Assets:Cash -12.5 USD']);
 		const plan = planAlign(editor.getValue(), {
@@ -573,9 +585,102 @@ describe('apply EditPlan', () => {
 			mode: 'block',
 			separatorColumn: COL50,
 		});
-		applyToEditor(editor, plan);
+		expect(plan).not.toBeNull();
+		applyEditPlan(editor, plan!);
 		expect(editor.lines).toEqual([AT50_FOOD, AT50_CASH]);
 		expect(editor.getCursor()).toEqual({ line: 1, ch: 47 });
 		expect(editor.transactions).toHaveLength(1);
+	});
+
+	it('applies a replacement that crosses lines', () => {
+		expect(
+			applyTextChanges('aa\nbb\ncc', [{ from: { line: 0, ch: 1 }, to: { line: 1, ch: 1 }, text: 'XY' }]),
+		).toBe('aXYb\ncc');
+	});
+});
+
+describe('runAlignCommand', () => {
+	it('uses block mode without a selection and selection mode with one, via editorLedger', () => {
+		const two = [
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash -1234.5 CNY',
+		];
+		const block = createEditor([...two]);
+		block.setCursor({ line: 6, ch: 1 });
+		runAlignCommand(block, { path: 'ledger.bean', extension: 'bean' }, COL50);
+		expect(block.lines).toEqual([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			AT50_REST_CNY,
+			AT50_CASH_REST_CNY,
+		]);
+
+		const selected = createEditor([...two]);
+		selected.selections = [{ anchor: { line: 6, ch: 0 }, head: { line: 6, ch: 23 } }];
+		runAlignCommand(selected, { path: 'ledger.bean', extension: 'bean' }, COL50);
+		expect(selected.lines[5]).toBe('  Expenses:Food:Rest 1234.5 CNY');
+		expect(selected.lines[6]).toBe(AT50_CASH_REST_CNY);
+
+		const note = createEditor([
+			'  Expenses:Food 12.5 USD',
+			'```beancount',
+			'  Expenses:Food 12.5 USD',
+			'  Assets:Cash -12.5 USD',
+			'```',
+		]);
+		note.setCursor({ line: 3, ch: 1 });
+		runAlignCommand(note, { path: 'note.md', extension: 'md' }, COL50);
+		expect(note.lines[0]).toBe('  Expenses:Food 12.5 USD');
+		expect(note.lines[2]).toBe(AT50_FOOD);
+		expect(note.lines[3]).toBe(AT50_CASH);
+	});
+
+	it('aligns the primary getCursor block when another caret is listed first', () => {
+		const editor = createEditor([
+			'2026-10-01 * "A"',
+			'  Expenses:Food 12.5 CNY',
+			'  Assets:Cash -12.5 CNY',
+			'',
+			'2026-10-02 * "B"',
+			'  Expenses:Food:Rest 1234.5 CNY',
+			'  Assets:Cash -1234.5 CNY',
+		]);
+		editor.cursor = { line: 6, ch: 1 };
+		editor.selections = [
+			{ anchor: { line: 1, ch: 1 }, head: { line: 1, ch: 1 } },
+			{ anchor: { line: 6, ch: 1 }, head: { line: 6, ch: 1 } },
+		];
+		runAlignCommand(editor, { path: 'l.bean', extension: 'bean' }, COL50);
+		expect(editor.lines[1]).toBe('  Expenses:Food 12.5 CNY');
+		expect(editor.lines[6]).toBe(AT50_CASH_REST_CNY);
+	});
+});
+
+describe('runFormatCommand', () => {
+	it('applies a ledger rewrite and reports a syntax error without a transaction', () => {
+		const editor = createEditor(['2022-01-01   open   Assets:A']);
+		const notices: string[] = [];
+		runFormatCommand(editor, { path: 'l.bean', extension: 'bean' }, COL50, (error) => {
+			notices.push(`${error.line}:${error.message}`);
+		});
+		expect(editor.getValue()).toBe('2022-01-01 open Assets:A');
+		expect(editor.transactions).toHaveLength(1);
+		expect(notices).toEqual([]);
+
+		const broken = createEditor(['2022-01-01 open']);
+		runFormatCommand(broken, { path: 'l.bean', extension: 'bean' }, COL50, (error) => {
+			notices.push(`Line ${error.line}: ${error.message}`);
+		});
+		expect(broken.getValue()).toBe('2022-01-01 open');
+		expect(broken.transactions).toEqual([]);
+		expect(notices).toEqual(["Line 1: missing ACCOUNT at '<EOF>'"]);
 	});
 });
