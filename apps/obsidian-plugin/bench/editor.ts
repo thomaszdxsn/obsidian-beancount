@@ -25,7 +25,7 @@ import { BalanceInlayController } from '../inlay-hints';
 import { FlagWarningController, DEFAULT_FLAG_WARNINGS } from '../flag-warnings';
 import { LedgerFileController } from '../ledger-file-view';
 import { includeLinksExtension } from '../include-links';
-import { instantAlignmentPlan } from '../instant-alignment';
+import { planInstantDot } from '../edits';
 import { postingIndentPlan } from '../posting-indent';
 import { transactionFoldAt } from '../transaction-fold';
 import { ledgerDoc as ledgerOf, ledgerKind } from '../fences';
@@ -275,7 +275,7 @@ const workloads: Array<[string, [() => unknown, () => unknown]]> = [
 	['scroll', scrollWorkload()],
 	['md_key', typingWorkload(markdownDoc, noteFile, markdownLine, [cls.inlay, cls.flags, cls.include])],
 	['md_flag_okay', flagOkayWorkload(markdownDoc, noteFile, markdownLine)],
-	['dot', pure(() => instantAlignmentPlan(integerOnly.toString(), [{ anchor: integerCaret, head: integerCaret }], 50))],
+	['dot', pure(() => planInstantDot(integerOnly.toString(), [{ anchor: integerCaret, head: integerCaret }], 50))],
 	['enter', pure(() => postingIndentPlan(ledgerDoc.toString(), [{ anchor: ledgerDoc.line(ledgerLine).to, head: ledgerDoc.line(ledgerLine).to }]))],
 	['save', saveWorkload()],
 	['fold', foldWorkload()],
