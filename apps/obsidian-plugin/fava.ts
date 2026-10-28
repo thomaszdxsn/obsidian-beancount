@@ -285,16 +285,18 @@ export class FavaProcess {
 
 	async start(req: FavaStartRequest): Promise<void> {
 		if (this.disposed) return;
+		const gen = this.generation;
 		while (this.inFlight) {
 			if (this.inFlight.gen === this.generation) {
 				const started = await this.inFlight.promise;
-				if (this.disposed) return;
+				if (this.disposed || this.generation !== gen) return;
 				if (started && this.isRunning()) this.reveal(req);
 				return;
 			}
 			await this.inFlight.promise.catch(() => {});
-			if (this.disposed) return;
+			if (this.disposed || this.generation !== gen) return;
 		}
+		if (this.disposed || this.generation !== gen) return;
 		if (this.isRunning() && this.serving) {
 			this.reveal(req);
 			return;
@@ -305,7 +307,7 @@ export class FavaProcess {
 		this.inFlight = flight;
 		try {
 			const started = await promise;
-			if (this.disposed) return;
+			if (this.disposed || this.generation !== gen) return;
 			if (started && this.isRunning()) this.reveal(req);
 		} finally {
 			if (this.inFlight === flight) this.inFlight = null;
@@ -316,7 +318,7 @@ export class FavaProcess {
 		if (this.disposed) return;
 		this.generation += 1;
 		this.expectExit = true;
-		if (this.isRunning() || this.launching) {
+		if (this.isRunning() || this.launching || this.inFlight) {
 			this.child?.kill();
 			this.clear();
 			this.launching = false;

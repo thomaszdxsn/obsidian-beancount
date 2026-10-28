@@ -534,6 +534,28 @@ describe('FavaProcess', () => {
 		expect(children.filter((child) => child.exitCode === null)).toHaveLength(1);
 	});
 
+	it('does not relaunch after a second stop while waiting on the old flight', async () => {
+		let release: ((status: number) => void) | undefined;
+		const pending = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		const { ports, fava } = processWith();
+		ports.probe = async () => pending;
+		const first = fava.start(MAIN);
+		await Promise.resolve();
+		fava.stop();
+		expect(notices).toEqual(['Fava stopped.']);
+		notices.length = 0;
+		const again = fava.start(MAIN);
+		await Promise.resolve();
+		fava.stop();
+		expect(notices).toEqual(['Fava stopped.']);
+		release?.(403);
+		await Promise.all([first, again]);
+		expect(favaRuns).toHaveLength(1);
+		expect(opened).toEqual([]);
+	});
+
 	it('does not respawn or notice when a joined start wakes after dispose', async () => {
 		let release: ((status: number) => void) | undefined;
 		const pending = new Promise<number>((resolve) => {
@@ -563,7 +585,7 @@ describe('FavaProcess', () => {
 		]);
 	});
 
-	it('does not say Fava stopped when stop races a start that never spawned', async () => {
+	it('says Fava stopped when stop races an in-flight start that never spawned', async () => {
 		const { fava } = processWith();
 		const pending = fava.start({ ...MAIN, entryLedger: '', activePath: null });
 		fava.stop();
@@ -571,7 +593,7 @@ describe('FavaProcess', () => {
 		expect(favaRuns).toEqual([]);
 		expect(notices).toEqual([
 			'Set Entry ledger in the Beancount settings or open a .bean / .beancount file.',
-			'Fava is not running.',
+			'Fava stopped.',
 		]);
 	});
 
