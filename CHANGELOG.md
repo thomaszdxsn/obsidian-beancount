@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.2.3
 
-UI/UX fixes from the architecture review (#75).
+UI/UX fixes from the architecture review (#75). Alignment now uses the
+**Separator column** (default 50) for **Align decimal points**, **Align
+amounts on save**, and **Format ledger**; set the column to 1 to restore
+the compact per-transaction layout.
 
 ### Changed
 
